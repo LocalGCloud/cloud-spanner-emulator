@@ -323,6 +323,12 @@ absl::Status QueryValidator::CheckHintValue(
           {kScanMethod, zetasql::types::StringType()},
       }};
 
+  // optimizer_version accepts both STRING ("latest") and INT64 (7) — just
+  // ignore it since the emulator has no optimizer versioning.
+  if (absl::EqualsIgnoreCase(name, kHintOptimizerVersion)) {
+    return absl::OkStatus();
+  }
+
   const auto& iter = supported_hint_types->find(name);
   ZETASQL_RET_CHECK(iter != supported_hint_types->cend());
   if (!value.type()->Equals(iter->second)) {
