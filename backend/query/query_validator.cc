@@ -136,6 +136,8 @@ constexpr absl::string_view kScanMethod = "scan_method";
 constexpr absl::string_view kScanMethodBatch = "batch";
 constexpr absl::string_view kScanMethodRow = "row";
 
+constexpr absl::string_view kHintOptimizerVersion = "optimizer_version";
+
 absl::Status CollectHintsForNode(
     const zetasql::ResolvedOption* hint,
     absl::flat_hash_map<absl::string_view, zetasql::Value>* node_hint_map) {
@@ -255,6 +257,7 @@ absl::Status QueryValidator::CheckSpannerHintName(
            kRequireEnhanceQuery,
            kEnhanceQueryTimeoutMs,
            kScanMethod,
+           kHintOptimizerVersion,
        }},
       {zetasql::RESOLVED_SUBQUERY_EXPR,
        {kHintJoinTypeDeprecated, kHintJoinMethod, kHashJoinBuildSide,
