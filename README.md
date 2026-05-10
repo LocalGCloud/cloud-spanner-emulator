@@ -102,17 +102,17 @@ Works on x86 and arm64 architectures.
 ### Via Docker Hub (multi-arch)
 
 A multi-architecture Docker image (amd64 + arm64) is automatically built and
-pushed to Docker Hub on every push to `master`:
+pushed to Docker Hub on every push to `jay-33-persistence`:
 
 ```shell
-docker pull jaysen2apache/bigquery-emulator-on-duckdb:latest
-docker run -p 9010:9010 -p 9020:9020 jaysen2apache/bigquery-emulator-on-duckdb
+docker pull jaysen2apache/spanner-emulator-extended:latest
+docker run -p 9010:9010 -p 9020:9020 jaysen2apache/spanner-emulator-extended
 ```
 
 You can also pin to a specific commit SHA:
 
 ```shell
-docker run -p 9010:9010 -p 9020:9020 jaysen2apache/bigquery-emulator-on-duckdb:<commit-sha>
+docker run -p 9010:9010 -p 9020:9020 jaysen2apache/spanner-emulator-extended:<commit-sha>
 ```
 
 Works on x86 and arm64 architectures.
@@ -194,8 +194,103 @@ Notable supported features:
 - [Connecting with PostgreSQL drivers and tools through PGAdapter](
   https://github.com/GoogleCloudPlatform/pgadapter/blob/postgresql-dialect/docs/emulator.md).
 
+## Extended Features (this fork)
 
-Notable limitations:
+This fork (`jay-33-persistence` branch) adds features beyond the upstream
+Google emulator. Below is the gap analysis — what upstream lacks and this
+fork provides.
+
+### Data Persistence (`--data_dir`)
+
+**Upstream gap**: The emulator does not support persistence — all data is kept
+in memory and discarded when the emulator terminates.
+
+**This fork**: Full LevelDB-backed persistent storage. Data, metadata,
+instances, databases, DDL, and ID generator counters survive restarts.
+
+```shell
+docker run -p 9010:9010 -p 9020:9020 \
+  -v /path/to/data:/data \
+  jaysen2apache/spanner-emulator-extended \
+  --data_dir=/data
+```
+
+What persists:
+- All row data (multi-version with microsecond-precision timestamps)
+- Instance metadata (display_name, config, processing_units, labels)
+- Database metadata (dialect, DDL statements)
+- ID generator counters (table_id, column_id, change_stream_id, sequence_id,
+  named_schema_id) — prevents ID collisions after restart
+- Automatic recovery on startup from `metadata.json`
+
+When `--data_dir` is empty (default), emulator runs in-memory mode identical
+to upstream.
+
+### OPTIMIZER_VERSION Statement Hint
+
+**Upstream gap**: Production queries using `@{OPTIMIZER_VERSION=latest}` fail
+with "invalid hint" on the emulator.
+
+**This fork**: `optimizer_version` added to the hint whitelist. Accepts both
+STRING and INT64 values, silently ignored (emulator has no optimizer
+versioning). No more errors on production queries.
+
+### Full-Text Search: `remove_diacritics` Parameter
+
+**Upstream gap**: `TOKENIZE_FULLTEXT` does not support the `remove_diacritics`
+boolean parameter.
+
+**This fork**: `remove_diacritics` parameter added to `TOKENIZE_FULLTEXT`
+function signature. Enables diacritic-insensitive full-text indexing.
+
+### GCC 12 Compiler
+
+**Upstream**: Built with GCC 8.4 on Ubuntu 18.04.
+
+**This fork**: Upgraded to GCC 12 with all compatibility fixes applied
+(NoDestructor initialization, constructor resolution, designated initializers).
+Better C++ feature support and stability.
+
+### Multi-Architecture Docker CI/CD
+
+**Upstream**: No automated Docker Hub publishing.
+
+**This fork**: Automated multi-arch (amd64 + arm64) Docker builds published
+to `jaysen2apache/spanner-emulator-extended` via GitHub Actions on every push.
+
+### Build Performance
+
+**Upstream**: Full builds from scratch every time.
+
+**This fork**: BuildKit cache mounts for Bazel disk/repository caches. Reduces
+subsequent builds from hours to ~2 minutes. Per-file optimization (`-O1`)
+for heavy ZetaSQL files prevents OOM on resource-constrained systems.
+
+### Supported Features Already in This Fork (No Gap)
+
+These features were analyzed as potential gaps but already work in the current
+ZetaSQL 2025.09.1 base:
+
+| Feature | Status |
+|---------|--------|
+| TOKENLIST type | Supported (proto type 22, full DDL) |
+| TOKENIZE_NGRAMS() | Supported (search function catalog) |
+| TOKENIZE_FULLTEXT() | Supported (search function catalog) |
+| SEARCH_NGRAMS() | Supported (n-gram search evaluator) |
+| SCORE_NGRAMS() | Supported (n-gram scoring evaluator) |
+| SOUNDEX() | Supported (FEATURE_ADDITIONAL_STRING_FUNCTIONS) |
+| SAFE_DIVIDE() | Supported (FEATURE_SAFE_FUNCTION_CALL) |
+| NORMALIZE(str, form) | Supported (FEATURE_ADDITIONAL_STRING_FUNCTIONS) |
+| FORCE_INDEX hint | Supported (hint validator whitelist) |
+| HIDDEN columns | Supported (column attribute) |
+| Named args (=> syntax) | Supported (FEATURE_NAMED_ARGUMENTS) |
+| Unicode regex (\pM) | Supported (RE2 engine) |
+| SEARCH INDEX DDL | Supported (CreateSearchIndex in DDL parser) |
+| Generated columns | Supported (expression evaluator) |
+
+## Remaining Limitations
+
+Notable limitations (applies to both upstream and this fork unless noted):
 
 - The gRPC and REST endpoints run on separate ports and serve unencrypted
   traffic.
@@ -210,9 +305,6 @@ Notable limitations:
   be wrapped in a retry loop. This [recommendation](
   https://cloud.google.com/spanner/docs/transactions) applies to the Cloud
   Spanner service as well.
-
-- The emulator does not support persistence - all data is kept in memory and
-  discarded when the emulator terminates.
 
 - Error messages may not be consistent between the emulator and the Cloud
   Spanner service. Error messages are not part of Cloud Spanner's API contract
