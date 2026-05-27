@@ -537,6 +537,27 @@ TEST_F(DatabaseApiTest, UpdateAndGetDatabaseDDL) {
   }
 }
 
+TEST_F(DatabaseApiTest, GetDatabaseDdlIncludesIndexAddedByUpdateDdl) {
+  std::vector<std::string> schema = {
+      R"(CREATE TABLE test_table (
+  int64_col INT64 NOT NULL,
+  string_col STRING(MAX),
+) PRIMARY KEY(int64_col))"};
+  ZETASQL_EXPECT_OK(CreateDatabase(test_instance_uri_, test_database_name_, schema));
+
+  ZETASQL_EXPECT_OK(UpdateDatabaseDdl(
+      test_database_uri_,
+      {R"(CREATE INDEX test_index ON test_table(string_col))"}));
+
+  database_api::GetDatabaseDdlResponse response;
+  ZETASQL_EXPECT_OK(GetDatabaseDdl(test_database_uri_, &response));
+
+  ASSERT_EQ(response.statements_size(), 2);
+  EXPECT_EQ(response.statements(0), schema[0]);
+  EXPECT_EQ(response.statements(1),
+            R"(CREATE INDEX test_index ON test_table(string_col))");
+}
+
 spanner_api::CommitRequest GenerateSequenceTableInsert(
     const std::string& session) {
   spanner_api::CommitRequest commit_request = PARSE_TEXT_PROTO(R"pb(

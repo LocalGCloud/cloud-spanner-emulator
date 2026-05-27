@@ -1,4 +1,6 @@
+./.cursor/mcp.json
 ./.bazelversion
+./.gemini/settings.json
 ./maven_install.json
 ./frontend/proto/BUILD
 ./frontend/converters/BUILD
@@ -8,7 +10,10 @@
 ./frontend/collections/BUILD
 ./frontend/handlers/BUILD
 ./frontend/entities/BUILD
+./.continue/mcpServers/gortex.json
 ./WORKSPACE
+./.mcp.json
+./.opencode/config.json
 ./tests/gcloud/BUILD
 ./tests/common/testdata/BUILD
 ./tests/common/BUILD
@@ -17,6 +22,8 @@
 ./tests/conformance/common/BUILD
 ./tests/conformance/data/schema_changes/BUILD
 ./tests/conformance/data/schemas/BUILD
+./.claude/settings.json
+./.claude/settings.local.json
 ./backend/transaction/BUILD
 ./backend/database/change_stream/BUILD
 ./backend/database/pg_oid_assigner/BUILD
@@ -176,7 +183,12 @@
 ./third_party/spanner_pg/src/interfaces/libpq/BUILD
 ./binaries/BUILD
 ./BUILD.bazel
+./.kiro/settings/mcp.json
+./.kiro/hooks/gortex-pre-read.json
+./.kiro/hooks/gortex-smart-context.json
+./.kiro/hooks/gortex-post-edit.json
 ./build/bazel/BUILD
 ./build/bazel/grpc_gateway.bzl
+./.vscode/mcp.json
 ./.bazelrc
 ./gateway/BUILD

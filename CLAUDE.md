@@ -4,26 +4,26 @@
 
 | Area | Description | Skill |
 |------|-------------|-------|
-| Get | 2049 symbols | `/gortex-get` |
-| Alter | 681 symbols | `/gortex-alter` |
-| Exec | 675 symbols | `/gortex-exec` |
-| Gin | 541 symbols | `/gortex-gin` |
-| Cases | 460 symbols | `/gortex-cases` |
-| Get | 447 symbols | `/gortex-get` |
+| Get | 1696 symbols | `/gortex-get` |
 | Parser | 391 symbols | `/gortex-parser` |
-| Get | 390 symbols | `/gortex-get` |
-| Exec | 373 symbols | `/gortex-exec` |
-| Sql Help | 324 symbols | `/gortex-sql-help` |
-| Equal | 287 symbols | `/gortex-equal` |
-| Libstemmer | 264 symbols | `/gortex-libstemmer` |
-| Get | 260 symbols | `/gortex-get` |
-| Visit | 247 symbols | `/gortex-visit` |
-| Verify | 242 symbols | `/gortex-verify` |
-| Set | 238 symbols | `/gortex-set` |
-| Nodes | 192 symbols | `/gortex-nodes` |
-| Get | 183 symbols | `/gortex-get` |
-| List | 174 symbols | `/gortex-list` |
-| File | 164 symbols | `/gortex-file` |
+| Alter | 384 symbols | `/gortex-alter` |
+| Exec | 357 symbols | `/gortex-exec` |
+| Gin | 314 symbols | `/gortex-gin` |
+| Set | 287 symbols | `/gortex-set` |
+| Replication | 286 symbols | `/gortex-replication` |
+| Equal | 265 symbols | `/gortex-equal` |
+| Exec | 252 symbols | `/gortex-exec` |
+| Verify | 248 symbols | `/gortex-verify` |
+| Visit | 241 symbols | `/gortex-visit` |
+| Init | 240 symbols | `/gortex-init` |
+| Libpq | 233 symbols | `/gortex-libpq` |
+| Remove | 203 symbols | `/gortex-remove` |
+| Nodes | 193 symbols | `/gortex-nodes` |
+| Validate | 170 symbols | `/gortex-validate` |
+| Spg | 161 symbols | `/gortex-spg` |
+| Get | 158 symbols | `/gortex-get` |
+| Cases | 152 symbols | `/gortex-cases` |
+| List | 149 symbols | `/gortex-list` |
 <!-- gortex:skills:end -->
 
 <!-- gortex:communities:end -->
