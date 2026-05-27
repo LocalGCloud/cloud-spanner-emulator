@@ -13,3 +13,18 @@ openspec
 .codex
 .DS_Store
 MODULE.bazel
+
+# Gemini and subagent directories
+.aiderignore
+.continue/
+.cursor/
+.gemini/
+.kiro/
+.mcp.json
+.opencode/
+.vscode/
+
+# Build and temporary files
+build_files.tar
+build_files.txt
+find_large_git_objects.sh
