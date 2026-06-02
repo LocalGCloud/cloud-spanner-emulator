@@ -16,9 +16,11 @@
 
 #include "backend/storage/persistent_storage.h"
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -483,6 +485,194 @@ TEST(PersistentStorageCreateTest, MultipleDbsUnderSameDataDir) {
   s1->reset();
   s2->reset();
   std::filesystem::remove_all(base);
+}
+
+// ---------------------------------------------------------------------------
+// WriteQueue tests (tasks 4.1–4.3)
+// ---------------------------------------------------------------------------
+
+TEST_F(PersistentStorageTest, WriteQueue_SequentialSubmit) {
+  absl::Time t0 = absl::Now();
+
+  // Submit 3 batches sequentially.
+  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+                            {String("batch-1")}));
+  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(2)}), {kColumnID},
+                            {String("batch-2")}));
+  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(3)}), {kColumnID},
+                            {String("batch-3")}));
+
+  // Verify all data is readable.
+  ZETASQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
+  int count = 0;
+  while (itr_->Next()) count++;
+  EXPECT_EQ(count, 3);
+}
+
+TEST_F(PersistentStorageTest, WriteQueue_ConcurrentSubmit) {
+  absl::Time t0 = absl::Now();
+  std::vector<std::thread> threads;
+  std::atomic<int> errors{0};
+
+  for (int i = 0; i < 4; ++i) {
+    threads.emplace_back([this, t0, i, &errors]() {
+      auto status = storage_->Write(t0, kTableId0, Key({Int64(i)}),
+                                    {kColumnID},
+                                    {String(absl::StrCat("val-", i))});
+      if (!status.ok()) {
+        errors++;
+      }
+    });
+  }
+
+  for (auto& t : threads) t.join();
+
+  EXPECT_EQ(errors.load(), 0);
+
+  // Verify all 4 rows are readable with no interleaving.
+  ZETASQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
+  int count = 0;
+  while (itr_->Next()) {
+    count++;
+    // Each row should have exactly 1 column with the expected value.
+    EXPECT_EQ(itr_->NumColumns(), 1);
+    EXPECT_TRUE(itr_->ColumnValue(0).is_valid());
+  }
+  EXPECT_EQ(count, 4);
+}
+
+TEST_F(PersistentStorageTest, WriteQueue_Shutdown) {
+  absl::Time t0 = absl::Now();
+
+  // Submit a batch.
+  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+                            {String("shutdown-test")}));
+
+  // Shutdown by destroying storage (TearDown will handle cleanup).
+  // The destructor calls write_queue_.Shutdown() which processes remaining
+  // batches and joins the worker thread.
+  storage_.reset();
+
+  // Reopen and verify data persisted (batch was committed before shutdown).
+  auto storage_or = PersistentStorage::Create(data_dir_);
+  ASSERT_TRUE(storage_or.ok()) << storage_or.status();
+  storage_ = std::move(*storage_or);  // Let TearDown clean up.
+
+  std::vector<zetasql::Value> values;
+  ZETASQL_ASSERT_OK(storage_->Lookup(t0, kTableId0, Key({Int64(1)}),
+                             {kColumnID}, &values));
+  EXPECT_THAT(values, testing::ElementsAre(String("shutdown-test")));
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot read tests (tasks 4.4–4.6)
+// ---------------------------------------------------------------------------
+
+TEST_F(PersistentStorageTest, Snapshot_ReadDuringWrite) {
+  absl::Time t0 = absl::Now();
+  std::atomic<int> read_count{0};
+
+  // Write concurrently with a read.
+  std::thread writer([this, t0]() {
+    ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}),
+                              {kColumnID}, {String("snapshot-test")}));
+  });
+
+  std::thread reader([this, t0, &read_count]() {
+    auto local_itr = std::unique_ptr<StorageIterator>();
+    ZETASQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID},
+                             &local_itr));
+    while (local_itr->Next()) read_count++;
+  });
+
+  writer.join();
+  reader.join();
+
+  // read_count should be either 0 or 1 — either sees nothing or sees the
+  // full committed row, never a partial row.
+  EXPECT_THAT(read_count.load(), testing::AnyOf(0, 1));
+}
+
+TEST_F(PersistentStorageTest, Snapshot_MultipleConcurrentReads) {
+  absl::Time t0 = absl::Now();
+
+  // Pre-populate one row so reads have something to return.
+  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+                            {String("existing")}));
+
+  const int kNumReaders = 10;
+  std::atomic<int> reads_ok{0};
+  std::atomic<int> writes_ok{0};
+  std::atomic<int> total_rows{0};
+
+  // One writer thread writes repeatedly.
+  std::thread writer([this, t0, &writes_ok]() {
+    for (int i = 0; i < 5; ++i) {
+      auto s = storage_->Write(t0, kTableId0, Key({Int64(2)}),
+                               {kColumnID}, {String(absl::StrCat("w", i))});
+      if (s.ok()) writes_ok++;
+    }
+  });
+
+  // Multiple reader threads read concurrently.
+  std::vector<std::thread> readers;
+  for (int i = 0; i < kNumReaders; ++i) {
+    readers.emplace_back([this, t0, &reads_ok, &total_rows]() {
+      auto local_itr = std::unique_ptr<StorageIterator>();
+      auto s = storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID},
+                              &local_itr);
+      if (s.ok()) {
+        reads_ok++;
+        int rows = 0;
+        while (local_itr->Next()) rows++;
+        total_rows += rows;
+      }
+    });
+  }
+
+  writer.join();
+  for (auto& t : readers) t.join();
+
+  EXPECT_EQ(writes_ok.load(), 5);
+  EXPECT_EQ(reads_ok.load(), kNumReaders);
+  // All reads should return consistent results — no crashes.
+  EXPECT_GE(total_rows.load(), kNumReaders);  // At least 10 rows (1 existing × 10 reads).
+}
+
+TEST(PersistentStorageCreateTest, Snapshot_IteratorReleasesSnapshot) {
+  std::string path = MakeTempDir("snapshot_release");
+  const TableID table_id = "t:0";
+  const ColumnID col_id = "c:0";
+  absl::Time t0 = absl::Now();
+
+  // Create storage, write data, read to create iterator with snapshot.
+  {
+    auto storage_or = PersistentStorage::Create(path);
+    ASSERT_TRUE(storage_or.ok()) << storage_or.status();
+
+    ZETASQL_ASSERT_OK((*storage_or)->Write(t0, table_id, Key({Int64(1)}),
+                                   {col_id}, {String("val")}));
+
+    {
+      auto local_itr = std::unique_ptr<StorageIterator>();
+      ZETASQL_ASSERT_OK((*storage_or)->Read(
+          t0, table_id,
+          KeyRange::ClosedOpen(Key({Int64(0)}), Key({Int64(5)})),
+          {col_id}, &local_itr));
+      // Iterator holds snapshot. Verify we can iterate.
+      EXPECT_TRUE(local_itr->Next());
+      EXPECT_EQ(local_itr->ColumnValue(0), String("val"));
+    }
+    // local_itr destroyed here — SnapshotOwningIterator releases the snapshot.
+    // storage destroyed here — LevelDB handle closed without assertion failure.
+  }
+
+  // Reopen — LevelDB should open cleanly (no stale snapshot preventing
+  // compaction/recovery).
+  auto storage_or2 = PersistentStorage::Create(path);
+  EXPECT_TRUE(storage_or2.ok()) << storage_or2.status();
+
+  std::filesystem::remove_all(path);
 }
 
 }  // namespace

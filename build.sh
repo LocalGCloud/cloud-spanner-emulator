@@ -105,14 +105,14 @@ fi
 
 # Auto-detect cores for parallelism if not set
 if [ -z "$BAZEL_JOBS" ]; then
-  BAZEL_JOBS=4
+  BAZEL_JOBS=8
 fi
 
 DOCKER_BUILDKIT=1 docker build --progress=plain \
   -f "$DOCKERFILE" \
   "${BUILD_ARGS[@]}" \
   --build-arg BAZEL_JOBS="$BAZEL_JOBS" \
-  --build-arg BAZEL_RAM="HOST_RAM*.5" \
+  --build-arg BAZEL_RAM="HOST_RAM*.8" \
   -t "$IMAGE_TAG" .
 
 # Extract binaries

@@ -17,8 +17,12 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_PERSISTENT_STORAGE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_PERSISTENT_STORAGE_H_
 
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <queue>
 #include <string>
+#include <thread>
 
 #include "zetasql/public/value.h"
 #include "absl/status/status.h"
@@ -70,23 +74,19 @@ class PersistentStorage : public Storage {
 
   absl::Status Lookup(absl::Time timestamp, const TableID& table_id,
                       const Key& key, const std::vector<ColumnID>& column_ids,
-                      std::vector<zetasql::Value>* values) const override
-      ABSL_LOCKS_EXCLUDED(mu_);
+                      std::vector<zetasql::Value>* values) const override;
 
   absl::Status Read(absl::Time timestamp, const TableID& table_id,
                     const KeyRange& key_range,
                     const std::vector<ColumnID>& column_ids,
-                    std::unique_ptr<StorageIterator>* itr) const override
-      ABSL_LOCKS_EXCLUDED(mu_);
+                    std::unique_ptr<StorageIterator>* itr) const override;
 
   absl::Status Write(absl::Time timestamp, const TableID& table_id,
                      const Key& key, const std::vector<ColumnID>& column_ids,
-                     const std::vector<zetasql::Value>& values) override
-      ABSL_LOCKS_EXCLUDED(mu_);
+                     const std::vector<zetasql::Value>& values) override;
 
   absl::Status Delete(absl::Time timestamp, const TableID& table_id,
-                      const KeyRange& key_range) override
-      ABSL_LOCKS_EXCLUDED(mu_);
+                      const KeyRange& key_range) override;
 
   void SetVersionRetentionPeriod(
       absl::Duration version_retention_period) override;
@@ -105,6 +105,32 @@ class PersistentStorage : public Storage {
       ABSL_LOCKS_EXCLUDED(mu_);
 
  private:
+  // WriteQueue serializes all LevelDB writes through a single worker thread.
+  // This eliminates interleaving of concurrent WriteBatch submissions.
+  class WriteQueue {
+   public:
+    explicit WriteQueue(leveldb::DB* db);
+    ~WriteQueue();
+
+    // Submits a batch to the worker thread. Blocks until committed.
+    // Returns the LevelDB Status from db_->Write().
+    leveldb::Status Submit(leveldb::WriteBatch batch);
+
+    // Stops accepting submissions, processes remaining batches, joins worker.
+    void Shutdown();
+
+   private:
+    void WorkerLoop();
+
+    std::thread worker_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::queue<leveldb::WriteBatch> queue_;
+    std::queue<leveldb::Status> results_;
+    leveldb::DB* db_;
+    bool shutdown_ = false;
+  };
+
   explicit PersistentStorage(std::unique_ptr<leveldb::DB> db);
 
   // Builds a LevelDB key from the components.
@@ -126,32 +152,30 @@ class PersistentStorage : public Storage {
   // Returns true if the row identified by the given encoded key exists at the
   // specified timestamp by checking the _exists column.
   bool Exists(const TableID& table_id, const std::string& encoded_key,
-              absl::Time timestamp) const ABSL_SHARED_LOCKS_REQUIRED(mu_);
+              absl::Time timestamp) const;
 
   // Finds the value for a specific cell at or before the given timestamp.
   // Uses LevelDB iterator seek to find the most recent version.
   zetasql::Value GetCellValueAtTimestamp(const TableID& table_id,
                                            const std::string& encoded_key,
                                            const ColumnID& column_id,
-                                           absl::Time timestamp) const
-      ABSL_SHARED_LOCKS_REQUIRED(mu_);
+                                           absl::Time timestamp) const;
 
   // Collects all distinct encoded keys in a table within a key range.
   std::vector<std::string> CollectKeysInRange(
       const TableID& table_id, const std::string& start_encoded,
-      const std::string& limit_encoded) const
-      ABSL_SHARED_LOCKS_REQUIRED(mu_);
+      const std::string& limit_encoded) const;
 
   // Removes old versions of a cell that are past the retention period.
   // Mirrors InMemoryStorage::RemoveExpiredVersions behavior: keeps the most
   // recent version within the retention window, deletes everything older.
   void RemoveExpiredVersions(const std::string& cell_prefix,
                              absl::Time timestamp,
-                             leveldb::WriteBatch* batch)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+                             leveldb::WriteBatch* batch);
 
   mutable absl::Mutex mu_;
-  std::unique_ptr<leveldb::DB> db_ ABSL_GUARDED_BY(mu_);
+  std::unique_ptr<leveldb::DB> db_;
+  WriteQueue write_queue_;
 
   // Tracks when tables were dropped.
   std::map<absl::Time, TableID> dropped_tables_ ABSL_GUARDED_BY(mu_);

@@ -148,10 +148,39 @@ absl::Status CheckIteratorStatus(const leveldb::Iterator& it) {
 
 }  // namespace
 
-PersistentStorage::PersistentStorage(std::unique_ptr<leveldb::DB> db)
-    : db_(std::move(db)) {}
+// A StorageIterator wrapper that releases a LevelDB snapshot on destruction.
+// Used by PersistentStorage::Read() to ensure the snapshot lives until the
+// caller is done iterating through the results.
+class SnapshotOwningIterator : public StorageIterator {
+ public:
+  SnapshotOwningIterator(std::vector<FixedRowStorageIterator::Row> rows,
+                         leveldb::DB* db, const leveldb::Snapshot* snapshot)
+      : inner_(std::move(rows)), db_(db), snapshot_(snapshot) {}
 
-PersistentStorage::~PersistentStorage() = default;
+  ~SnapshotOwningIterator() override {
+    if (db_ && snapshot_) {
+      db_->ReleaseSnapshot(snapshot_);
+    }
+  }
+
+  bool Next() override { return inner_.Next(); }
+  absl::Status Status() const override { return inner_.Status(); }
+  const class Key& Key() const override { return inner_.Key(); }
+  int NumColumns() const override { return inner_.NumColumns(); }
+  const zetasql::Value& ColumnValue(int i) const override {
+    return inner_.ColumnValue(i);
+  }
+
+ private:
+  FixedRowStorageIterator inner_;
+  leveldb::DB* db_;
+  const leveldb::Snapshot* snapshot_;
+};
+
+PersistentStorage::PersistentStorage(std::unique_ptr<leveldb::DB> db)
+    : db_(std::move(db)), write_queue_(db_.get()) {}
+
+PersistentStorage::~PersistentStorage() { write_queue_.Shutdown(); }
 
 absl::StatusOr<std::unique_ptr<PersistentStorage>> PersistentStorage::Create(
     const std::string& data_dir) {
@@ -182,6 +211,70 @@ absl::StatusOr<std::unique_ptr<PersistentStorage>> PersistentStorage::Create(
 
   return absl::WrapUnique(
       new PersistentStorage(std::unique_ptr<leveldb::DB>(raw_db)));
+}
+
+// ---------------------------------------------------------------------------
+// WriteQueue — serializes all LevelDB writes through a single worker thread.
+// ---------------------------------------------------------------------------
+
+PersistentStorage::WriteQueue::WriteQueue(leveldb::DB* db) : db_(db) {
+  worker_ = std::thread(&WriteQueue::WorkerLoop, this);
+}
+
+PersistentStorage::WriteQueue::~WriteQueue() {
+  if (!shutdown_) {
+    Shutdown();
+  }
+}
+
+leveldb::Status PersistentStorage::WriteQueue::Submit(
+    leveldb::WriteBatch batch) {
+  std::unique_lock<std::mutex> lock(mu_);
+  if (shutdown_) {
+    return leveldb::Status::IOError("WriteQueue is shutting down");
+  }
+  queue_.push(std::move(batch));
+  cv_.notify_one();
+  cv_.wait(lock, [this] { return !results_.empty() || shutdown_; });
+  if (shutdown_ && results_.empty()) {
+    return leveldb::Status::IOError("WriteQueue shut down");
+  }
+  leveldb::Status result = std::move(results_.front());
+  results_.pop();
+  return result;
+}
+
+void PersistentStorage::WriteQueue::Shutdown() {
+  {
+    std::unique_lock<std::mutex> lock(mu_);
+    shutdown_ = true;
+    cv_.notify_one();  // Wake the worker
+  }
+  if (worker_.joinable()) {
+    worker_.join();
+  }
+  // Notify any remaining waiters (should be none after worker finishes).
+  {
+    std::unique_lock<std::mutex> lock(mu_);
+    cv_.notify_all();
+  }
+}
+
+void PersistentStorage::WriteQueue::WorkerLoop() {
+  std::unique_lock<std::mutex> lock(mu_);
+  while (true) {
+    cv_.wait(lock, [this] { return !queue_.empty() || shutdown_; });
+    if (shutdown_ && queue_.empty()) break;
+    while (!queue_.empty()) {
+      leveldb::WriteBatch batch = std::move(queue_.front());
+      queue_.pop();
+      lock.unlock();
+      leveldb::Status s = db_->Write(leveldb::WriteOptions(), &batch);
+      lock.lock();
+      results_.push(std::move(s));
+      cv_.notify_all();
+    }
+  }
 }
 
 std::string PersistentStorage::EncodeTimestamp(absl::Time timestamp) {
@@ -337,8 +430,6 @@ absl::Status PersistentStorage::Lookup(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,
     std::vector<zetasql::Value>* values) const {
-  absl::ReaderMutexLock lock(&mu_);
-
   if (!column_ids.empty() && values == nullptr) {
     return error::Internal(
         "PersistentStorage::Lookup was passed a nullptr for "
@@ -410,8 +501,6 @@ absl::Status PersistentStorage::Read(
     absl::Time timestamp, const TableID& table_id, const KeyRange& key_range,
     const std::vector<ColumnID>& column_ids,
     std::unique_ptr<StorageIterator>* itr) const {
-  absl::ReaderMutexLock lock(&mu_);
-
   if (!key_range.IsClosedOpen()) {
     return error::Internal(
         absl::StrCat("PersistentStorage::Read should be called "
@@ -461,8 +550,12 @@ absl::Status PersistentStorage::Read(
   // Map: encoded_key -> (column_id -> best cell data)
   std::map<std::string, std::map<std::string, CellData>> rows_data;
 
-  std::unique_ptr<leveldb::Iterator> it(
-      db_->NewIterator(leveldb::ReadOptions()));
+  // Acquire a LevelDB snapshot for point-in-time read consistency.
+  const leveldb::Snapshot* snapshot = db_->GetSnapshot();
+  leveldb::ReadOptions read_options;
+  read_options.snapshot = snapshot;
+
+  std::unique_ptr<leveldb::Iterator> it(db_->NewIterator(read_options));
   for (it->Seek(seek_start); it->Valid(); it->Next()) {
     leveldb::Slice ldb_key = it->key();
     if (!ldb_key.starts_with(table_prefix)) break;
@@ -558,7 +651,8 @@ absl::Status PersistentStorage::Read(
     rows.emplace_back(std::make_pair(reconstructed_key, std::move(values)));
   }
 
-  *itr = std::make_unique<FixedRowStorageIterator>(std::move(rows));
+  *itr = std::make_unique<SnapshotOwningIterator>(std::move(rows),
+                                                   db_.get(), snapshot);
   return absl::OkStatus();
 }
 
@@ -566,8 +660,6 @@ absl::Status PersistentStorage::Write(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,
     const std::vector<zetasql::Value>& values) {
-  absl::MutexLock lock(&mu_);
-
   std::string encoded_key = EncodeKey(key);
   leveldb::WriteBatch batch;
 
@@ -622,8 +714,7 @@ absl::Status PersistentStorage::Write(
     batch.Put(ldb_key, encoded_value);
   }
 
-  leveldb::Status status =
-      db_->Write(leveldb::WriteOptions(), &batch);
+  leveldb::Status status = write_queue_.Submit(std::move(batch));
   if (!status.ok()) {
     return LevelDBStatusToAbsl(status);
   }
@@ -647,7 +738,7 @@ absl::Status PersistentStorage::Write(
     AppendLengthPrefixed(&cell_prefix, column_id);
     RemoveExpiredVersions(cell_prefix, timestamp, &gc_batch);
   }
-  db_->Write(leveldb::WriteOptions(), &gc_batch);  // Best-effort GC.
+  write_queue_.Submit(std::move(gc_batch));  // Best-effort GC.
 
   return absl::OkStatus();
 }
@@ -655,8 +746,6 @@ absl::Status PersistentStorage::Write(
 absl::Status PersistentStorage::Delete(absl::Time timestamp,
                                        const TableID& table_id,
                                        const KeyRange& key_range) {
-  absl::MutexLock lock(&mu_);
-
   if (!key_range.IsClosedOpen()) {
     return error::Internal(
         absl::StrCat("PersistentStorage::Delete should be called "
@@ -726,8 +815,7 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
     ZETASQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
   }
 
-  leveldb::Status status =
-      db_->Write(leveldb::WriteOptions(), &batch);
+  leveldb::Status status = write_queue_.Submit(std::move(batch));
   if (!status.ok()) {
     return LevelDBStatusToAbsl(status);
   }
@@ -751,7 +839,7 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
       RemoveExpiredVersions(cell_prefix, timestamp, &gc_batch);
     }
   }
-  db_->Write(leveldb::WriteOptions(), &gc_batch);  // Best-effort GC.
+  write_queue_.Submit(std::move(gc_batch));  // Best-effort GC.
 
   return absl::OkStatus();
 }
@@ -820,7 +908,7 @@ void PersistentStorage::CleanUpDeletedTables(absl::Time timestamp) {
       batch.Delete(db_it->key());
     }
     if (!db_it->status().ok()) break;  // Stop cleanup on I/O error.
-    db_->Write(leveldb::WriteOptions(), &batch);
+    write_queue_.Submit(std::move(batch));
 
     it = dropped_tables_.erase(it);
   }
@@ -852,7 +940,7 @@ void PersistentStorage::CleanUpDeletedColumns(absl::Time timestamp) {
       }
     }
     if (!db_it->status().ok()) break;  // Stop cleanup on I/O error.
-    db_->Write(leveldb::WriteOptions(), &batch);
+    write_queue_.Submit(std::move(batch));
 
     it = dropped_columns_.erase(it);
   }
