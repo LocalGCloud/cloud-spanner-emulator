@@ -26,10 +26,14 @@
 #include "zetasql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "backend/datamodel/key_range.h"
 #include "backend/storage/iterator.h"
+#include "zetasql/public/json_value.h"
+#include "zetasql/public/numeric_value.h"
+#include "zetasql/public/types/type.h"
 
 namespace google {
 namespace spanner {
@@ -38,7 +42,10 @@ namespace backend {
 namespace {
 
 using zetasql::values::Bool;
+using zetasql::values::Double;
 using zetasql::values::Int64;
+using zetasql::values::Null;
+using zetasql::values::Numeric;
 using zetasql::values::String;
 
 // Returns a unique temp directory path under TEST_TMPDIR (or /tmp).
@@ -165,6 +172,81 @@ TEST(PersistentStorageCreateTest, DataPersistsAcrossCloseAndReopen) {
     ZETASQL_ASSERT_OK((*storage_or)->Lookup(t0, table_id, Key({Int64(42)}),
                                     {col_id}, &values));
     EXPECT_THAT(values, testing::ElementsAre(String("hello")));
+  }
+
+  std::filesystem::remove_all(base);
+}
+
+TEST(PersistentStorageCreateTest, ArrayValuesPersistAcrossCloseAndReopen) {
+  std::string base = MakeTempDir("array_persist");
+  std::string path = base + "/db/storage";
+  const TableID table_id = "array_table:0";
+  const ColumnID int_array_col = "int_array:0";
+  const ColumnID string_array_col = "string_array:0";
+  const ColumnID double_array_col = "double_array:0";
+  const ColumnID bool_array_col = "bool_array:0";
+  const ColumnID numeric_array_col = "numeric_array:0";
+  const ColumnID json_array_col = "json_array:0";
+  const ColumnID empty_array_col = "empty_array:0";
+  const ColumnID null_array_col = "null_array:0";
+  absl::Time t0 = absl::Now();
+
+  auto numeric = [](absl::string_view value) {
+    return Numeric(zetasql::NumericValue::FromStringStrict(value).value());
+  };
+  auto json = [](absl::string_view value) {
+    return zetasql::values::Json(
+        zetasql::JSONValue::ParseJSONString(value).value());
+  };
+
+  zetasql::Value int_array =
+      zetasql::values::Array(zetasql::types::Int64ArrayType(),
+                             {Int64(1), Null(zetasql::types::Int64Type()),
+                              Int64(3)});
+  zetasql::Value string_array =
+      zetasql::values::Array(zetasql::types::StringArrayType(),
+                             {String("tag1"), String("tag2")});
+  zetasql::Value double_array =
+      zetasql::values::Array(zetasql::types::DoubleArrayType(),
+                             {Double(1.25), Double(2.5)});
+  zetasql::Value bool_array =
+      zetasql::values::Array(zetasql::types::BoolArrayType(),
+                             {Bool(true), Bool(false)});
+  zetasql::Value numeric_array =
+      zetasql::values::Array(zetasql::types::NumericArrayType(),
+                             {numeric("123.456"), numeric("-0.000001")});
+  zetasql::Value json_array =
+      zetasql::values::Array(zetasql::types::JsonArrayType(),
+                             {json(R"({"a":1})"), json(R"(["b",2])")});
+  zetasql::Value empty_array =
+      zetasql::Value::EmptyArray(zetasql::types::StringArrayType());
+  zetasql::Value null_array =
+      zetasql::values::Null(zetasql::types::StringArrayType());
+
+  {
+    auto storage_or = PersistentStorage::Create(path);
+    ASSERT_TRUE(storage_or.ok()) << storage_or.status();
+    ZETASQL_ASSERT_OK((*storage_or)->Write(
+        t0, table_id, Key({Int64(42)}),
+        {int_array_col, string_array_col, double_array_col, bool_array_col,
+         numeric_array_col, json_array_col, empty_array_col, null_array_col},
+        {int_array, string_array, double_array, bool_array, numeric_array,
+         json_array, empty_array, null_array}));
+  }
+
+  {
+    auto storage_or = PersistentStorage::Create(path);
+    ASSERT_TRUE(storage_or.ok()) << storage_or.status();
+    std::vector<zetasql::Value> values;
+    ZETASQL_ASSERT_OK((*storage_or)->Lookup(
+        t0, table_id, Key({Int64(42)}),
+        {int_array_col, string_array_col, double_array_col, bool_array_col,
+         numeric_array_col, json_array_col, empty_array_col, null_array_col},
+        &values));
+    EXPECT_THAT(values,
+                testing::ElementsAre(int_array, string_array, double_array,
+                                     bool_array, numeric_array, json_array,
+                                     empty_array, null_array));
   }
 
   std::filesystem::remove_all(base);

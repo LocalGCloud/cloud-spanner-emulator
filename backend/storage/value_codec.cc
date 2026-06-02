@@ -21,9 +21,12 @@
 
 #include "zetasql/base/logging.h"
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "zetasql/public/json_value.h"
 #include "zetasql/public/numeric_value.h"
+#include "zetasql/public/types/type.h"
 #include "zetasql/public/value.h"
 #include "absl/time/time.h"
 
@@ -46,6 +49,8 @@ constexpr uint8_t kTagTimestamp = 0x07;
 constexpr uint8_t kTagDate = 0x08;
 constexpr uint8_t kTagNumeric = 0x09;
 constexpr uint8_t kTagJson = 0x0A;
+constexpr uint8_t kTagArray = 0x0B;
+constexpr uint8_t kTagFloat = 0x0C;
 
 // Little-endian encoding helpers for cross-architecture portability.
 void AppendInt64LE(std::string* out, int64_t val) {
@@ -136,6 +141,61 @@ int32_t ReadInt32LE(const char* data) {
   return val;
 }
 
+const zetasql::Type* TypeForKind(zetasql::TypeKind type_kind) {
+  switch (type_kind) {
+    case zetasql::TYPE_BOOL:
+      return zetasql::types::BoolType();
+    case zetasql::TYPE_INT64:
+      return zetasql::types::Int64Type();
+    case zetasql::TYPE_FLOAT:
+      return zetasql::types::FloatType();
+    case zetasql::TYPE_DOUBLE:
+      return zetasql::types::DoubleType();
+    case zetasql::TYPE_STRING:
+      return zetasql::types::StringType();
+    case zetasql::TYPE_BYTES:
+      return zetasql::types::BytesType();
+    case zetasql::TYPE_TIMESTAMP:
+      return zetasql::types::TimestampType();
+    case zetasql::TYPE_DATE:
+      return zetasql::types::DateType();
+    case zetasql::TYPE_NUMERIC:
+      return zetasql::types::NumericType();
+    case zetasql::TYPE_JSON:
+      return zetasql::types::JsonType();
+    default:
+      return nullptr;
+  }
+}
+
+const zetasql::ArrayType* ArrayTypeForElementKind(
+    zetasql::TypeKind element_kind) {
+  switch (element_kind) {
+    case zetasql::TYPE_BOOL:
+      return zetasql::types::BoolArrayType();
+    case zetasql::TYPE_INT64:
+      return zetasql::types::Int64ArrayType();
+    case zetasql::TYPE_FLOAT:
+      return zetasql::types::FloatArrayType();
+    case zetasql::TYPE_DOUBLE:
+      return zetasql::types::DoubleArrayType();
+    case zetasql::TYPE_STRING:
+      return zetasql::types::StringArrayType();
+    case zetasql::TYPE_BYTES:
+      return zetasql::types::BytesArrayType();
+    case zetasql::TYPE_TIMESTAMP:
+      return zetasql::types::TimestampArrayType();
+    case zetasql::TYPE_DATE:
+      return zetasql::types::DateArrayType();
+    case zetasql::TYPE_NUMERIC:
+      return zetasql::types::NumericArrayType();
+    case zetasql::TYPE_JSON:
+      return zetasql::types::JsonArrayType();
+    default:
+      return nullptr;
+  }
+}
+
 }  // namespace
 
 std::string EncodeValue(const zetasql::Value& value) {
@@ -151,6 +211,11 @@ std::string EncodeValue(const zetasql::Value& value) {
     // Also store the type kind so we can reconstruct the typed null.
     int32_t type_kind = static_cast<int32_t>(value.type_kind());
     AppendInt32LE(&result, type_kind);
+    if (value.type_kind() == zetasql::TYPE_ARRAY) {
+      int32_t element_kind =
+          static_cast<int32_t>(value.type()->AsArray()->element_type()->kind());
+      AppendInt32LE(&result, element_kind);
+    }
     return result;
   }
 
@@ -163,6 +228,11 @@ std::string EncodeValue(const zetasql::Value& value) {
     case zetasql::TYPE_INT64: {
       result.push_back(static_cast<char>(kTagInt64));
       AppendInt64LE(&result, value.int64_value());
+      break;
+    }
+    case zetasql::TYPE_FLOAT: {
+      result.push_back(static_cast<char>(kTagFloat));
+      AppendDoubleLE(&result, static_cast<double>(value.float_value()));
       break;
     }
     case zetasql::TYPE_DOUBLE: {
@@ -207,6 +277,17 @@ std::string EncodeValue(const zetasql::Value& value) {
       AppendLengthPrefixedString(&result, json_str);
       break;
     }
+    case zetasql::TYPE_ARRAY: {
+      result.push_back(static_cast<char>(kTagArray));
+      int32_t element_kind =
+          static_cast<int32_t>(value.type()->AsArray()->element_type()->kind());
+      AppendInt32LE(&result, element_kind);
+      AppendInt32LE(&result, value.num_elements());
+      for (int i = 0; i < value.num_elements(); ++i) {
+        AppendLengthPrefixedString(&result, EncodeValue(value.element(i)));
+      }
+      break;
+    }
     default: {
       // Unsupported type — fail explicitly rather than silently losing type
       // information via DebugString(). Add support for new types here.
@@ -242,6 +323,8 @@ zetasql::Value DecodeValue(const std::string& encoded) {
           return zetasql::values::NullBool();
         case zetasql::TYPE_INT64:
           return zetasql::values::NullInt64();
+        case zetasql::TYPE_FLOAT:
+          return zetasql::values::NullFloat();
         case zetasql::TYPE_DOUBLE:
           return zetasql::values::NullDouble();
         case zetasql::TYPE_STRING:
@@ -256,6 +339,15 @@ zetasql::Value DecodeValue(const std::string& encoded) {
           return zetasql::values::NullNumeric();
         case zetasql::TYPE_JSON:
           return zetasql::values::NullJson();
+        case zetasql::TYPE_ARRAY: {
+          if (remaining < 8) return zetasql::Value();
+          zetasql::TypeKind element_kind =
+              static_cast<zetasql::TypeKind>(ReadInt32LE(data + 4));
+          const zetasql::ArrayType* array_type =
+              ArrayTypeForElementKind(element_kind);
+          if (array_type == nullptr) return zetasql::Value();
+          return zetasql::values::Null(array_type);
+        }
         default:
           return zetasql::Value();
       }
@@ -268,6 +360,10 @@ zetasql::Value DecodeValue(const std::string& encoded) {
     case kTagInt64:
       if (remaining < 8) return zetasql::Value();
       return zetasql::values::Int64(ReadInt64LE(data));
+
+    case kTagFloat:
+      if (remaining < 8) return zetasql::Value();
+      return zetasql::values::Float(static_cast<float>(ReadDoubleLE(data)));
 
     case kTagDouble:
       if (remaining < 8) return zetasql::Value();
@@ -330,6 +426,49 @@ zetasql::Value DecodeValue(const std::string& encoded) {
           std::string(data, len));
       if (!json_value.ok()) return zetasql::Value();
       return zetasql::values::Json(std::move(json_value).value());
+    }
+
+    case kTagArray: {
+      if (remaining < 8) return zetasql::Value();
+      zetasql::TypeKind element_kind =
+          static_cast<zetasql::TypeKind>(ReadInt32LE(data));
+      const zetasql::ArrayType* array_type =
+          ArrayTypeForElementKind(element_kind);
+      const zetasql::Type* element_type = TypeForKind(element_kind);
+      if (array_type == nullptr || element_type == nullptr) {
+        return zetasql::Value();
+      }
+      data += sizeof(int32_t);
+      size_t bytes_left = remaining - sizeof(int32_t);
+
+      int32_t num_elements = ReadInt32LE(data);
+      if (num_elements < 0) return zetasql::Value();
+      data += sizeof(int32_t);
+      bytes_left -= sizeof(int32_t);
+
+      std::vector<zetasql::Value> elements;
+      elements.reserve(num_elements);
+      for (int i = 0; i < num_elements; ++i) {
+        if (bytes_left < 4) return zetasql::Value();
+        int32_t len = ReadInt32LE(data);
+        if (len < 0) return zetasql::Value();
+        data += sizeof(int32_t);
+        bytes_left -= sizeof(int32_t);
+        if (bytes_left < static_cast<size_t>(len)) return zetasql::Value();
+
+        zetasql::Value element = DecodeValue(std::string(data, len));
+        if (!element.is_valid()) return zetasql::Value();
+        if (!element.is_null() && !element.type()->Equals(element_type)) {
+          return zetasql::Value();
+        }
+        elements.push_back(std::move(element));
+        data += len;
+        bytes_left -= len;
+      }
+
+      auto array_or = zetasql::Value::MakeArray(array_type, elements);
+      if (!array_or.ok()) return zetasql::Value();
+      return std::move(array_or).value();
     }
 
     default:

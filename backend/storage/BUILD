@@ -124,6 +124,8 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@com_google_zetasql//zetasql/public:json_value",
+        "@com_google_zetasql//zetasql/public:numeric_value",
+        "@com_google_zetasql//zetasql/public:type",
         "@com_google_zetasql//zetasql/public:value",
     ],
 )
@@ -169,6 +171,9 @@ cc_test(
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
         "@com_google_zetasql//zetasql/base/testing:status_matchers",
+        "@com_google_zetasql//zetasql/public:json_value",
+        "@com_google_zetasql//zetasql/public:numeric_value",
+        "@com_google_zetasql//zetasql/public:type",
         "@com_google_zetasql//zetasql/public:value",
     ],
 )

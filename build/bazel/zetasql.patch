@@ -651,7 +651,7 @@ index 6956e63..aae162f 100644
      }
 
 diff --git a/zetasql/public/types/type.h b/zetasql/public/types/type.h
-index 1234567..89abcde 100644
+index 0000000..0000000 100644
 --- a/zetasql/public/types/type.h
 +++ b/zetasql/public/types/type.h
 @@ -670,6 +670,8 @@
@@ -666,7 +666,7 @@ index 1234567..89abcde 100644
    // Internal implementation for Serialize methods.  This will append
 
 diff --git a/zetasql/public/value_inl.h b/zetasql/public/value_inl.h
-index 1234567..89abcde 100644
+index 0000000..0000000 100644
 --- a/zetasql/public/value_inl.h
 +++ b/zetasql/public/value_inl.h
 @@ -1166,7 +1166,7 @@
@@ -678,3 +678,49 @@ index 1234567..89abcde 100644
  
    friend constexpr Value::Metadata::Metadata(TypeKind kind, bool is_null,
                                               bool preserves_order,
+
+diff --git a/zetasql/public/pico_time.h b/zetasql/public/pico_time.h
+index 0000000..0000000 100644
+--- a/zetasql/public/pico_time.h
++++ b/zetasql/public/pico_time.h
+@@ -94,8 +94,8 @@ class PicoTime final {
+   // Returns the maximum and minimum PicoTime values.
+   // Minimum value is 0001-01-01 00:00:00.000000000000 UTC
+   // Maximum value is 9999-12-31 23:59:59.999999999999 UTC
+-  static constexpr PicoTime MinValue() { return PicoTime(-62135596800, 0); }
++  static PicoTime MinValue() { return PicoTime(-62135596800, 0); }
+ 
+-  static constexpr PicoTime MaxValue() {
++  static PicoTime MaxValue() {
+     return PicoTime(253402300799, kNumPicosPerSecond - 1);
+   }
+@@ -132,7 +132,7 @@ class PicoTime final {
+ #endif
+ 
+  private:
+-  constexpr PicoTime(int64_t unix_seconds, uint64_t picoseconds) {
++  PicoTime(int64_t unix_seconds, uint64_t picoseconds) {
+     time_ = absl::FromUnixSeconds(unix_seconds) +
+             absl::Nanoseconds(picoseconds / 1000);
+     picos_ = picoseconds % 1000;
+
+diff --git a/zetasql/public/timestamp_picos_value.h b/zetasql/public/timestamp_picos_value.h
+index 0000000..0000000 100644
+--- a/zetasql/public/timestamp_picos_value.h
++++ b/zetasql/public/timestamp_picos_value.h
+@@ -62,12 +62,12 @@ class TimestampPicosValue final {
+   // Returns the maximum and minimum UUID values.
+   // Minimum value is 0001-01-01 00:00:00.000000000000 UTC
+   // Maximum value is 9999-12-31 23:59:59.999999999999 UTC
+-  static constexpr TimestampPicosValue MinValue() {
++  static TimestampPicosValue MinValue() {
+     return TimestampPicosValue(PicoTime::MinValue());
+   }
+-  static constexpr TimestampPicosValue MaxValue() {
++  static TimestampPicosValue MaxValue() {
+     return TimestampPicosValue(PicoTime::MaxValue());
+   }
+ 
+   // Serializes into a fixed-size 16-byte representation and appends
+   // it directly to the provided 'bytes' string.
+   void SerializeAndAppendToProtoBytes(std::string* bytes) const;
