@@ -17,19 +17,35 @@ jobs:
       matrix:
         include:
           - platform: linux/amd64
-            runner: ubuntu-latest
-            jobs: 4
+            arch: amd64
+            runner: ubuntu-24.04
+            runner_arch: x86_64
+            bazel_jobs: 4
           - platform: linux/arm64
-            runner: ubuntu-latest-arm
-            jobs: 8
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            runner_arch: aarch64
+            bazel_jobs: 4
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 180
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify native runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_arch="$(uname -m)"
+          if [[ "$actual_arch" != "${{ matrix.runner_arch }}" ]]; then
+            echo "Expected native ${{ matrix.runner_arch }} runner, got $actual_arch" >&2
+            exit 1
+          fi
+          echo "Building ${{ matrix.platform }} natively on $actual_arch"
+
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
@@ -44,6 +60,102 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
 
+      - name: Generate build files manifest
+        run: |
+          # Only include Bazel-relevant files (BUILD, BUILD.bazel, .bzl).
+          # Excludes IDE configs, node_modules, and other non-Bazel JSON that
+          # would unnecessarily invalidate the deps stage Docker cache.
+          {
+            find . \( -name "BUILD" -o -name "BUILD.bazel" -o -name "*.bzl" \) \
+              -not -path "./.opencode/*" \
+              -not -path "./.cursor/*" \
+              -not -path "./.gemini/*" \
+              -not -path "./.claude/*" \
+              -not -path "./.kiro/*" \
+              -not -path "./.vscode/*" \
+              -not -path "./.continue/*" \
+              -not -path "./.idea/*" \
+              -not -path "./.git/*" \
+              -not -path "./bazel-*/*" | sed 's#^\./##'
+            echo WORKSPACE
+            echo maven_install.json
+            echo .bazelversion
+            echo .bazelrc
+            echo BUILD.bazel
+          } | LC_ALL=C sort -u > build_files.txt
+          # Normalize archive metadata so a fresh checkout produces the same
+          # dependency-layer input when the files themselves are unchanged.
+          tar --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 --group=0 --numeric-owner \
+            -cf build_files.tar -T build_files.txt
+
+      - name: Hash dependency and toolchain inputs
+        id: dependency-hash
+        shell: bash
+        run: |
+          sha256sum build_files.tar build/docker/Dockerfile.ubuntu \
+            | sha256sum \
+            | cut -d ' ' -f 1 \
+            | sed 's/^/value=/' >> "$GITHUB_OUTPUT"
+
+      # Bazel does not hash host tools such as /usr/bin/gcc into action keys.
+      # Resolve the real toolchain image first so disk-cache entries never
+      # cross compiler, package, or base-image changes.
+      - name: Resolve toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/docker/Dockerfile.ubuntu
+          target: toolchain
+          platforms: ${{ matrix.platform }}
+          load: true
+          provenance: false
+          tags: spanner-emulator-toolchain:${{ matrix.arch }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+
+      - name: Fingerprint resolved toolchain
+        id: toolchain-fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id="$(docker image inspect \
+            --format '{{.Id}}' \
+            "spanner-emulator-toolchain:${{ matrix.arch }}")"
+          echo "value=${image_id#sha256:}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Bazel cache mounts
+        id: bazel-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/bazel-disk-cache-${{ matrix.arch }}
+            ${{ runner.temp }}/bazel-repo-cache-${{ matrix.arch }}
+          key: bazel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ steps.dependency-hash.outputs.value }}-${{ github.sha }}
+          restore-keys: |
+            bazel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ steps.dependency-hash.outputs.value }}-
+            bazel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-
+
+      - name: Inject Bazel cache mounts into BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          scratch-dir: ${{ runner.temp }}/buildkit-cache-dance-${{ matrix.arch }}
+          cache-map: |
+            {
+              "${{ runner.temp }}/bazel-disk-cache-${{ matrix.arch }}": {
+                "target": "/bazel-disk-cache",
+                "id": "spanner-emulator-${{ matrix.arch }}-disk",
+                "sharing": "locked"
+              },
+              "${{ runner.temp }}/bazel-repo-cache-${{ matrix.arch }}": {
+                "target": "/bazel-repo-cache",
+                "id": "spanner-emulator-${{ matrix.arch }}-repo",
+                "sharing": "locked"
+              }
+            }
+          skip-extraction: ${{ steps.bazel-cache.outputs.cache-hit }}
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -51,13 +163,15 @@ jobs:
           context: .
           file: build/docker/Dockerfile.ubuntu
           platforms: ${{ matrix.platform }}
+          provenance: false
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=build-${{ matrix.platform }}
-          cache-to: type=gha,scope=build-${{ matrix.platform }},mode=max
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
           build-args: |
-            BAZEL_JOBS=${{ matrix.jobs }}
+            BAZEL_JOBS=${{ matrix.bazel_jobs }}
             BAZEL_RAM=HOST_RAM*.8
+            BAZEL_CACHE_NAMESPACE=spanner-emulator-${{ matrix.arch }}
 
       - name: Export digest
         run: |
@@ -68,13 +182,13 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          name: digests-${{ matrix.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
   merge:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 10
 
@@ -105,14 +219,38 @@ jobs:
             type=sha,prefix=
             type=ref,event=tag
 
-      - name: Create manifest list and push
+      - name: Create multi-platform manifest
         working-directory: /tmp/digests
         env:
           DOCKER_METADATA_OUTPUT_JSON: ${{ steps.meta.outputs.json }}
         run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          set -euo pipefail
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(--tag "$tag")
+          done
 
-      - name: Inspect image
-        run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          shopt -s nullglob
+          sources=()
+          for digest in *; do
+            sources+=("${IMAGE_NAME}@sha256:${digest}")
+          done
+          if (( ${#sources[@]} != 2 )); then
+            echo "Expected two architecture digests, found ${#sources[@]}" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+
+      - name: Verify multi-platform manifest
+        env:
+          IMAGE_TAG: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          raw_manifest="$(docker buildx imagetools inspect --raw "$IMAGE_TAG")"
+          jq -e '
+            [.manifests[].platform | "\(.os)/\(.architecture)"] as $platforms
+            | ($platforms | index("linux/amd64")) != null
+              and ($platforms | index("linux/arm64")) != null
+          ' <<< "$raw_manifest"

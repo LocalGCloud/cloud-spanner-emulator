@@ -44,3 +44,9 @@ build --per_file_copt=+.*resolved_ast\.cc@-O0
 
 # Guard against concurrent cache corruption
 build --experimental_guard_against_concurrent_changes
+
+# Shut down Bazel server promptly after build finishes. In Docker, the
+# persisted output base must be unlocked so the next docker build can
+# acquire the lock. The default 10800s (3h) leaves a stale lock when a
+# container exits.
+startup --max_idle_secs=60

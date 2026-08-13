@@ -40,7 +40,6 @@ ENV GCC_VERSION=12
 
 # Install all build dependencies and GCC in a single layer.
 # Skipped when using a pre-built base image (Dockerfile.base).
-ARG OFFLINE_DIR=
 RUN if [ ! -f /.toolchain-ready ]; then \
       echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
       apt-get update && \
@@ -64,8 +63,8 @@ ENV BAZEL_CXXOPTS="-std=c++17"
 # Install Bazel directly (not via bazelisk) to avoid x509 TLS errors in
 # restricted network environments.
 ARG BAZEL_VERSION=6.5.0
-ARG OFFLINE_DIR=
-COPY ${OFFLINE_DIR:-.bazelversion} /tmp/bazel-source/
+ARG BAZEL_SOURCE=.bazelversion
+COPY ${BAZEL_SOURCE} /tmp/bazel-source/
 RUN case "${TARGETARCH}" in \
       amd64) BAZEL_ARCH="x86_64" ;; \
       arm64) BAZEL_ARCH="arm64" ;; \
@@ -91,6 +90,7 @@ RUN case "${TARGETARCH}" in \
 
 FROM toolchain AS deps
 
+ARG OFFLINE_DIR=
 # Copy ONLY files that define external dependencies and the graph structure.
 COPY WORKSPACE .bazelrc BUILD.bazel maven_install.json .bazelversion /src/
 COPY build/bazel/ /src/build/bazel/
@@ -105,11 +105,15 @@ RUN if [ -f /src/build_files.tar ]; then \
 # Falls back to copying a harmless file (WORKSPACE) when offline mode is not used.
 COPY ${OFFLINE_DIR:-WORKSPACE} /src/${OFFLINE_DIR:-WORKSPACE}
 
-# Fetch external dependencies. We save the repo cache into the image layer
-# so it is persisted by GHA's Docker layer caching.
-ARG OFFLINE_DIR=
-RUN --mount=type=cache,target=/bazel-disk-cache \
-    mkdir -p /bazel-repo-cache /bazel-disk-cache && \
+# Fetch external dependencies into persistent BuildKit repository and output
+# caches. External repos are extracted into the output base so the build stage
+# doesn't repeat that work.
+ARG BAZEL_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+# sharing=locked prevents corruption when multiple builds run concurrently
+RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,sharing=locked \
+    --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-repo,target=/bazel-repo-cache,sharing=locked \
+    rm -f /bazel-output/lock 2>/dev/null || true && \
+    mkdir -p /bazel-repo-cache && \
     cd /src && \
     REPO_CACHE_FLAG="" && \
     if [ -n "$OFFLINE_DIR" ] && [ -d "/src/$OFFLINE_DIR" ]; then \
@@ -117,12 +121,24 @@ RUN --mount=type=cache,target=/bazel-disk-cache \
     else \
       REPO_CACHE_FLAG="--repository_cache=/bazel-repo-cache"; \
     fi && \
-    bazel fetch ${REPO_CACHE_FLAG} //binaries:emulator_main //binaries:gateway_main
+    bazel --host_jvm_args=-Djdk.lang.Process.launchMechanism=posix_spawn \
+      --output_base=/bazel-output fetch ${REPO_CACHE_FLAG} \
+      //binaries:emulator_main //binaries:gateway_main
 
 ################################################################################
 #                                BUILD                                         #
 ################################################################################
 # Compile emulator source code.
+#
+# Bazel output base is persisted via a Docker BuildKit cache mount so that
+# incremental builds don't re-analyze or re-compile unchanged external deps
+# (ZetaSQL, protobuf, gRPC, absl, etc.). On the first build after a WORKSPACE
+# or toolchain change, everything compiles. On subsequent source-only changes,
+# only changed emulator code recompiles — ZetaSQL is skipped entirely.
+#
+# Kill stale Bazel server lock before starting. A previous interrupted build
+# may have left a lock on the persisted output base, which would block the
+# new server. The lock file is in <output_base>/lock.
 
 FROM deps AS build
 
@@ -130,11 +146,15 @@ FROM deps AS build
 COPY . /src/
 
 # Build the emulator.
-# We reuse the repository and disk caches.
 ARG OFFLINE_DIR=
 ARG BAZEL_JOBS=1
 ARG BAZEL_RAM=HOST_RAM*.2
-RUN --mount=type=cache,target=/bazel-disk-cache \
+ARG BAZEL_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+# sharing=locked serializes concurrent builds on the same output base
+RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,sharing=locked \
+    --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-disk,target=/bazel-disk-cache,sharing=locked \
+    --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-repo,target=/bazel-repo-cache,sharing=locked \
+    rm -f /bazel-output/lock 2>/dev/null || true && \
     cd /src && \
     REPO_CACHE_FLAG="" && \
     if [ -n "$OFFLINE_DIR" ] && [ -d "/src/$OFFLINE_DIR" ]; then \
@@ -143,7 +163,8 @@ RUN --mount=type=cache,target=/bazel-disk-cache \
       REPO_CACHE_FLAG="--repository_cache=/bazel-repo-cache"; \
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
-    bazel build -c dbg --strip=always --spawn_strategy=standalone \
+    bazel --host_jvm_args=-Djdk.lang.Process.launchMechanism=posix_spawn \
+      --output_base=/bazel-output build -c dbg --strip=always --spawn_strategy=standalone \
       --jobs=${BAZEL_JOBS} --local_ram_resources=${BAZEL_RAM} \
       --disk_cache=/bazel-disk-cache \
       ${REPO_CACHE_FLAG} \
@@ -154,18 +175,25 @@ RUN --mount=type=cache,target=/bazel-disk-cache \
     strip /build/output/emulator_main && \
     strip /build/output/gateway_main
 
-# Generate licenses file. Robustly find external dependency licenses.
-RUN cd /src && \
-    BAZEL_OUT=$(bazel info output_base) && \
-    for file in $(find -L ${BAZEL_OUT}/external \
-                       -name "LICENSE" -o -name "COPYING" 2>/dev/null) ; \
-    do \
-      echo "----" ; \
-      echo $file ; \
-      echo "----" ; \
-      cat $file ; \
-    done > /build/output/licenses.txt && \
-    gzip /build/output/licenses.txt
+# Generate licenses file. Reuse the persistent output base so external repos
+# are already extracted.
+RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,sharing=locked \
+    rm -f /bazel-output/lock 2>/dev/null || true && \
+    cd /src && \
+    if [ -d /bazel-output/external ]; then \
+      for file in $(find -L /bazel-output/external \
+                         -name "LICENSE" -o -name "COPYING" 2>/dev/null) ; \
+      do \
+        echo "----" ; \
+        echo $file ; \
+        echo "----" ; \
+        cat $file ; \
+      done > /build/output/licenses.txt && \
+      gzip /build/output/licenses.txt; \
+    else \
+      echo "No external repos found — skipping license generation." > /build/output/licenses.txt && \
+      gzip /build/output/licenses.txt; \
+    fi
 
 ################################################################################
 #                                   RELEASE                                    #

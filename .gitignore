@@ -23,6 +23,7 @@ MODULE.bazel
 .mcp.json
 .opencode/
 .vscode/
+openspec
 
 # Build and temporary files
 build_files.tar
