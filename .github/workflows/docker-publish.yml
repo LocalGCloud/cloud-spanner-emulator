@@ -26,6 +26,16 @@ on:
       - 'build/bazel/**'
       - 'build/docker/**'
   workflow_dispatch:
+    inputs:
+      target:
+        description: Build target
+        required: true
+        default: docker
+        type: choice
+        options:
+          - docker
+          - macos-arm64
+          - all
 
 env:
   IMAGE_NAME: jaysen2apache/spanner-emulator-extended
@@ -33,6 +43,7 @@ env:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_dispatch' || inputs.target != 'macos-arm64'
     strategy:
       fail-fast: false
       matrix:
@@ -333,6 +344,143 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
+
+  macos-arm64:
+    name: Build native macOS ARM64 artifacts
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.target != 'docker') ||
+      startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify native runner architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_arch="$(uname -m)"
+          if [[ "$actual_arch" != "arm64" ]]; then
+            echo "Expected native arm64 runner, got $actual_arch" >&2
+            exit 1
+          fi
+
+      - name: Install macOS build prerequisites
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          BAZEL_VERSION: 7.6.1
+          BAZEL_DARWIN_ARM64_SHA256: 45cca81a839d7495258b19ee8371c7b891f350586ef37b9940f7b531eb654cc8
+        run: |
+          set -euo pipefail
+          brew install gnu-sed protobuf
+          echo "$(brew --prefix gnu-sed)/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "PROTOC=$(brew --prefix protobuf)/bin/protoc" >> "$GITHUB_ENV"
+          if [[ "$(cat .bazelversion)" != "$BAZEL_VERSION" ]]; then
+            echo ".bazelversion must match the pinned macOS Bazel binary" >&2
+            exit 1
+          fi
+          bazel_path="$RUNNER_TEMP/bazel-$BAZEL_VERSION-darwin-arm64"
+          curl --fail --location \
+            "https://github.com/bazelbuild/bazel/releases/download/$BAZEL_VERSION/bazel-$BAZEL_VERSION-darwin-arm64" \
+            --output "$bazel_path"
+          printf '%s  %s\n' "$BAZEL_DARWIN_ARM64_SHA256" "$bazel_path" \
+            | shasum -a 256 --check -
+          chmod 0755 "$bazel_path"
+          echo "BAZEL=$bazel_path" >> "$GITHUB_ENV"
+
+      - name: Generate reproducible build files manifest
+        run: python3 build/docker/generate_build_manifest.py
+
+      - name: Hash Bazel graph inputs
+        id: macos-dependency-hash
+        shell: bash
+        run: |
+          shasum -a 256 build_files.tar \
+            | cut -d ' ' -f 1 \
+            | sed 's/^/value=/' >> "$GITHUB_OUTPUT"
+
+      - name: Restore Bazel repository cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bazel-repository-cache-macos-arm64
+          key: bazel-repo-v2-${{ runner.os }}-arm64-${{ steps.macos-dependency-hash.outputs.value }}
+          restore-keys: bazel-repo-v2-${{ runner.os }}-arm64-
+
+      - name: Build native binaries
+        shell: bash
+        env:
+          BAZEL_REPOSITORY_CACHE: ${{ runner.temp }}/bazel-repository-cache-macos-arm64
+          CC: /usr/bin/clang
+          CXX: /usr/bin/clang++
+        run: |
+          set -euo pipefail
+          mkdir -p "$BAZEL_REPOSITORY_CACHE"
+          sdk_version="$(xcrun --sdk macosx --show-sdk-version)"
+          echo "Building with macOS SDK $sdk_version"
+          "$BAZEL" --host_jvm_args=-Xmx1536m build \
+            -c opt \
+            --strip=always \
+            --macos_sdk_version="$sdk_version" \
+            --macos_minimum_os=12.0 \
+            --host_macos_minimum_os=12.0 \
+            --spawn_strategy=standalone \
+            --jobs=2 \
+            '--local_resources=memory=HOST_RAM*.70' \
+            --repository_cache="$BAZEL_REPOSITORY_CACHE" \
+            //binaries:emulator_main \
+            //binaries:gateway_main
+
+      - name: Package native binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="dist/spanner-emulator-macos-arm64"
+          mkdir -p "$package_dir"
+          cp -L bazel-bin/binaries/emulator_main "$package_dir/"
+          cp -L bazel-bin/binaries/gateway_main_/gateway_main "$package_dir/gateway_main"
+          cp LICENSE THIRD_PARTY_NOTICES.txt "$package_dir/"
+          chmod 0755 "$package_dir/emulator_main" "$package_dir/gateway_main"
+
+          for binary in "$package_dir/emulator_main" "$package_dir/gateway_main"; do
+            description="$(file "$binary")"
+            echo "$description"
+            case "$description" in
+              *"Mach-O 64-bit executable arm64"*) ;;
+              *)
+                echo "Expected a native macOS ARM64 binary: $binary" >&2
+                exit 1
+                ;;
+            esac
+            codesign --force --sign - "$binary"
+            codesign --verify --verbose=2 "$binary"
+            dependencies="$(otool -L "$binary")"
+            if [[ "$dependencies" == *"/opt/homebrew/"* ]]; then
+              echo "$binary has a non-system Homebrew dependency:" >&2
+              echo "$dependencies" >&2
+              exit 1
+            fi
+          done
+
+          "$package_dir/emulator_main" --version >/dev/null
+          "$package_dir/gateway_main" --help >/dev/null
+
+          tar -C dist -czf spanner-emulator-macos-arm64.tar.gz \
+            spanner-emulator-macos-arm64
+          shasum -a 256 spanner-emulator-macos-arm64.tar.gz \
+            > spanner-emulator-macos-arm64.tar.gz.sha256
+
+      - name: Upload native macOS ARM64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spanner-emulator-macos-arm64-${{ github.sha }}
+          path: |
+            spanner-emulator-macos-arm64.tar.gz
+            spanner-emulator-macos-arm64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
 
   merge:
     runs-on: ubuntu-24.04

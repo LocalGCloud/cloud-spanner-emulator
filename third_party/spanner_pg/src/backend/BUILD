@@ -82,11 +82,14 @@ cc_library(
         "-fexceptions",
     ],
     features = ["-use_header_modules"],  # Incompatible with -fexceptions.
-    linkopts = [
-        "-ldl",
-        "-lpthread",
-        "-lrt",
-    ],
+    linkopts = select({
+        "@platforms//os:linux": [
+            "-ldl",
+            "-lpthread",
+            "-lrt",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         "//third_party/spanner_pg/src/backend/access/brin",
         "//third_party/spanner_pg/src/backend/access/common",

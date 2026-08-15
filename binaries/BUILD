@@ -28,10 +28,13 @@ licenses(["notice"])
 cc_binary(
     name = "emulator_main",
     srcs = ["emulator_main.cc"],
-    linkopts = [
-        "-static-libgcc",
-        "-static-libstdc++",
-    ],
+    linkopts = select({
+        "@platforms//os:linux": [
+            "-static-libgcc",
+            "-static-libstdc++",
+        ],
+        "//conditions:default": [],
+    }),
     deps = [
         "//backend/schema/updater:schema_updater",
         "//common:config",

@@ -1,3 +1,6 @@
+#if defined(__APPLE__)
+#include "port/darwin.h"
+#else
 /* src/include/port/linux.h */
 
 /*
@@ -20,3 +23,4 @@
  * filesystems, because those don't support O_DIRECT.
  */
 #define PLATFORM_DEFAULT_SYNC_METHOD	SYNC_METHOD_FDATASYNC
+#endif

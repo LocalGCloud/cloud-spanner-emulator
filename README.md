@@ -420,6 +420,33 @@ Please file bugs and feature requests using
 [GitHub's issue tracker](https://github.com/GoogleCloudPlatform/cloud-spanner-emulator/issues/new)
 or using the existing Cloud Spanner [support channels](https://cloud.google.com/spanner/docs/getting-support).
 
+## Release
+
+### Triggering the GitHub workflow
+
+Version tags build and publish Linux images for both `linux/amd64` and
+`linux/arm64`, and upload a native macOS ARM64 archive:
+
+```bash
+git tag -a v<version> -m "Release v<version>"
+git push origin v<version>
+```
+
+A `v*` tag publishes:
+
+- `jaysen2apache/spanner-emulator-extended:latest`
+- `jaysen2apache/spanner-emulator-extended:v<version>`
+- A commit-SHA image tag
+- A `spanner-emulator-macos-arm64.tar.gz` workflow artifact and checksum
+
+Manual runs can build Docker caches, the macOS archive, or both:
+
+```bash
+gh workflow run docker-publish.yml \
+  --ref jay-33-persistence \
+  -f target=all
+```
+
 ## Security
 
 For information on reporting security vulnerabilities, see [SECURITY.md](./SECURITY.md).

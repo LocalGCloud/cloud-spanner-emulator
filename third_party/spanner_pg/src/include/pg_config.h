@@ -1056,3 +1056,65 @@ extern "C++" {
 /* Define to the type of an unsigned integer type wide enough to hold a
    pointer, if such a type exists, and if the system does not define it. */
 /* #undef uintptr_t */
+
+/*
+ * SPANGRES BEGIN
+ *
+ * The checked-in pg_config.h is generated for Linux. Apply the platform
+ * differences produced by PostgreSQL 11.10's configure script on Darwin so
+ * native macOS builds do not select unavailable Linux APIs.
+ */
+#if defined(__APPLE__)
+#undef HAVE_CRYPT_H
+#undef HAVE_GETHOSTBYNAME_R
+#undef HAVE_POSIX_FADVISE
+#undef HAVE_POSIX_FALLOCATE
+#undef HAVE_STRCHRNUL
+#undef HAVE_SYNC_FILE_RANGE
+#undef HAVE_SYS_EPOLL_H
+#undef HAVE_UUID_E2FS
+
+#undef HAVE_DECL_FDATASYNC
+#define HAVE_DECL_FDATASYNC 0
+#undef HAVE_DECL_F_FULLFSYNC
+#define HAVE_DECL_F_FULLFSYNC 1
+#undef HAVE_DECL_POSIX_FADVISE
+#define HAVE_DECL_POSIX_FADVISE 0
+#undef HAVE_DECL_STRLCAT
+#define HAVE_DECL_STRLCAT 1
+#undef HAVE_DECL_STRLCPY
+#define HAVE_DECL_STRLCPY 1
+
+#define HAVE_FLS 1
+#define HAVE_GETPEEREID 1
+#define HAVE_KQUEUE 1
+#define HAVE_INT_OPTRESET 1
+#define HAVE_MBSTOWCS_L 1
+#define HAVE_PTHREAD_IS_THREADED_NP 1
+#define HAVE_STRLCAT 1
+#define HAVE_STRLCPY 1
+#define HAVE_STRUCT_SOCKADDR_SA_LEN 1
+#define HAVE_STRUCT_SOCKADDR_STORAGE_SS_LEN 1
+#define HAVE_SYS_SOCKIO_H 1
+#define HAVE_SYS_EVENT_H 1
+#define HAVE_SYS_UCRED_H 1
+#define HAVE_UNION_SEMUN 1
+#define HAVE_WCSTOMBS_L 1
+#define STRERROR_R_INT 1
+#define WCSTOMBS_L_IN_XLOCALE 1
+
+#undef USE_UNNAMED_POSIX_SEMAPHORES
+#define USE_SYSV_SEMAPHORES 1
+#endif
+
+/* Newer vendored headers distinguish C and C++ format archetypes. */
+#if defined(__APPLE__)
+#define PG_C_PRINTF_ATTRIBUTE printf
+#define PG_CXX_PRINTF_ATTRIBUTE printf
+#else
+#define PG_C_PRINTF_ATTRIBUTE gnu_printf
+#define PG_CXX_PRINTF_ATTRIBUTE gnu_printf
+#endif
+/* c.h remaps this legacy name to the language-specific archetype. */
+#undef PG_PRINTF_ATTRIBUTE
+/* SPANGRES END */

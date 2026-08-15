@@ -169,14 +169,20 @@ genrule(
         set -e # Exit on error
 
         INCLUDE_PATH=third_party/spanner_pg/src/include
-        ENGINE_CATALOG_PATH=third_party/spanner_pg/bootstrap_catalog/spanner_pg_data
+        WORK_PATH="$(@D)/generate_bootstrap_catalog_srcs.tmp"
+        ENGINE_CATALOG_PATH="$$WORK_PATH/spanner_pg_data"
 
-        # Copies generated files into the engine catalog path
-        cp $(location //third_party/spanner_pg/codegen:pg_aggregate.dat) $$ENGINE_CATALOG_PATH
-        cp $(location //third_party/spanner_pg/codegen:pg_proc.dat) $$ENGINE_CATALOG_PATH
+        # Bazel inputs are read-only on macOS. Assemble a writable catalog
+        # directory instead of overwriting source inputs in the execroot.
+        rm -rf "$$WORK_PATH"
+        mkdir -p "$$ENGINE_CATALOG_PATH"
+        cp $(locations :spanner_pg_datfiles) "$$ENGINE_CATALOG_PATH/"
+        chmod u+w "$$ENGINE_CATALOG_PATH"/*.dat
+        cp -f $(location //third_party/spanner_pg/codegen:pg_aggregate.dat) "$$ENGINE_CATALOG_PATH/"
+        cp -f $(location //third_party/spanner_pg/codegen:pg_proc.dat) "$$ENGINE_CATALOG_PATH/"
 
         $(location gen_catalog_info.pl) \
-            -output /tmp \
+            -output "$$WORK_PATH" \
             --include-path=$$INCLUDE_PATH \
             --engine-catalog-path=$$ENGINE_CATALOG_PATH \
             third_party/spanner_pg/src/include/catalog/pg_proc.h \
@@ -243,9 +249,10 @@ genrule(
             third_party/spanner_pg/src/include/catalog/pg_subscription.h \
             third_party/spanner_pg/src/include/catalog/pg_subscription_rel.h
 
-        mv /tmp/bootstrap_catalog_info.h $(location bootstrap_catalog_info.h)
-        mv /tmp/bootstrap_catalog_info.c $(location bootstrap_catalog_info.c)
-        mv /tmp/bootstrap_catalog_textproto.h $(location bootstrap_catalog_textproto.h)
+        mv "$$WORK_PATH/bootstrap_catalog_info.h" $(location bootstrap_catalog_info.h)
+        mv "$$WORK_PATH/bootstrap_catalog_info.c" $(location bootstrap_catalog_info.c)
+        mv "$$WORK_PATH/bootstrap_catalog_textproto.h" $(location bootstrap_catalog_textproto.h)
+        rm -rf "$$WORK_PATH"
     """,
     tools = ["gen_catalog_info.pl"],
 )

@@ -50,9 +50,11 @@ cc_library(
     name = "port",
     srcs = [
         "atomics.c",
-        "posix_sema.c",
         "sysv_shmem.c",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["sysv_sema.c"],
+        "//conditions:default": ["posix_sema.c"],
+    }),
     copts = [
         "-D_GNU_SOURCE",
         "-fexceptions",
