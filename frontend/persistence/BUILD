@@ -12,8 +12,8 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
-        "@com_google_zetasql//zetasql/base:logging",
-        "@nlohmann_json//:json",
+        "@com_google_absl//absl/log:absl_log",
+        "@json",
     ],
 )
 

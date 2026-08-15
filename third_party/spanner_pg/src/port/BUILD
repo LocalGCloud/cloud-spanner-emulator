@@ -44,7 +44,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 filegroup(
     name = "_common_files",
@@ -52,7 +52,6 @@ filegroup(
         "bsearch_arg.c",
         "chklocale.c",
         "explicit_bzero.c",
-        "fls.c",
         "getpeereid.c",
         "inet_net_ntop.c",
         "noblock.c",
@@ -67,8 +66,6 @@ filegroup(
         "pgstrcasecmp.c",
         "pgstrsignal.c",
         "pqsignal.c",
-        "pread.c",
-        "pwrite.c",
         "pwritev.c",
         "qsort.c",
         "qsort_arg.c",
@@ -79,6 +76,7 @@ filegroup(
         "strlcpy.c",
         "tar.c",
         "thread.c",
+        "timingsafe_bcmp.c",
     ] + select({
         "@platforms//cpu:aarch64": [
             "pg_crc32c_armv8.c",
@@ -97,11 +95,11 @@ filegroup(
     srcs = [
         "dirent.c",
         "dirmod.c",
-        "getaddrinfo.c",
+        # "getaddrinfo.c",
         "getopt.c",
         "getopt_long.c",
-        "getrusage.c",
-        "gettimeofday.c",
+        # "getrusage.c",
+        # "gettimeofday.c",
         "inet_aton.c",
         "kill.c",
         "mkdtemp.c",
@@ -111,7 +109,7 @@ filegroup(
         "pthread-win32.h",
         "strnlen.c",
         "system.c",
-        "unsetenv.c",
+        # "unsetenv.c",
         "win32env.c",
         "win32error.c",
         "win32security.c",

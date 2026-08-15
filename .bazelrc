@@ -1,40 +1,81 @@
-build --cxxopt=-std=c++17
-build --host_cxxopt=-std=c++17
+# =============================================================================
+# 1. STANDARDS & TOOLING
+# =============================================================================
+build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
+build --conlyopt=-std=gnu11
 
-# gRPC has some issues with building under bazel on MacOS with thread-locals.
-# See https://github.com/bazelbuild/bazel/issues/4341 for more details. This
-# flag enabled gRPC workarounds for building under bazel.
-build --copt -DGRPC_BAZEL_BUILD
+# Ensure Bazel uses the correct system paths for the compiler
+build --action_env=CC
+build --action_env=CXX
+build --action_env=CGO_CPPFLAGS="-std=c++20"
 
-# Disable debug symbols for release builds.
-build --copt -DNDEBUG
+# Python configuration for modern Bazel toolchains
+build --python_version=PY3
+build --incompatible_use_python_toolchains=false
+build --action_env=PYTHON_BIN=/usr/bin/python3
 
-# Required for python test runner to find gcloud binary.
-test --test_env GCLOUD_DIR
+# =============================================================================
+# 2. COMPILER COMPATIBILITY (GCC 11+ FIXES)
+# =============================================================================
+# Force-Include headers often missing in modern gRPC/GoogleSQL prunings
+build --cxxopt=-include --cxxopt=limits
+build --cxxopt=-include --cxxopt=string
+build --cxxopt=-include --cxxopt=cstdint
 
-# Most of these warnings are triggered from ZetaSQL, disable for now. Ideally,
-# we would disable these only for projects we don't control, but there does not
-# seem to be an easy way to do that yet.
-build --copt   -Wno-sign-compare
-build --copt   -Wno-deprecated-declarations
-build --copt   -Wno-return-type
-build --copt   -Wno-unused-but-set-parameter
+# Macros to expose C99/C++11 features in strict system libraries
+build --cxxopt=-D_GNU_SOURCE
+build --copt=-D_GNU_SOURCE
+build --cxxopt=-D_GLIBCXX_USE_C99=1
+build --cxxopt=-D_GLIBCXX_USE_CXX11_ABI=1
 
-# Reduce optimization on ALL external C++ deps.
-# ZetaSQL, ICU, gRPC, protobuf compile 2-4x faster at -O1 vs -O3.
-# This is a dev emulator — runtime perf of these deps is irrelevant.
-# Bazel 6 per_file_copt matches source-relative paths (not execroot paths),
-# so patterns use repo-relative paths like zetasql/... not external/com_google_zetasql/...
-build --per_file_copt=+.*zetasql/.*\.cc@-O1
+# =============================================================================
+# 3. PERFORMANCE & RESOURCE MANAGEMENT
+# =============================================================================
+# Define the order of preference for spawn strategies.
+build --spawn_strategy=local,worker,standalone
+
+# Set resource limits for Docker builds.
+build --jobs=auto  # Let Bazel decide parallelism based on budget
+build --local_resources=memory=HOST_RAM*0.7  # Leave 30% for the OS/Docker overhead
+build --local_resources=cpu=HOST_CPUS
+
+# Use workers for compiler heavy tasks.
+build --strategy=ProtoCompile=worker,local,standalone
+build --strategy=Javac=worker,local,standalone
+build --strategy=CppCompile=local,standalone
+build --worker_max_instances=4  # Even if you have 16 CPUs, limit persistent workers to 4
+build --worker_quit_after_build  # Clean up for Docker layers
+build --experimental_worker_memory_limit_mb=512
+
+# Use pre-built ProtoC from Ubuntu repositories to speed up Docker builds
+build --action_env=PROTOC=/usr/bin/protoc
+build --proto_compiler=@com_google_protobuf//:protoc
+build --incompatible_enable_proto_toolchain_resolution=false
+
+# =============================================================================
+# 4. WARNINGS & STRICTNESS (LEGACY/GOOGLESQL SUPPRESSION)
+# =============================================================================
+build --cxxopt=-fpermissive
+build --copt=-DNDEBUG
+
+# Suppress warnings that trigger massive logs in GoogleSQL/Postgres code
+build --copt=-Wno-all
+build --copt=-Wno-sign-compare
+build --copt=-Wno-deprecated-declarations
+build --copt=-Wno-return-type
+build --copt=-Wno-unused-but-set-parameter
+
+# Reduce optimization on heavy external dependencies. GoogleSQL, ICU, gRPC,
+# and protobuf compile substantially faster at -O1 than at release -O3.
+build --per_file_copt=+.*googlesql/.*\.cc@-O1
 build --per_file_copt=+.*com_google_icu/.*\.c@-O1
 build --per_file_copt=+.*com_google_icu/.*\.cc@-O1
 build --per_file_copt=+.*grpc/.*\.cc@-O1
 build --per_file_copt=+.*com_google_protobuf/.*\.cc@-O1
 
-# ZetaSQL rewriter/visitor files are the worst offenders — even -O1 uses ~2GB.
-# Drop to -O0 so they compile in seconds with minimal RAM.
-# -O0 is applied AFTER -O1 (last flag wins in GCC), so these override the
-# blanket -O1 rule above for these specific files.
+# GoogleSQL rewriter/visitor files are the worst memory offenders. Apply -O0
+# after the blanket -O1 rule so the later option wins for these files.
 build --per_file_copt=+.*resolved_ast_rewrite_visitor.*\.cc@-O0
 build --per_file_copt=+.*resolved_ast_deep_copy_visitor.*\.cc@-O0
 build --per_file_copt=+.*generalized_query_stmt_rewriter.*\.cc@-O0
@@ -42,11 +83,17 @@ build --per_file_copt=+.*rewrite_subpipeline.*\.cc@-O0
 build --per_file_copt=+.*order_by_and_limit_in_aggregate_rewriter.*\.cc@-O0
 build --per_file_copt=+.*resolved_ast\.cc@-O0
 
-# Guard against concurrent cache corruption
+# Protect shared Docker cache mounts from concurrent changes.
 build --experimental_guard_against_concurrent_changes
 
-# Shut down Bazel server promptly after build finishes. In Docker, the
-# persisted output base must be unlocked so the next docker build can
-# acquire the lock. The default 10800s (3h) leaves a stale lock when a
-# container exits.
+# Release the persisted output-base lock promptly after a Docker build exits.
 startup --max_idle_secs=60
+
+# =============================================================================
+# 5. TEST SETTINGS
+# =============================================================================
+test --test_env=GCLOUD_DIR
+
+# Inform GoogleTest and gMock that Abseil libraries are available
+build --define=absl=1
+build --cxxopt=-DGTEST_HAS_ABSL=1

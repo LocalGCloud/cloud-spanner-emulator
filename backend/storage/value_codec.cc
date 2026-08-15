@@ -19,15 +19,15 @@
 #include <cstdint>
 #include <cstring>
 
-#include "zetasql/base/logging.h"
+#include "absl/log/absl_log.h"
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "zetasql/public/json_value.h"
-#include "zetasql/public/numeric_value.h"
-#include "zetasql/public/types/type.h"
-#include "zetasql/public/value.h"
+#include "googlesql/public/json_value.h"
+#include "googlesql/public/numeric_value.h"
+#include "googlesql/public/types/type.h"
+#include "googlesql/public/value.h"
 #include "absl/time/time.h"
 
 namespace google {
@@ -141,56 +141,56 @@ int32_t ReadInt32LE(const char* data) {
   return val;
 }
 
-const zetasql::Type* TypeForKind(zetasql::TypeKind type_kind) {
+const googlesql::Type* TypeForKind(googlesql::TypeKind type_kind) {
   switch (type_kind) {
-    case zetasql::TYPE_BOOL:
-      return zetasql::types::BoolType();
-    case zetasql::TYPE_INT64:
-      return zetasql::types::Int64Type();
-    case zetasql::TYPE_FLOAT:
-      return zetasql::types::FloatType();
-    case zetasql::TYPE_DOUBLE:
-      return zetasql::types::DoubleType();
-    case zetasql::TYPE_STRING:
-      return zetasql::types::StringType();
-    case zetasql::TYPE_BYTES:
-      return zetasql::types::BytesType();
-    case zetasql::TYPE_TIMESTAMP:
-      return zetasql::types::TimestampType();
-    case zetasql::TYPE_DATE:
-      return zetasql::types::DateType();
-    case zetasql::TYPE_NUMERIC:
-      return zetasql::types::NumericType();
-    case zetasql::TYPE_JSON:
-      return zetasql::types::JsonType();
+    case googlesql::TYPE_BOOL:
+      return googlesql::types::BoolType();
+    case googlesql::TYPE_INT64:
+      return googlesql::types::Int64Type();
+    case googlesql::TYPE_FLOAT:
+      return googlesql::types::FloatType();
+    case googlesql::TYPE_DOUBLE:
+      return googlesql::types::DoubleType();
+    case googlesql::TYPE_STRING:
+      return googlesql::types::StringType();
+    case googlesql::TYPE_BYTES:
+      return googlesql::types::BytesType();
+    case googlesql::TYPE_TIMESTAMP:
+      return googlesql::types::TimestampType();
+    case googlesql::TYPE_DATE:
+      return googlesql::types::DateType();
+    case googlesql::TYPE_NUMERIC:
+      return googlesql::types::NumericType();
+    case googlesql::TYPE_JSON:
+      return googlesql::types::JsonType();
     default:
       return nullptr;
   }
 }
 
-const zetasql::ArrayType* ArrayTypeForElementKind(
-    zetasql::TypeKind element_kind) {
+const googlesql::ArrayType* ArrayTypeForElementKind(
+    googlesql::TypeKind element_kind) {
   switch (element_kind) {
-    case zetasql::TYPE_BOOL:
-      return zetasql::types::BoolArrayType();
-    case zetasql::TYPE_INT64:
-      return zetasql::types::Int64ArrayType();
-    case zetasql::TYPE_FLOAT:
-      return zetasql::types::FloatArrayType();
-    case zetasql::TYPE_DOUBLE:
-      return zetasql::types::DoubleArrayType();
-    case zetasql::TYPE_STRING:
-      return zetasql::types::StringArrayType();
-    case zetasql::TYPE_BYTES:
-      return zetasql::types::BytesArrayType();
-    case zetasql::TYPE_TIMESTAMP:
-      return zetasql::types::TimestampArrayType();
-    case zetasql::TYPE_DATE:
-      return zetasql::types::DateArrayType();
-    case zetasql::TYPE_NUMERIC:
-      return zetasql::types::NumericArrayType();
-    case zetasql::TYPE_JSON:
-      return zetasql::types::JsonArrayType();
+    case googlesql::TYPE_BOOL:
+      return googlesql::types::BoolArrayType();
+    case googlesql::TYPE_INT64:
+      return googlesql::types::Int64ArrayType();
+    case googlesql::TYPE_FLOAT:
+      return googlesql::types::FloatArrayType();
+    case googlesql::TYPE_DOUBLE:
+      return googlesql::types::DoubleArrayType();
+    case googlesql::TYPE_STRING:
+      return googlesql::types::StringArrayType();
+    case googlesql::TYPE_BYTES:
+      return googlesql::types::BytesArrayType();
+    case googlesql::TYPE_TIMESTAMP:
+      return googlesql::types::TimestampArrayType();
+    case googlesql::TYPE_DATE:
+      return googlesql::types::DateArrayType();
+    case googlesql::TYPE_NUMERIC:
+      return googlesql::types::NumericArrayType();
+    case googlesql::TYPE_JSON:
+      return googlesql::types::JsonArrayType();
     default:
       return nullptr;
   }
@@ -198,7 +198,7 @@ const zetasql::ArrayType* ArrayTypeForElementKind(
 
 }  // namespace
 
-std::string EncodeValue(const zetasql::Value& value) {
+std::string EncodeValue(const googlesql::Value& value) {
   std::string result;
 
   if (!value.is_valid()) {
@@ -211,7 +211,7 @@ std::string EncodeValue(const zetasql::Value& value) {
     // Also store the type kind so we can reconstruct the typed null.
     int32_t type_kind = static_cast<int32_t>(value.type_kind());
     AppendInt32LE(&result, type_kind);
-    if (value.type_kind() == zetasql::TYPE_ARRAY) {
+    if (value.type_kind() == googlesql::TYPE_ARRAY) {
       int32_t element_kind =
           static_cast<int32_t>(value.type()->AsArray()->element_type()->kind());
       AppendInt32LE(&result, element_kind);
@@ -220,37 +220,37 @@ std::string EncodeValue(const zetasql::Value& value) {
   }
 
   switch (value.type_kind()) {
-    case zetasql::TYPE_BOOL: {
+    case googlesql::TYPE_BOOL: {
       result.push_back(static_cast<char>(kTagBool));
       result.push_back(value.bool_value() ? 1 : 0);
       break;
     }
-    case zetasql::TYPE_INT64: {
+    case googlesql::TYPE_INT64: {
       result.push_back(static_cast<char>(kTagInt64));
       AppendInt64LE(&result, value.int64_value());
       break;
     }
-    case zetasql::TYPE_FLOAT: {
+    case googlesql::TYPE_FLOAT: {
       result.push_back(static_cast<char>(kTagFloat));
       AppendDoubleLE(&result, static_cast<double>(value.float_value()));
       break;
     }
-    case zetasql::TYPE_DOUBLE: {
+    case googlesql::TYPE_DOUBLE: {
       result.push_back(static_cast<char>(kTagDouble));
       AppendDoubleLE(&result, value.double_value());
       break;
     }
-    case zetasql::TYPE_STRING: {
+    case googlesql::TYPE_STRING: {
       result.push_back(static_cast<char>(kTagString));
       AppendLengthPrefixedString(&result, value.string_value());
       break;
     }
-    case zetasql::TYPE_BYTES: {
+    case googlesql::TYPE_BYTES: {
       result.push_back(static_cast<char>(kTagBytes));
       AppendLengthPrefixedString(&result, value.bytes_value());
       break;
     }
-    case zetasql::TYPE_TIMESTAMP: {
+    case googlesql::TYPE_TIMESTAMP: {
       result.push_back(static_cast<char>(kTagTimestamp));
       absl::Time t = value.ToTime();
       int64_t seconds = absl::ToUnixSeconds(t);
@@ -260,24 +260,24 @@ std::string EncodeValue(const zetasql::Value& value) {
       AppendInt32LE(&result, nanos);
       break;
     }
-    case zetasql::TYPE_DATE: {
+    case googlesql::TYPE_DATE: {
       result.push_back(static_cast<char>(kTagDate));
       AppendInt32LE(&result, value.date_value());
       break;
     }
-    case zetasql::TYPE_NUMERIC: {
+    case googlesql::TYPE_NUMERIC: {
       result.push_back(static_cast<char>(kTagNumeric));
       std::string serialized = value.numeric_value().SerializeAsProtoBytes();
       AppendLengthPrefixedString(&result, serialized);
       break;
     }
-    case zetasql::TYPE_JSON: {
+    case googlesql::TYPE_JSON: {
       result.push_back(static_cast<char>(kTagJson));
       std::string json_str = value.json_string();
       AppendLengthPrefixedString(&result, json_str);
       break;
     }
-    case zetasql::TYPE_ARRAY: {
+    case googlesql::TYPE_ARRAY: {
       result.push_back(static_cast<char>(kTagArray));
       int32_t element_kind =
           static_cast<int32_t>(value.type()->AsArray()->element_type()->kind());
@@ -300,9 +300,9 @@ std::string EncodeValue(const zetasql::Value& value) {
   return result;
 }
 
-zetasql::Value DecodeValue(const std::string& encoded) {
+googlesql::Value DecodeValue(const std::string& encoded) {
   if (encoded.empty()) {
-    return zetasql::Value();
+    return googlesql::Value();
   }
 
   const char* data = encoded.data();
@@ -313,166 +313,166 @@ zetasql::Value DecodeValue(const std::string& encoded) {
 
   switch (tag) {
     case kTagInvalid:
-      return zetasql::Value();
+      return googlesql::Value();
 
     case kTagNull: {
-      if (remaining < 4) return zetasql::Value();
+      if (remaining < 4) return googlesql::Value();
       int32_t type_kind = ReadInt32LE(data);
-      switch (static_cast<zetasql::TypeKind>(type_kind)) {
-        case zetasql::TYPE_BOOL:
-          return zetasql::values::NullBool();
-        case zetasql::TYPE_INT64:
-          return zetasql::values::NullInt64();
-        case zetasql::TYPE_FLOAT:
-          return zetasql::values::NullFloat();
-        case zetasql::TYPE_DOUBLE:
-          return zetasql::values::NullDouble();
-        case zetasql::TYPE_STRING:
-          return zetasql::values::NullString();
-        case zetasql::TYPE_BYTES:
-          return zetasql::values::NullBytes();
-        case zetasql::TYPE_TIMESTAMP:
-          return zetasql::values::NullTimestamp();
-        case zetasql::TYPE_DATE:
-          return zetasql::values::NullDate();
-        case zetasql::TYPE_NUMERIC:
-          return zetasql::values::NullNumeric();
-        case zetasql::TYPE_JSON:
-          return zetasql::values::NullJson();
-        case zetasql::TYPE_ARRAY: {
-          if (remaining < 8) return zetasql::Value();
-          zetasql::TypeKind element_kind =
-              static_cast<zetasql::TypeKind>(ReadInt32LE(data + 4));
-          const zetasql::ArrayType* array_type =
+      switch (static_cast<googlesql::TypeKind>(type_kind)) {
+        case googlesql::TYPE_BOOL:
+          return googlesql::values::NullBool();
+        case googlesql::TYPE_INT64:
+          return googlesql::values::NullInt64();
+        case googlesql::TYPE_FLOAT:
+          return googlesql::values::NullFloat();
+        case googlesql::TYPE_DOUBLE:
+          return googlesql::values::NullDouble();
+        case googlesql::TYPE_STRING:
+          return googlesql::values::NullString();
+        case googlesql::TYPE_BYTES:
+          return googlesql::values::NullBytes();
+        case googlesql::TYPE_TIMESTAMP:
+          return googlesql::values::NullTimestamp();
+        case googlesql::TYPE_DATE:
+          return googlesql::values::NullDate();
+        case googlesql::TYPE_NUMERIC:
+          return googlesql::values::NullNumeric();
+        case googlesql::TYPE_JSON:
+          return googlesql::values::NullJson();
+        case googlesql::TYPE_ARRAY: {
+          if (remaining < 8) return googlesql::Value();
+          googlesql::TypeKind element_kind =
+              static_cast<googlesql::TypeKind>(ReadInt32LE(data + 4));
+          const googlesql::ArrayType* array_type =
               ArrayTypeForElementKind(element_kind);
-          if (array_type == nullptr) return zetasql::Value();
-          return zetasql::values::Null(array_type);
+          if (array_type == nullptr) return googlesql::Value();
+          return googlesql::values::Null(array_type);
         }
         default:
-          return zetasql::Value();
+          return googlesql::Value();
       }
     }
 
     case kTagBool:
-      if (remaining < 1) return zetasql::Value();
-      return zetasql::values::Bool(data[0] != 0);
+      if (remaining < 1) return googlesql::Value();
+      return googlesql::values::Bool(data[0] != 0);
 
     case kTagInt64:
-      if (remaining < 8) return zetasql::Value();
-      return zetasql::values::Int64(ReadInt64LE(data));
+      if (remaining < 8) return googlesql::Value();
+      return googlesql::values::Int64(ReadInt64LE(data));
 
     case kTagFloat:
-      if (remaining < 8) return zetasql::Value();
-      return zetasql::values::Float(static_cast<float>(ReadDoubleLE(data)));
+      if (remaining < 8) return googlesql::Value();
+      return googlesql::values::Float(static_cast<float>(ReadDoubleLE(data)));
 
     case kTagDouble:
-      if (remaining < 8) return zetasql::Value();
-      return zetasql::values::Double(ReadDoubleLE(data));
+      if (remaining < 8) return googlesql::Value();
+      return googlesql::values::Double(ReadDoubleLE(data));
 
     case kTagString: {
-      if (remaining < 4) return zetasql::Value();
+      if (remaining < 4) return googlesql::Value();
       int32_t len = ReadInt32LE(data);
-      if (len < 0) return zetasql::Value();
+      if (len < 0) return googlesql::Value();
       data += sizeof(int32_t);
-      if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
-      return zetasql::values::String(std::string(data, len));
+      if (remaining < 4 + static_cast<size_t>(len)) return googlesql::Value();
+      return googlesql::values::String(std::string(data, len));
     }
 
     case kTagBytes: {
-      if (remaining < 4) return zetasql::Value();
+      if (remaining < 4) return googlesql::Value();
       int32_t len = ReadInt32LE(data);
-      if (len < 0) return zetasql::Value();
+      if (len < 0) return googlesql::Value();
       data += sizeof(int32_t);
-      if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
-      return zetasql::values::Bytes(std::string(data, len));
+      if (remaining < 4 + static_cast<size_t>(len)) return googlesql::Value();
+      return googlesql::values::Bytes(std::string(data, len));
     }
 
     case kTagTimestamp: {
-      if (remaining < 12) return zetasql::Value();
+      if (remaining < 12) return googlesql::Value();
       int64_t seconds = ReadInt64LE(data);
       data += sizeof(int64_t);
       int32_t nanos = ReadInt32LE(data);
       absl::Time t =
           absl::FromUnixSeconds(seconds) + absl::Nanoseconds(nanos);
-      return zetasql::values::Timestamp(t);
+      return googlesql::values::Timestamp(t);
     }
 
     case kTagDate:
-      if (remaining < 4) return zetasql::Value();
-      return zetasql::values::Date(ReadInt32LE(data));
+      if (remaining < 4) return googlesql::Value();
+      return googlesql::values::Date(ReadInt32LE(data));
 
     case kTagNumeric: {
-      if (remaining < 4) return zetasql::Value();
+      if (remaining < 4) return googlesql::Value();
       int32_t len = ReadInt32LE(data);
-      if (len < 0) return zetasql::Value();
+      if (len < 0) return googlesql::Value();
       data += sizeof(int32_t);
-      if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
+      if (remaining < 4 + static_cast<size_t>(len)) return googlesql::Value();
       auto status_or =
-          zetasql::NumericValue::DeserializeFromProtoBytes(
+          googlesql::NumericValue::DeserializeFromProtoBytes(
               absl::string_view(data, len));
       if (status_or.ok()) {
-        return zetasql::values::Numeric(status_or.value());
+        return googlesql::values::Numeric(status_or.value());
       }
-      return zetasql::Value();
+      return googlesql::Value();
     }
 
     case kTagJson: {
-      if (remaining < 4) return zetasql::Value();
+      if (remaining < 4) return googlesql::Value();
       int32_t len = ReadInt32LE(data);
-      if (len < 0) return zetasql::Value();
+      if (len < 0) return googlesql::Value();
       data += sizeof(int32_t);
-      if (remaining < 4 + static_cast<size_t>(len)) return zetasql::Value();
-      auto json_value = zetasql::JSONValue::ParseJSONString(
+      if (remaining < 4 + static_cast<size_t>(len)) return googlesql::Value();
+      auto json_value = googlesql::JSONValue::ParseJSONString(
           std::string(data, len));
-      if (!json_value.ok()) return zetasql::Value();
-      return zetasql::values::Json(std::move(json_value).value());
+      if (!json_value.ok()) return googlesql::Value();
+      return googlesql::values::Json(std::move(json_value).value());
     }
 
     case kTagArray: {
-      if (remaining < 8) return zetasql::Value();
-      zetasql::TypeKind element_kind =
-          static_cast<zetasql::TypeKind>(ReadInt32LE(data));
-      const zetasql::ArrayType* array_type =
+      if (remaining < 8) return googlesql::Value();
+      googlesql::TypeKind element_kind =
+          static_cast<googlesql::TypeKind>(ReadInt32LE(data));
+      const googlesql::ArrayType* array_type =
           ArrayTypeForElementKind(element_kind);
-      const zetasql::Type* element_type = TypeForKind(element_kind);
+      const googlesql::Type* element_type = TypeForKind(element_kind);
       if (array_type == nullptr || element_type == nullptr) {
-        return zetasql::Value();
+        return googlesql::Value();
       }
       data += sizeof(int32_t);
       size_t bytes_left = remaining - sizeof(int32_t);
 
       int32_t num_elements = ReadInt32LE(data);
-      if (num_elements < 0) return zetasql::Value();
+      if (num_elements < 0) return googlesql::Value();
       data += sizeof(int32_t);
       bytes_left -= sizeof(int32_t);
 
-      std::vector<zetasql::Value> elements;
+      std::vector<googlesql::Value> elements;
       elements.reserve(num_elements);
       for (int i = 0; i < num_elements; ++i) {
-        if (bytes_left < 4) return zetasql::Value();
+        if (bytes_left < 4) return googlesql::Value();
         int32_t len = ReadInt32LE(data);
-        if (len < 0) return zetasql::Value();
+        if (len < 0) return googlesql::Value();
         data += sizeof(int32_t);
         bytes_left -= sizeof(int32_t);
-        if (bytes_left < static_cast<size_t>(len)) return zetasql::Value();
+        if (bytes_left < static_cast<size_t>(len)) return googlesql::Value();
 
-        zetasql::Value element = DecodeValue(std::string(data, len));
-        if (!element.is_valid()) return zetasql::Value();
+        googlesql::Value element = DecodeValue(std::string(data, len));
+        if (!element.is_valid()) return googlesql::Value();
         if (!element.is_null() && !element.type()->Equals(element_type)) {
-          return zetasql::Value();
+          return googlesql::Value();
         }
         elements.push_back(std::move(element));
         data += len;
         bytes_left -= len;
       }
 
-      auto array_or = zetasql::Value::MakeArray(array_type, elements);
-      if (!array_or.ok()) return zetasql::Value();
+      auto array_or = googlesql::Value::MakeArray(array_type, elements);
+      if (!array_or.ok()) return googlesql::Value();
       return std::move(array_or).value();
     }
 
     default:
-      return zetasql::Value();
+      return googlesql::Value();
   }
 }
 

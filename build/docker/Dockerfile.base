@@ -22,15 +22,18 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV GCC_VERSION=12
+ENV GCC_VERSION=13
 
 RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
+      software-properties-common ca-certificates gnupg && \
+    add-apt-repository ppa:ubuntu-toolchain-r/test -y && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
       curl tar build-essential wget python3 zip unzip \
       default-jre default-jdk ca-certificates-java \
-      software-properties-common make rename git \
-      language-pack-en tzdata ca-certificates gnupg dirmngr \
+      make rename git language-pack-en tzdata dirmngr \
       libssl-dev zlib1g-dev libtinfo5 \
       gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
@@ -40,7 +43,7 @@ RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
 
 ENV PATH=$PATH:/usr/bin:/usr/local/bin
 ENV EXTRA_BAZEL_ARGS="--tool_java_runtime_version=local_jdk"
-ENV BAZEL_CXXOPTS="-std=c++17"
+ENV BAZEL_CXXOPTS="-std=c++20"
 
-# Marker to signal this is a pre-baked base with toolchain already installed
-RUN touch /.toolchain-ready
+# Versioned marker prevents an older pre-built base from bypassing installation.
+RUN touch /.toolchain-gcc13-ready

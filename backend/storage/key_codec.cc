@@ -20,8 +20,8 @@
 #include <cstring>
 #include <string>
 
-#include "zetasql/public/numeric_value.h"
-#include "zetasql/public/value.h"
+#include "googlesql/public/numeric_value.h"
+#include "googlesql/public/value.h"
 #include "absl/time/time.h"
 
 namespace google {
@@ -90,7 +90,7 @@ void InvertBytes(std::string* s, size_t start, size_t len) {
   }
 }
 
-void EncodeColumn(const zetasql::Value& value, bool is_descending,
+void EncodeColumn(const googlesql::Value& value, bool is_descending,
                   bool is_nulls_last, std::string* out) {
   size_t start_pos = out->size();
 
@@ -103,11 +103,11 @@ void EncodeColumn(const zetasql::Value& value, bool is_descending,
   }
 
   switch (value.type_kind()) {
-    case zetasql::TYPE_BOOL: {
+    case googlesql::TYPE_BOOL: {
       out->push_back(value.bool_value() ? kBoolTrue : kBoolFalse);
       break;
     }
-    case zetasql::TYPE_INT64: {
+    case googlesql::TYPE_INT64: {
       out->push_back(kInt64);
       // Flip the sign bit so that negative numbers sort before positive.
       uint64_t encoded =
@@ -115,7 +115,7 @@ void EncodeColumn(const zetasql::Value& value, bool is_descending,
       AppendBigEndian64(out, encoded);
       break;
     }
-    case zetasql::TYPE_DOUBLE: {
+    case googlesql::TYPE_DOUBLE: {
       out->push_back(kDouble);
       double d = value.double_value();
       uint64_t bits;
@@ -130,17 +130,17 @@ void EncodeColumn(const zetasql::Value& value, bool is_descending,
       AppendBigEndian64(out, bits);
       break;
     }
-    case zetasql::TYPE_STRING: {
+    case googlesql::TYPE_STRING: {
       out->push_back(kString);
       AppendByteStuffed(out, value.string_value());
       break;
     }
-    case zetasql::TYPE_BYTES: {
+    case googlesql::TYPE_BYTES: {
       out->push_back(kBytes);
       AppendByteStuffed(out, value.bytes_value());
       break;
     }
-    case zetasql::TYPE_TIMESTAMP: {
+    case googlesql::TYPE_TIMESTAMP: {
       out->push_back(kTimestamp);
       absl::Time t = value.ToTime();
       int64_t seconds = absl::ToUnixSeconds(t);
@@ -153,7 +153,7 @@ void EncodeColumn(const zetasql::Value& value, bool is_descending,
       AppendBigEndian32(out, static_cast<uint32_t>(nanos));
       break;
     }
-    case zetasql::TYPE_DATE: {
+    case googlesql::TYPE_DATE: {
       out->push_back(kDate);
       int32_t date_val = value.date_value();
       // Flip sign bit for proper ordering.
@@ -161,11 +161,11 @@ void EncodeColumn(const zetasql::Value& value, bool is_descending,
       AppendBigEndian32(out, encoded);
       break;
     }
-    case zetasql::TYPE_NUMERIC: {
+    case googlesql::TYPE_NUMERIC: {
       out->push_back(kNumeric);
       // Use a fixed-width string encoding for order preservation.
       // NumericValue: 29 integer digits, 9 fractional digits.
-      zetasql::NumericValue num = value.numeric_value();
+      googlesql::NumericValue num = value.numeric_value();
       std::string num_str = num.ToString();
       bool is_negative = !num_str.empty() && num_str[0] == '-';
       if (is_negative) num_str = num_str.substr(1);

@@ -25,7 +25,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "zetasql/base/testing/status_matchers.h"
+#include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
@@ -33,9 +33,9 @@
 #include "absl/time/time.h"
 #include "backend/datamodel/key_range.h"
 #include "backend/storage/iterator.h"
-#include "zetasql/public/json_value.h"
-#include "zetasql/public/numeric_value.h"
-#include "zetasql/public/types/type.h"
+#include "googlesql/public/json_value.h"
+#include "googlesql/public/numeric_value.h"
+#include "googlesql/public/types/type.h"
 
 namespace google {
 namespace spanner {
@@ -43,12 +43,12 @@ namespace emulator {
 namespace backend {
 namespace {
 
-using zetasql::values::Bool;
-using zetasql::values::Double;
-using zetasql::values::Int64;
-using zetasql::values::Null;
-using zetasql::values::Numeric;
-using zetasql::values::String;
+using googlesql::values::Bool;
+using googlesql::values::Double;
+using googlesql::values::Int64;
+using googlesql::values::Null;
+using googlesql::values::Numeric;
+using googlesql::values::String;
 
 // Returns a unique temp directory path under TEST_TMPDIR (or /tmp).
 std::string MakeTempDir(const std::string& suffix) {
@@ -72,6 +72,7 @@ class PersistentStorageTest : public testing::Test {
   }
 
   void TearDown() override {
+    itr_.reset();
     storage_.reset();
     std::filesystem::remove_all(data_dir_);
   }
@@ -162,7 +163,7 @@ TEST(PersistentStorageCreateTest, DataPersistsAcrossCloseAndReopen) {
   {
     auto storage_or = PersistentStorage::Create(path);
     ASSERT_TRUE(storage_or.ok()) << storage_or.status();
-    ZETASQL_ASSERT_OK((*storage_or)->Write(t0, table_id, Key({Int64(42)}),
+    GOOGLESQL_ASSERT_OK((*storage_or)->Write(t0, table_id, Key({Int64(42)}),
                                    {col_id}, {String("hello")}));
   }  // storage destroyed here, LevelDB closed.
 
@@ -170,8 +171,8 @@ TEST(PersistentStorageCreateTest, DataPersistsAcrossCloseAndReopen) {
   {
     auto storage_or = PersistentStorage::Create(path);
     ASSERT_TRUE(storage_or.ok()) << storage_or.status();
-    std::vector<zetasql::Value> values;
-    ZETASQL_ASSERT_OK((*storage_or)->Lookup(t0, table_id, Key({Int64(42)}),
+    std::vector<googlesql::Value> values;
+    GOOGLESQL_ASSERT_OK((*storage_or)->Lookup(t0, table_id, Key({Int64(42)}),
                                     {col_id}, &values));
     EXPECT_THAT(values, testing::ElementsAre(String("hello")));
   }
@@ -194,41 +195,41 @@ TEST(PersistentStorageCreateTest, ArrayValuesPersistAcrossCloseAndReopen) {
   absl::Time t0 = absl::Now();
 
   auto numeric = [](absl::string_view value) {
-    return Numeric(zetasql::NumericValue::FromStringStrict(value).value());
+    return Numeric(googlesql::NumericValue::FromStringStrict(value).value());
   };
   auto json = [](absl::string_view value) {
-    return zetasql::values::Json(
-        zetasql::JSONValue::ParseJSONString(value).value());
+    return googlesql::values::Json(
+        googlesql::JSONValue::ParseJSONString(value).value());
   };
 
-  zetasql::Value int_array =
-      zetasql::values::Array(zetasql::types::Int64ArrayType(),
-                             {Int64(1), Null(zetasql::types::Int64Type()),
+  googlesql::Value int_array =
+      googlesql::values::Array(googlesql::types::Int64ArrayType(),
+                             {Int64(1), Null(googlesql::types::Int64Type()),
                               Int64(3)});
-  zetasql::Value string_array =
-      zetasql::values::Array(zetasql::types::StringArrayType(),
+  googlesql::Value string_array =
+      googlesql::values::Array(googlesql::types::StringArrayType(),
                              {String("tag1"), String("tag2")});
-  zetasql::Value double_array =
-      zetasql::values::Array(zetasql::types::DoubleArrayType(),
+  googlesql::Value double_array =
+      googlesql::values::Array(googlesql::types::DoubleArrayType(),
                              {Double(1.25), Double(2.5)});
-  zetasql::Value bool_array =
-      zetasql::values::Array(zetasql::types::BoolArrayType(),
+  googlesql::Value bool_array =
+      googlesql::values::Array(googlesql::types::BoolArrayType(),
                              {Bool(true), Bool(false)});
-  zetasql::Value numeric_array =
-      zetasql::values::Array(zetasql::types::NumericArrayType(),
+  googlesql::Value numeric_array =
+      googlesql::values::Array(googlesql::types::NumericArrayType(),
                              {numeric("123.456"), numeric("-0.000001")});
-  zetasql::Value json_array =
-      zetasql::values::Array(zetasql::types::JsonArrayType(),
+  googlesql::Value json_array =
+      googlesql::values::Array(googlesql::types::JsonArrayType(),
                              {json(R"({"a":1})"), json(R"(["b",2])")});
-  zetasql::Value empty_array =
-      zetasql::Value::EmptyArray(zetasql::types::StringArrayType());
-  zetasql::Value null_array =
-      zetasql::values::Null(zetasql::types::StringArrayType());
+  googlesql::Value empty_array =
+      googlesql::Value::EmptyArray(googlesql::types::StringArrayType());
+  googlesql::Value null_array =
+      googlesql::values::Null(googlesql::types::StringArrayType());
 
   {
     auto storage_or = PersistentStorage::Create(path);
     ASSERT_TRUE(storage_or.ok()) << storage_or.status();
-    ZETASQL_ASSERT_OK((*storage_or)->Write(
+    GOOGLESQL_ASSERT_OK((*storage_or)->Write(
         t0, table_id, Key({Int64(42)}),
         {int_array_col, string_array_col, double_array_col, bool_array_col,
          numeric_array_col, json_array_col, empty_array_col, null_array_col},
@@ -239,8 +240,8 @@ TEST(PersistentStorageCreateTest, ArrayValuesPersistAcrossCloseAndReopen) {
   {
     auto storage_or = PersistentStorage::Create(path);
     ASSERT_TRUE(storage_or.ok()) << storage_or.status();
-    std::vector<zetasql::Value> values;
-    ZETASQL_ASSERT_OK((*storage_or)->Lookup(
+    std::vector<googlesql::Value> values;
+    GOOGLESQL_ASSERT_OK((*storage_or)->Lookup(
         t0, table_id, Key({Int64(42)}),
         {int_array_col, string_array_col, double_array_col, bool_array_col,
          numeric_array_col, json_array_col, empty_array_col, null_array_col},
@@ -262,17 +263,15 @@ TEST(PersistentStorageCreateTest, ArrayValuesPersistAcrossCloseAndReopen) {
 TEST_F(PersistentStorageTest, LookupByTable) {
   absl::Time t0 = absl::Now();
 
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("value-1")}));
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId1, Key({Int64(10)}), {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId1, Key({Int64(10)}), {kColumnID},
                             {String("value-10")}));
 
-  std::vector<zetasql::Value> values;
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID}, &values));
+  std::vector<googlesql::Value> values;
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("value-1")));
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(t0, kTableId1, Key({Int64(10)}), {kColumnID}, &values));
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId1, Key({Int64(10)}), {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("value-10")));
 }
 
@@ -280,12 +279,11 @@ TEST_F(PersistentStorageTest, ReadRangeFromSingleTable) {
   absl::Time t0 = absl::Now();
 
   for (int i = 0; i < 5; ++i) {
-    ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(i)}), {kColumnID},
+    GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(i)}), {kColumnID},
                               {String(absl::StrCat("value-", i))}));
   }
 
-  ZETASQL_EXPECT_OK(
-      storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
+  GOOGLESQL_EXPECT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
   for (int i = 0; i < 5; ++i) {
     EXPECT_TRUE(itr_->Next());
     EXPECT_EQ(itr_->NumColumns(), 1);
@@ -297,17 +295,17 @@ TEST_F(PersistentStorageTest, ReadRangeFromSingleTable) {
 TEST_F(PersistentStorageTest, LookupByTimestamp) {
   absl::Time write_ts = absl::Now();
 
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("value-1")}));
 
-  std::vector<zetasql::Value> values;
-  ZETASQL_EXPECT_OK(storage_->Lookup(write_ts, kTableId0, Key({Int64(1)}),
+  std::vector<googlesql::Value> values;
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(write_ts, kTableId0, Key({Int64(1)}),
                              {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("value-1")));
 
   // Future timestamp should still find the value.
   absl::Time future_ts = write_ts + absl::Nanoseconds(24);
-  ZETASQL_EXPECT_OK(storage_->Lookup(future_ts, kTableId0, Key({Int64(1)}),
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(future_ts, kTableId0, Key({Int64(1)}),
                              {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("value-1")));
 
@@ -316,20 +314,17 @@ TEST_F(PersistentStorageTest, LookupByTimestamp) {
   // microsecond precision (absl::ToUnixMicros).
   absl::Time before_ts = write_ts - absl::Microseconds(1);
   EXPECT_THAT(storage_->Lookup(before_ts, kTableId0, Key({Int64(1)}),
-                               {kColumnID}, &values),
-              zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+                               {kColumnID}, &values), googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST_F(PersistentStorageTest, LookupMissingKeyReturnsNotFound) {
   absl::Time t0 = absl::Now();
 
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("value-1")}));
 
-  std::vector<zetasql::Value> values;
-  EXPECT_THAT(
-      storage_->Lookup(t0, kTableId0, Key({Int64(100)}), {kColumnID}, &values),
-      zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+  std::vector<googlesql::Value> values;
+  EXPECT_THAT(storage_->Lookup(t0, kTableId0, Key({Int64(100)}), {kColumnID}, &values), googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST_F(PersistentStorageTest, DeleteAndLookup) {
@@ -338,20 +333,17 @@ TEST_F(PersistentStorageTest, DeleteAndLookup) {
   absl::Time after_delete_ts = delete_ts + absl::Seconds(1);
   Key key({Int64(1)});
 
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key, {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key, {kColumnID},
                             {String("value-1")}));
-  ZETASQL_EXPECT_OK(storage_->Delete(delete_ts, kTableId0, KeyRange::Point(key)));
+  GOOGLESQL_EXPECT_OK(storage_->Delete(delete_ts, kTableId0, KeyRange::Point(key)));
 
   // Before delete: still visible.
-  std::vector<zetasql::Value> values;
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(write_ts, kTableId0, key, {kColumnID}, &values));
+  std::vector<googlesql::Value> values;
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(write_ts, kTableId0, key, {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("value-1")));
 
   // After delete: not found.
-  EXPECT_THAT(
-      storage_->Lookup(after_delete_ts, kTableId0, key, {kColumnID}, &values),
-      zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+  EXPECT_THAT(storage_->Lookup(after_delete_ts, kTableId0, key, {kColumnID}, &values), googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST_F(PersistentStorageTest, PointDeleteDoesNotDeleteOtherRows) {
@@ -363,33 +355,28 @@ TEST_F(PersistentStorageTest, PointDeleteDoesNotDeleteOtherRows) {
   Key key1({Int64(1)});
   Key key2({Int64(2)});
   Key key3({Int64(3)});
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key1, {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key1, {kColumnID},
                             {String("val-1")}));
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key2, {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key2, {kColumnID},
                             {String("val-2")}));
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key3, {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key3, {kColumnID},
                             {String("val-3")}));
 
   // Delete only row 1.
-  ZETASQL_EXPECT_OK(
-      storage_->Delete(delete_ts, kTableId0, KeyRange::Point(key1)));
+  GOOGLESQL_EXPECT_OK(storage_->Delete(delete_ts, kTableId0, KeyRange::Point(key1)));
 
   // Row 1 should be gone.
-  std::vector<zetasql::Value> values;
-  EXPECT_THAT(
-      storage_->Lookup(after_delete_ts, kTableId0, key1, {kColumnID}, &values),
-      zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+  std::vector<googlesql::Value> values;
+  EXPECT_THAT(storage_->Lookup(after_delete_ts, kTableId0, key1, {kColumnID}, &values), googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
 
   // Rows 2 and 3 must still exist.
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(after_delete_ts, kTableId0, key2, {kColumnID}, &values));
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(after_delete_ts, kTableId0, key2, {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("val-2")));
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(after_delete_ts, kTableId0, key3, {kColumnID}, &values));
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(after_delete_ts, kTableId0, key3, {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("val-3")));
 
   // Full scan should return exactly 2 rows.
-  ZETASQL_EXPECT_OK(storage_->Read(after_delete_ts, kTableId0, kKeyRange0To5,
+  GOOGLESQL_EXPECT_OK(storage_->Read(after_delete_ts, kTableId0, kKeyRange0To5,
                             {kColumnID}, &itr_));
   int row_count = 0;
   while (itr_->Next()) row_count++;
@@ -402,14 +389,13 @@ TEST_F(PersistentStorageTest, SnapshotRead) {
   absl::Time second_write_ts = snapshot_ts + absl::Seconds(1);
   Key key({Int64(1)});
 
-  ZETASQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key, {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(write_ts, kTableId0, key, {kColumnID},
                             {String("value-old")}));
-  ZETASQL_EXPECT_OK(storage_->Write(second_write_ts, kTableId0, key, {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(second_write_ts, kTableId0, key, {kColumnID},
                             {String("value-new")}));
 
   // Snapshot read at the point between writes should return old value.
-  ZETASQL_EXPECT_OK(
-      storage_->Read(snapshot_ts, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
+  GOOGLESQL_EXPECT_OK(storage_->Read(snapshot_ts, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
   EXPECT_TRUE(itr_->Next());
   EXPECT_EQ(itr_->ColumnValue(0), String("value-old"));
 }
@@ -417,39 +403,33 @@ TEST_F(PersistentStorageTest, SnapshotRead) {
 TEST_F(PersistentStorageTest, LookupInvalidTableReturnsNotFound) {
   absl::Time t0 = absl::Now();
 
-  std::vector<zetasql::Value> values;
-  EXPECT_THAT(
-      storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID}, &values),
-      zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+  std::vector<googlesql::Value> values;
+  EXPECT_THAT(storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID}, &values), googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
 }
 
 TEST_F(PersistentStorageTest, ReadEmptyKeyRangeReturnsEmptyItr) {
   absl::Time t0 = absl::Now();
 
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("value-1")}));
-  ZETASQL_EXPECT_OK(
-      storage_->Read(t0, kTableId0, KeyRange::Empty(), {kColumnID}, &itr_));
+  GOOGLESQL_EXPECT_OK(storage_->Read(t0, kTableId0, KeyRange::Empty(), {kColumnID}, &itr_));
   EXPECT_FALSE(itr_->Next());
 }
 
 TEST_F(PersistentStorageTest, DroppedTablesAreRemovedAfterRetentionPeriod) {
   absl::Time t0 = absl::Now();
 
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("value-1")}));
-  ZETASQL_EXPECT_OK(storage_->Write(t0, kTableId1, Key({Int64(10)}), {kColumnID},
+  GOOGLESQL_EXPECT_OK(storage_->Write(t0, kTableId1, Key({Int64(10)}), {kColumnID},
                             {String("value-10")}));
 
   storage_->MarkDroppedTable(t0, kTableId0);
   storage_->CleanUpDeletedTables(t0 + absl::Hours(1) + absl::Seconds(1));
 
-  std::vector<zetasql::Value> values;
-  EXPECT_THAT(
-      storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID}, &values),
-      zetasql_base::testing::StatusIs(absl::StatusCode::kNotFound));
-  ZETASQL_EXPECT_OK(
-      storage_->Lookup(t0, kTableId1, Key({Int64(10)}), {kColumnID}, &values));
+  std::vector<googlesql::Value> values;
+  EXPECT_THAT(storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID}, &values), googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+  GOOGLESQL_EXPECT_OK(storage_->Lookup(t0, kTableId1, Key({Int64(10)}), {kColumnID}, &values));
 }
 
 // ---------------------------------------------------------------------------
@@ -471,15 +451,15 @@ TEST(PersistentStorageCreateTest, MultipleDbsUnderSameDataDir) {
   auto s2 = PersistentStorage::Create(path2);
   ASSERT_TRUE(s2.ok()) << s2.status();
 
-  ZETASQL_ASSERT_OK((*s1)->Write(t0, table, Key({Int64(1)}), {col},
+  GOOGLESQL_ASSERT_OK((*s1)->Write(t0, table, Key({Int64(1)}), {col},
                           {String("from-db1")}));
-  ZETASQL_ASSERT_OK((*s2)->Write(t0, table, Key({Int64(1)}), {col},
+  GOOGLESQL_ASSERT_OK((*s2)->Write(t0, table, Key({Int64(1)}), {col},
                           {String("from-db2")}));
 
-  std::vector<zetasql::Value> vals;
-  ZETASQL_ASSERT_OK((*s1)->Lookup(t0, table, Key({Int64(1)}), {col}, &vals));
+  std::vector<googlesql::Value> vals;
+  GOOGLESQL_ASSERT_OK((*s1)->Lookup(t0, table, Key({Int64(1)}), {col}, &vals));
   EXPECT_THAT(vals, testing::ElementsAre(String("from-db1")));
-  ZETASQL_ASSERT_OK((*s2)->Lookup(t0, table, Key({Int64(1)}), {col}, &vals));
+  GOOGLESQL_ASSERT_OK((*s2)->Lookup(t0, table, Key({Int64(1)}), {col}, &vals));
   EXPECT_THAT(vals, testing::ElementsAre(String("from-db2")));
 
   s1->reset();
@@ -495,15 +475,15 @@ TEST_F(PersistentStorageTest, WriteQueue_SequentialSubmit) {
   absl::Time t0 = absl::Now();
 
   // Submit 3 batches sequentially.
-  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("batch-1")}));
-  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(2)}), {kColumnID},
+  GOOGLESQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(2)}), {kColumnID},
                             {String("batch-2")}));
-  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(3)}), {kColumnID},
+  GOOGLESQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(3)}), {kColumnID},
                             {String("batch-3")}));
 
   // Verify all data is readable.
-  ZETASQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
+  GOOGLESQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
   int count = 0;
   while (itr_->Next()) count++;
   EXPECT_EQ(count, 3);
@@ -530,7 +510,7 @@ TEST_F(PersistentStorageTest, WriteQueue_ConcurrentSubmit) {
   EXPECT_EQ(errors.load(), 0);
 
   // Verify all 4 rows are readable with no interleaving.
-  ZETASQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
+  GOOGLESQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID}, &itr_));
   int count = 0;
   while (itr_->Next()) {
     count++;
@@ -545,7 +525,7 @@ TEST_F(PersistentStorageTest, WriteQueue_Shutdown) {
   absl::Time t0 = absl::Now();
 
   // Submit a batch.
-  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("shutdown-test")}));
 
   // Shutdown by destroying storage (TearDown will handle cleanup).
@@ -558,8 +538,8 @@ TEST_F(PersistentStorageTest, WriteQueue_Shutdown) {
   ASSERT_TRUE(storage_or.ok()) << storage_or.status();
   storage_ = std::move(*storage_or);  // Let TearDown clean up.
 
-  std::vector<zetasql::Value> values;
-  ZETASQL_ASSERT_OK(storage_->Lookup(t0, kTableId0, Key({Int64(1)}),
+  std::vector<googlesql::Value> values;
+  GOOGLESQL_ASSERT_OK(storage_->Lookup(t0, kTableId0, Key({Int64(1)}),
                              {kColumnID}, &values));
   EXPECT_THAT(values, testing::ElementsAre(String("shutdown-test")));
 }
@@ -574,13 +554,13 @@ TEST_F(PersistentStorageTest, Snapshot_ReadDuringWrite) {
 
   // Write concurrently with a read.
   std::thread writer([this, t0]() {
-    ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}),
+    GOOGLESQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}),
                               {kColumnID}, {String("snapshot-test")}));
   });
 
   std::thread reader([this, t0, &read_count]() {
     auto local_itr = std::unique_ptr<StorageIterator>();
-    ZETASQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID},
+    GOOGLESQL_ASSERT_OK(storage_->Read(t0, kTableId0, kKeyRange0To5, {kColumnID},
                              &local_itr));
     while (local_itr->Next()) read_count++;
   });
@@ -597,7 +577,7 @@ TEST_F(PersistentStorageTest, Snapshot_MultipleConcurrentReads) {
   absl::Time t0 = absl::Now();
 
   // Pre-populate one row so reads have something to return.
-  ZETASQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+  GOOGLESQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}), {kColumnID},
                             {String("existing")}));
 
   const int kNumReaders = 10;
@@ -650,12 +630,12 @@ TEST(PersistentStorageCreateTest, Snapshot_IteratorReleasesSnapshot) {
     auto storage_or = PersistentStorage::Create(path);
     ASSERT_TRUE(storage_or.ok()) << storage_or.status();
 
-    ZETASQL_ASSERT_OK((*storage_or)->Write(t0, table_id, Key({Int64(1)}),
+    GOOGLESQL_ASSERT_OK((*storage_or)->Write(t0, table_id, Key({Int64(1)}),
                                    {col_id}, {String("val")}));
 
     {
       auto local_itr = std::unique_ptr<StorageIterator>();
-      ZETASQL_ASSERT_OK((*storage_or)->Read(
+      GOOGLESQL_ASSERT_OK((*storage_or)->Read(
           t0, table_id,
           KeyRange::ClosedOpen(Key({Int64(0)}), Key({Int64(5)})),
           {col_id}, &local_itr));

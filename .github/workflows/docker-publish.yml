@@ -2,8 +2,29 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [jay-33-persistence]
     tags: ['v*']
+    # Tag pushes ignore path filters. Default-branch runs seed caches that later
+    # tag refs may restore without rebuilding unchanged dependencies.
+    branches: [master]
+    paths:
+      - '.bazelrc'
+      - '.bazelversion'
+      - '.dockerignore'
+      - '.github/workflows/docker-publish.yml'
+      - 'BUILD'
+      - 'BUILD.bazel'
+      - 'MODULE.bazel'
+      - 'MODULE.bazel.lock'
+      - 'WORKSPACE'
+      - 'WORKSPACE.bazel'
+      - 'requirements.txt'
+      - 'go.mod'
+      - 'go.sum'
+      - '**/BUILD'
+      - '**/BUILD.bazel'
+      - '**/*.bzl'
+      - 'build/bazel/**'
+      - 'build/docker/**'
   workflow_dispatch:
 
 env:
@@ -20,12 +41,12 @@ jobs:
             arch: amd64
             runner: ubuntu-24.04
             runner_arch: x86_64
-            bazel_jobs: 4
+            bazel_jobs: 2
           - platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
             runner_arch: aarch64
-            bazel_jobs: 4
+            bazel_jobs: 2
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
 
@@ -60,42 +81,14 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
 
-      - name: Generate build files manifest
-        run: |
-          # Only include Bazel-relevant files (BUILD, BUILD.bazel, .bzl).
-          # Excludes IDE configs, node_modules, and other non-Bazel JSON that
-          # would unnecessarily invalidate the deps stage Docker cache.
-          {
-            find . \( -name "BUILD" -o -name "BUILD.bazel" -o -name "*.bzl" \) \
-              -not -path "./.opencode/*" \
-              -not -path "./.cursor/*" \
-              -not -path "./.gemini/*" \
-              -not -path "./.claude/*" \
-              -not -path "./.kiro/*" \
-              -not -path "./.vscode/*" \
-              -not -path "./.continue/*" \
-              -not -path "./.idea/*" \
-              -not -path "./.git/*" \
-              -not -path "./bazel-*/*" | sed 's#^\./##'
-            echo WORKSPACE
-            echo maven_install.json
-            echo .bazelversion
-            echo .bazelrc
-            echo BUILD.bazel
-          } | LC_ALL=C sort -u > build_files.txt
-          # Normalize archive metadata so a fresh checkout produces the same
-          # dependency-layer input when the files themselves are unchanged.
-          tar --sort=name \
-            --mtime='UTC 1970-01-01' \
-            --owner=0 --group=0 --numeric-owner \
-            -cf build_files.tar -T build_files.txt
+      - name: Generate reproducible build files manifest
+        run: python3 build/docker/generate_build_manifest.py
 
-      - name: Hash dependency and toolchain inputs
+      - name: Hash Bazel graph inputs
         id: dependency-hash
         shell: bash
         run: |
-          sha256sum build_files.tar build/docker/Dockerfile.ubuntu \
-            | sha256sum \
+          sha256sum build_files.tar \
             | cut -d ' ' -f 1 \
             | sed 's/^/value=/' >> "$GITHUB_OUTPUT"
 
@@ -123,18 +116,79 @@ jobs:
             --format '{{.Id}}' \
             "spanner-emulator-toolchain:${{ matrix.arch }}")"
           echo "value=${image_id#sha256:}" >> "$GITHUB_OUTPUT"
+          docker image rm "spanner-emulator-toolchain:${{ matrix.arch }}" >/dev/null
 
-      - name: Restore Bazel cache mounts
-        id: bazel-cache
-        uses: actions/cache@v4
+      - name: Restore Bazel repository cache archive
+        id: bazel-repo-cache
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            ${{ runner.temp }}/bazel-disk-cache-${{ matrix.arch }}
-            ${{ runner.temp }}/bazel-repo-cache-${{ matrix.arch }}
-          key: bazel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ steps.dependency-hash.outputs.value }}-${{ github.sha }}
-          restore-keys: |
-            bazel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ steps.dependency-hash.outputs.value }}-
-            bazel-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-
+          path: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}/repo.tar.gz
+          key: bazel-repo-v2-${{ runner.os }}-${{ matrix.arch }}-${{ steps.dependency-hash.outputs.value }}
+          restore-keys: bazel-repo-v2-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Restore Bazel disk cache archive
+        id: bazel-disk-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}/disk.tar.gz
+          key: bazel-disk-v2-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ github.sha }}
+          restore-keys: bazel-disk-v2-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-
+
+      - name: Expand caches within runner budget
+        id: cache-budget
+        shell: bash
+        env:
+          CACHE_ARCHIVE_DIR: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}
+          REPO_CACHE_PATH: ${{ runner.temp }}/bazel-repo-cache-${{ matrix.arch }}
+          DISK_CACHE_PATH: ${{ runner.temp }}/bazel-disk-cache-${{ matrix.arch }}
+          MAX_ARCHIVE_BYTES: 3221225472
+          MAX_MOUNT_KIB: 2097152
+          MAX_COMBINED_KIB: 4194304
+        run: |
+          set -euo pipefail
+          rm -rf "$REPO_CACHE_PATH" "$DISK_CACHE_PATH"
+          mkdir -p "$REPO_CACHE_PATH" "$DISK_CACHE_PATH"
+          trimmed=false
+
+          repo_archive="$CACHE_ARCHIVE_DIR/repo.tar.gz"
+          disk_archive="$CACHE_ARCHIVE_DIR/disk.tar.gz"
+          if [[ -f "$repo_archive" ]]; then
+            if (( $(stat -c %s "$repo_archive") <= MAX_ARCHIVE_BYTES )); then
+              tar --no-same-owner -xzf "$repo_archive" -C "$REPO_CACHE_PATH"
+            else
+              echo "Repository cache archive exceeds 3 GiB; discarding it."
+              trimmed=true
+            fi
+          fi
+          if [[ -f "$disk_archive" ]]; then
+            if (( $(stat -c %s "$disk_archive") <= MAX_ARCHIVE_BYTES )); then
+              tar --no-same-owner -xzf "$disk_archive" -C "$DISK_CACHE_PATH"
+            else
+              echo "Disk cache archive exceeds 3 GiB; discarding it."
+              trimmed=true
+            fi
+          fi
+          rm -rf "$CACHE_ARCHIVE_DIR"
+
+          repo_kib="$(du -sk "$REPO_CACHE_PATH" | cut -f 1)"
+          disk_kib="$(du -sk "$DISK_CACHE_PATH" | cut -f 1)"
+          if (( repo_kib > MAX_MOUNT_KIB )); then
+            echo "Repository cache exceeds 2 GiB expanded; discarding it."
+            rm -rf "$REPO_CACHE_PATH"
+            mkdir -p "$REPO_CACHE_PATH"
+            repo_kib=0
+            trimmed=true
+          fi
+          if (( disk_kib > MAX_MOUNT_KIB || repo_kib + disk_kib > MAX_COMBINED_KIB )); then
+            echo "Expanded caches exceed the runner budget; discarding the disk cache."
+            rm -rf "$DISK_CACHE_PATH"
+            mkdir -p "$DISK_CACHE_PATH"
+            disk_kib=0
+            trimmed=true
+          fi
+
+          echo "trimmed=$trimmed" >> "$GITHUB_OUTPUT"
+          echo "Injecting $((repo_kib + disk_kib)) KiB of Bazel caches"
 
       - name: Inject Bazel cache mounts into BuildKit
         uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
@@ -154,9 +208,9 @@ jobs:
                 "sharing": "locked"
               }
             }
-          skip-extraction: ${{ steps.bazel-cache.outputs.cache-hit }}
+          skip-extraction: true
 
-      - name: Build and push by digest
+      - name: Build cache or push tag digest
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -165,21 +219,104 @@ jobs:
           platforms: ${{ matrix.platform }}
           provenance: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          outputs: ${{ startsWith(github.ref, 'refs/tags/v') && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE_NAME) || '' }}
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
           build-args: |
             BAZEL_JOBS=${{ matrix.bazel_jobs }}
             BAZEL_RAM=HOST_RAM*.8
+            BAZEL_DISK_CACHE_MAX_BYTES=2147483648
+            BAZEL_CACHE_WARM_NONCE=${{ (steps.bazel-repo-cache.outputs.cache-hit != 'true' || steps.bazel-disk-cache.outputs.cache-hit != 'true' || steps.cache-budget.outputs.trimmed == 'true') && format('{0}-{1}', github.run_id, github.run_attempt) || 'stable' }}
             BAZEL_CACHE_NAMESPACE=spanner-emulator-${{ matrix.arch }}
+            BAZEL_REPO_CACHE_NAMESPACE=spanner-emulator-${{ matrix.arch }}
+
+      - name: Export bounded Bazel cache archives
+        if: steps.bazel-repo-cache.outputs.cache-hit != 'true' || steps.bazel-disk-cache.outputs.cache-hit != 'true' || steps.cache-budget.outputs.trimmed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/docker/Dockerfile.ubuntu
+          target: cache-archives
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          outputs: type=local,dest=${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }},platform-split=false
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          build-args: |
+            BAZEL_CACHE_NAMESPACE=spanner-emulator-${{ matrix.arch }}
+            BAZEL_REPO_CACHE_NAMESPACE=spanner-emulator-${{ matrix.arch }}
+            CACHE_EXPORT_MAX_BYTES=2147483648
+            CACHE_EXPORT_DISK=${{ steps.bazel-disk-cache.outputs.cache-hit != 'true' }}
+            CACHE_EXPORT_REPO=${{ steps.bazel-repo-cache.outputs.cache-hit != 'true' }}
+            CACHE_EXPORT_NONCE=${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Enforce outgoing cache archive budget
+        id: outgoing-cache
+        if: steps.bazel-repo-cache.outputs.cache-hit != 'true' || steps.bazel-disk-cache.outputs.cache-hit != 'true' || steps.cache-budget.outputs.trimmed == 'true'
+        shell: bash
+        env:
+          CACHE_ARCHIVE_DIR: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}
+          MAX_COMBINED_BYTES: 3221225472
+        run: |
+          set -euo pipefail
+          repo_archive="$CACHE_ARCHIVE_DIR/repo.tar.gz"
+          disk_archive="$CACHE_ARCHIVE_DIR/disk.tar.gz"
+          repo_bytes=0
+          disk_bytes=0
+          save_repo=false
+          save_disk=false
+
+          if [[ -f "$repo_archive" ]]; then
+            repo_bytes="$(stat -c %s "$repo_archive")"
+            save_repo=true
+          elif [[ -f "$CACHE_ARCHIVE_DIR/repo-too-large" ]]; then
+            echo "Repository cache exceeds 2 GiB; it will not be saved."
+          fi
+          if [[ -f "$disk_archive" ]]; then
+            disk_bytes="$(stat -c %s "$disk_archive")"
+            save_disk=true
+          elif [[ -f "$CACHE_ARCHIVE_DIR/disk-too-large" ]]; then
+            echo "Disk cache exceeds 2 GiB; it will not be saved."
+          fi
+
+          if (( repo_bytes > MAX_COMBINED_BYTES )); then
+            rm -f "$repo_archive"
+            repo_bytes=0
+            save_repo=false
+          fi
+          if (( repo_bytes + disk_bytes > MAX_COMBINED_BYTES )); then
+            echo "Compressed caches exceed 3 GiB; omitting the disk cache."
+            rm -f "$disk_archive"
+            disk_bytes=0
+            save_disk=false
+          fi
+
+          echo "save-repo=$save_repo" >> "$GITHUB_OUTPUT"
+          echo "save-disk=$save_disk" >> "$GITHUB_OUTPUT"
+          echo "Saving $((repo_bytes + disk_bytes)) bytes of Bazel cache archives"
+
+      - name: Save Bazel repository cache archive
+        if: steps.outgoing-cache.outputs.save-repo == 'true' && steps.bazel-repo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}/repo.tar.gz
+          key: bazel-repo-v2-${{ runner.os }}-${{ matrix.arch }}-${{ steps.dependency-hash.outputs.value }}
+
+      - name: Save Bazel disk cache archive
+        if: steps.outgoing-cache.outputs.save-disk == 'true' && steps.bazel-disk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}/disk.tar.gz
+          key: bazel-disk-v2-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ github.sha }}
 
       - name: Export digest
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: digests-${{ matrix.arch }}
@@ -190,6 +327,7 @@ jobs:
   merge:
     runs-on: ubuntu-24.04
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 10
 
     steps:

@@ -23,7 +23,7 @@
 
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
-#include "zetasql/base/logging.h"
+#include "absl/log/absl_log.h"
 #include "nlohmann/json.hpp"
 
 namespace google {

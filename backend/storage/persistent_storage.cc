@@ -26,8 +26,8 @@
 #include <utility>
 #include <vector>
 
-#include "zetasql/public/value.h"
-#include "zetasql/base/status_macros.h"
+#include "googlesql/public/value.h"
+#include "googlesql/base/status_macros.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -167,7 +167,7 @@ class SnapshotOwningIterator : public StorageIterator {
   absl::Status Status() const override { return inner_.Status(); }
   const class Key& Key() const override { return inner_.Key(); }
   int NumColumns() const override { return inner_.NumColumns(); }
-  const zetasql::Value& ColumnValue(int i) const override {
+  const googlesql::Value& ColumnValue(int i) const override {
     return inner_.ColumnValue(i);
   }
 
@@ -324,7 +324,7 @@ std::string PersistentStorage::MakeTablePrefix(const TableID& table_id) {
   return result;
 }
 
-zetasql::Value PersistentStorage::GetCellValueAtTimestamp(
+googlesql::Value PersistentStorage::GetCellValueAtTimestamp(
     const TableID& table_id, const std::string& encoded_key,
     const ColumnID& column_id, absl::Time timestamp) const {
   // Build a seek key just past the target timestamp (upper bound).
@@ -346,7 +346,7 @@ zetasql::Value PersistentStorage::GetCellValueAtTimestamp(
   // We want the largest timestamp <= target, so we seek to target+1 and
   // go back, or seek to target and check.
   it->Seek(seek_key);
-  if (!it->status().ok()) return zetasql::Value();
+  if (!it->status().ok()) return googlesql::Value();
 
   // Check if we landed exactly on the target or need to go to previous.
   if (it->Valid()) {
@@ -368,7 +368,7 @@ zetasql::Value PersistentStorage::GetCellValueAtTimestamp(
     // Past the end of the database, go to the last entry.
     it->SeekToLast();
   }
-  if (!it->status().ok()) return zetasql::Value();
+  if (!it->status().ok()) return googlesql::Value();
 
   // Now check if the current position is within the right cell prefix.
   if (it->Valid()) {
@@ -378,13 +378,13 @@ zetasql::Value PersistentStorage::GetCellValueAtTimestamp(
     }
   }
 
-  return zetasql::Value();
+  return googlesql::Value();
 }
 
 bool PersistentStorage::Exists(const TableID& table_id,
                                const std::string& encoded_key,
                                absl::Time timestamp) const {
-  zetasql::Value value =
+  googlesql::Value value =
       GetCellValueAtTimestamp(table_id, encoded_key, kExistsColumn, timestamp);
   return value.is_valid() && !value.is_null() && value.bool_value();
 }
@@ -429,7 +429,7 @@ std::vector<std::string> PersistentStorage::CollectKeysInRange(
 absl::Status PersistentStorage::Lookup(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,
-    std::vector<zetasql::Value>* values) const {
+    std::vector<googlesql::Value>* values) const {
   if (!column_ids.empty() && values == nullptr) {
     return error::Internal(
         "PersistentStorage::Lookup was passed a nullptr for "
@@ -462,7 +462,7 @@ absl::Status PersistentStorage::Lookup(
 }
 
 // Decodes a Key from the serialized __key_data__ bytes.
-static Key DecodeKeyData(const zetasql::Value& key_data) {
+static Key DecodeKeyData(const googlesql::Value& key_data) {
   Key reconstructed_key;
   if (!key_data.is_valid() || key_data.is_null()) return reconstructed_key;
 
@@ -491,7 +491,7 @@ static Key DecodeKeyData(const zetasql::Value& key_data) {
     if (val_len < 0 || end - ptr < val_len) break;
     std::string encoded_val(ptr, val_len);
     ptr += val_len;
-    zetasql::Value col_val = DecodeValue(encoded_val);
+    googlesql::Value col_val = DecodeValue(encoded_val);
     reconstructed_key.AddColumn(col_val, desc, nulls_last);
   }
   return reconstructed_key;
@@ -614,14 +614,14 @@ absl::Status PersistentStorage::Read(
       cell.best_timestamp = entry_ts;
     }
   }
-  ZETASQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
+  GOOGLESQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
 
   // Build result rows from collected data.
   for (auto& [encoded_key, columns] : rows_data) {
     // Check _exists.
     auto exists_it = columns.find(std::string(kExistsColumn));
     if (exists_it == columns.end()) continue;
-    zetasql::Value exists_val = DecodeValue(exists_it->second.best_value);
+    googlesql::Value exists_val = DecodeValue(exists_it->second.best_value);
     // Match Exists() logic: valid AND not-null AND true.
     if (!exists_val.is_valid() || exists_val.is_null() ||
         !exists_val.bool_value()) {
@@ -629,14 +629,14 @@ absl::Status PersistentStorage::Read(
     }
 
     // Collect column values in order.
-    std::vector<zetasql::Value> values;
+    std::vector<googlesql::Value> values;
     values.reserve(column_ids.size());
     for (const ColumnID& column_id : column_ids) {
       auto col_it = columns.find(column_id);
       if (col_it != columns.end()) {
         values.emplace_back(DecodeValue(col_it->second.best_value));
       } else {
-        values.emplace_back(zetasql::Value());
+        values.emplace_back(googlesql::Value());
       }
     }
 
@@ -644,7 +644,7 @@ absl::Status PersistentStorage::Read(
     Key reconstructed_key;
     auto kd_it = columns.find("__key_data__");
     if (kd_it != columns.end()) {
-      zetasql::Value key_data = DecodeValue(kd_it->second.best_value);
+      googlesql::Value key_data = DecodeValue(kd_it->second.best_value);
       reconstructed_key = DecodeKeyData(key_data);
     }
 
@@ -659,7 +659,7 @@ absl::Status PersistentStorage::Read(
 absl::Status PersistentStorage::Write(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,
-    const std::vector<zetasql::Value>& values) {
+    const std::vector<googlesql::Value>& values) {
   std::string encoded_key = EncodeKey(key);
   leveldb::WriteBatch batch;
 
@@ -667,7 +667,7 @@ absl::Status PersistentStorage::Write(
   if (!Exists(table_id, encoded_key, timestamp)) {
     std::string exists_ldb_key =
         MakeLevelDBKey(table_id, encoded_key, kExistsColumn, timestamp);
-    std::string exists_value = EncodeValue(zetasql::values::Bool(true));
+    std::string exists_value = EncodeValue(googlesql::values::Bool(true));
     batch.Put(exists_ldb_key, exists_value);
   }
 
@@ -702,7 +702,7 @@ absl::Status PersistentStorage::Write(
     std::string key_meta_ldb_key =
         MakeLevelDBKey(table_id, encoded_key, "__key_data__", timestamp);
     std::string key_meta_value =
-        EncodeValue(zetasql::values::Bytes(key_data));
+        EncodeValue(googlesql::values::Bytes(key_data));
     batch.Put(key_meta_ldb_key, key_meta_value);
   }
 
@@ -786,7 +786,7 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
     // Mark _exists as false.
     std::string exists_ldb_key =
         MakeLevelDBKey(table_id, encoded_key, kExistsColumn, timestamp);
-    std::string exists_value = EncodeValue(zetasql::values::Bool(false));
+    std::string exists_value = EncodeValue(googlesql::values::Bool(false));
     batch.Put(exists_ldb_key, exists_value);
 
     // Scan all columns for this row and mark them as invalid.
@@ -808,11 +808,11 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
         // Write an invalid value for this column at the delete timestamp.
         std::string del_ldb_key =
             MakeLevelDBKey(table_id, encoded_key, col_id, timestamp);
-        std::string invalid_value = EncodeValue(zetasql::Value());
+        std::string invalid_value = EncodeValue(googlesql::Value());
         batch.Put(del_ldb_key, invalid_value);
       }
     }
-    ZETASQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
+    GOOGLESQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
   }
 
   leveldb::Status status = write_queue_.Submit(std::move(batch));

@@ -20,9 +20,8 @@ all the emulator dependencies inside a docker container. Opening this repository
 in vscode will automatically use the devcontainer defined in .devcontainer
 directory. This requires docker to be installed on the local machine.
 
-To work directly in the browser without installing docker, a github Codespace
+To work directly in the browser without installing docker, a GitHub Codespace
 can be created and opened in vscode.dev in the browser.
-
 
 ### Via gcloud
 
@@ -62,7 +61,8 @@ The emulator is also distributed as a standalone linux binary. Note that this
 binary is not fully static, but has been tested on Ubuntu 18.04+, CentOS
 7+, RHEL 8+ and Debian 10+.
 
-Set `ARCHITECTURE` to `arm64` in following command if you are working on arm machine.
+Set `ARCHITECTURE` to `arm64` in following command if you are working on arm
+machine.
 ```shell
 VERSION=1.5.6
 ARCHITECTURE=amd64
@@ -137,7 +137,7 @@ Works on x86 and arm64 architectures.
 
 ## Technical Details
 
-The Cloud Spanner Emulator is built using the [ZetaSQL](https://github.com/google/zetasql)
+The Cloud Spanner Emulator is built using the [GoogleSQL](https://github.com/google/googlesql)
 reference implementation and is divided into three layers (each in its own
 directory):
 
@@ -147,8 +147,9 @@ directory):
 
 The core emulator codebase is in C++, and the REST wrapper is written in Go.
 SQL query execution, value/type classes, and SQL functions are provided by the
-ZetaSQL reference implementation. The API surface, DDL, transactional semantics,
-constraint enforcement, and in-memory storage are implemented in this codebase.
+GoogleSQL reference implementation. The API surface, DDL, transactional
+semantics, constraint enforcement, and in-memory storage are implemented in
+this codebase.
 
 ## Features and Limitations
 
@@ -157,6 +158,10 @@ Notable supported features:
 - DDL schema changes
 
 - Full SQL/DML query execution (limitations noted below)
+
+- [GQL support](https://docs.cloud.google.com/spanner/docs/reference/standard-sql/graph-intro)
+
+- [Graph Algorithms](https://cloud.google.com/spanner/docs/graph/graph-algorithms-overview) (Graph Algorithms are supported in the emulator for parsing and query validation, but they will always return an empty result set)
 
 - DML sequence numbers
 
@@ -264,12 +269,12 @@ to `jaysen2apache/spanner-emulator-extended` via GitHub Actions on every push.
 
 **This fork**: BuildKit cache mounts for Bazel disk/repository caches. Reduces
 subsequent builds from hours to ~2 minutes. Per-file optimization (`-O1`)
-for heavy ZetaSQL files prevents OOM on resource-constrained systems.
+for heavy GoogleSQL files prevents OOM on resource-constrained systems.
 
 ### Supported Features Already in This Fork (No Gap)
 
 These features were analyzed as potential gaps but already work in the current
-ZetaSQL 2025.09.1 base:
+GoogleSQL 2026.7.2 base:
 
 | Feature | Status |
 |---------|--------|
@@ -290,7 +295,7 @@ ZetaSQL 2025.09.1 base:
 
 ## Remaining Limitations
 
-Notable limitations (applies to both upstream and this fork unless noted):
+Notable limitations:
 
 - The gRPC and REST endpoints run on separate ports and serve unencrypted
   traffic.
@@ -305,6 +310,9 @@ Notable limitations (applies to both upstream and this fork unless noted):
   be wrapped in a retry loop. This [recommendation](
   https://cloud.google.com/spanner/docs/transactions) applies to the Cloud
   Spanner service as well.
+
+- The emulator does not support persistence - all data is kept in memory and
+  discarded when the emulator terminates.
 
 - Error messages may not be consistent between the emulator and the Cloud
   Spanner service. Error messages are not part of Cloud Spanner's API contract
@@ -324,7 +332,7 @@ Notable limitations (applies to both upstream and this fork unless noted):
   time. The execution time has no relation with what the execution time on
   Cloud Spanner will be.
 
-- Some queries that use SQL functionality present in ZetaSQL but not in
+- Some queries that use SQL functionality present in GoogleSQL but not in
   Cloud Spanner service may succeed instead of being rejected as invalid.
 
 - Certain quotas and limits (such as admin api rate limits and mutation size
@@ -361,7 +369,6 @@ Notable limitations (applies to both upstream and this fork unless noted):
   - `CREATE SEARCH INDEX` accepts `OPTIONS` clause but takes no action on it.
 
 ## Frequently Asked Questions (FAQ)
-
 
 #### Which [client library](https://cloud.google.com/spanner/docs/reference/libraries) versions are supported?
 

@@ -26,8 +26,8 @@
 #
 # Build is split into three stages for optimal Docker layer caching:
 #   1. toolchain: OS packages, GCC 13, Bazel binary (rarely changes)
-#   2. deps:      Fetch external repos — ZetaSQL, protobuf, ICU, etc.
-#                  (only re-runs when WORKSPACE or build/bazel/ patches change)
+#   2. deps:      Fetch external repos — GoogleSQL, protobuf, ICU, etc.
+#                  (only re-runs when Bazel dependency or graph metadata changes)
 #   3. build:     Compile emulator source code
 #                  (re-runs on any source file change, but deps are cached)
 
@@ -36,12 +36,16 @@ FROM ${BASE_IMAGE} AS toolchain
 
 ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
-ENV GCC_VERSION=12
+ENV GCC_VERSION=13
 
 # Install all build dependencies and GCC in a single layer.
 # Skipped when using a pre-built base image (Dockerfile.base).
-RUN if [ ! -f /.toolchain-ready ]; then \
+RUN if [ ! -f /.toolchain-gcc13-ready ]; then \
       echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
+      apt-get update && \
+      apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates gnupg && \
+      add-apt-repository ppa:ubuntu-toolchain-r/test -y && \
       apt-get update && \
       apt-get install -y --no-install-recommends \
         curl tar build-essential wget python3 zip unzip \
@@ -53,16 +57,17 @@ RUN if [ ! -f /.toolchain-ready ]; then \
       update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
                           --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
       update-alternatives --set gcc /usr/bin/gcc-${GCC_VERSION} && \
-      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+      apt-get clean && rm -rf /var/lib/apt/lists/* && \
+      touch /.toolchain-gcc13-ready; \
     fi
 
 ENV PATH=$PATH:/usr/bin:/usr/local/bin
 ENV EXTRA_BAZEL_ARGS="--tool_java_runtime_version=local_jdk"
-ENV BAZEL_CXXOPTS="-std=c++17"
+ENV BAZEL_CXXOPTS="-std=c++20"
 
 # Install Bazel directly (not via bazelisk) to avoid x509 TLS errors in
 # restricted network environments.
-ARG BAZEL_VERSION=6.5.0
+ARG BAZEL_VERSION=7.6.1
 ARG BAZEL_SOURCE=.bazelversion
 COPY ${BAZEL_SOURCE} /tmp/bazel-source/
 RUN case "${TARGETARCH}" in \
@@ -80,19 +85,21 @@ RUN case "${TARGETARCH}" in \
     fi && \
     chmod +x /usr/local/bin/bazel && \
     rm -rf /tmp/bazel-source
+COPY --chmod=0755 build/bazel/toolchain_cache_guard.sh \
+    /usr/local/bin/spanner-toolchain-cache-guard
 
 ################################################################################
 #                                DEPS                                          #
 ################################################################################
-# Fetch all external dependencies (ZetaSQL, protobuf, ICU, gRPC, etc.).
-# This layer is cached by Docker as long as WORKSPACE and build/bazel/
-# patches don't change.
+# Fetch all external dependencies (GoogleSQL, protobuf, ICU, gRPC, etc.).
+# This layer remains cached while Bazel dependency and graph metadata are
+# unchanged.
 
 FROM toolchain AS deps
 
 ARG OFFLINE_DIR=
 # Copy ONLY files that define external dependencies and the graph structure.
-COPY WORKSPACE .bazelrc BUILD.bazel maven_install.json .bazelversion /src/
+COPY MODULE.bazel .bazelrc BUILD.bazel .bazelversion requirements.txt go.mod go.sum /src/
 COPY build/bazel/ /src/build/bazel/
 # If build_files.tar exists (created by build.sh), extract it.
 # Otherwise, we continue with just the root files.
@@ -102,17 +109,21 @@ RUN if [ -f /src/build_files.tar ]; then \
     fi
 
 # Copy offline distdir into the image when OFFLINE_DIR is set.
-# Falls back to copying a harmless file (WORKSPACE) when offline mode is not used.
-COPY ${OFFLINE_DIR:-WORKSPACE} /src/${OFFLINE_DIR:-WORKSPACE}
+# Falls back to copying a harmless file (MODULE.bazel) when offline mode is not used.
+COPY ${OFFLINE_DIR:-MODULE.bazel} /src/${OFFLINE_DIR:-MODULE.bazel}
 
 # Fetch external dependencies into persistent BuildKit repository and output
 # caches. External repos are extracted into the output base so the build stage
 # doesn't repeat that work.
 ARG BAZEL_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+ARG BAZEL_REPO_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+ARG BAZEL_CACHE_WARM_NONCE=stable
 # sharing=locked prevents corruption when multiple builds run concurrently
 RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,sharing=locked \
-    --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-repo,target=/bazel-repo-cache,sharing=locked \
+    --mount=type=cache,id=${BAZEL_REPO_CACHE_NAMESPACE}-repo,target=/bazel-repo-cache,sharing=locked \
     rm -f /bazel-output/lock 2>/dev/null || true && \
+    echo "$BAZEL_CACHE_WARM_NONCE" >/dev/null && \
+    spanner-toolchain-cache-guard /bazel-output && \
     mkdir -p /bazel-repo-cache && \
     cd /src && \
     REPO_CACHE_FLAG="" && \
@@ -132,9 +143,9 @@ RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,s
 #
 # Bazel output base is persisted via a Docker BuildKit cache mount so that
 # incremental builds don't re-analyze or re-compile unchanged external deps
-# (ZetaSQL, protobuf, gRPC, absl, etc.). On the first build after a WORKSPACE
+# (GoogleSQL, protobuf, gRPC, absl, etc.). On the first build after a module
 # or toolchain change, everything compiles. On subsequent source-only changes,
-# only changed emulator code recompiles — ZetaSQL is skipped entirely.
+# only changed emulator code recompiles — GoogleSQL is skipped entirely.
 #
 # Kill stale Bazel server lock before starting. A previous interrupted build
 # may have left a lock on the persisted output base, which would block the
@@ -149,12 +160,19 @@ COPY . /src/
 ARG OFFLINE_DIR=
 ARG BAZEL_JOBS=1
 ARG BAZEL_RAM=HOST_RAM*.2
+# Zero leaves durable local caches unbounded; CI supplies a runner-safe cap.
+ARG BAZEL_DISK_CACHE_MAX_BYTES=0
 ARG BAZEL_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+ARG BAZEL_REPO_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+ARG BAZEL_CACHE_WARM_NONCE=stable
 # sharing=locked serializes concurrent builds on the same output base
 RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,sharing=locked \
     --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-disk,target=/bazel-disk-cache,sharing=locked \
-    --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-repo,target=/bazel-repo-cache,sharing=locked \
+    --mount=type=cache,id=${BAZEL_REPO_CACHE_NAMESPACE}-repo,target=/bazel-repo-cache,sharing=locked \
     rm -f /bazel-output/lock 2>/dev/null || true && \
+    echo "$BAZEL_CACHE_WARM_NONCE" >/dev/null && \
+    spanner-toolchain-cache-guard /bazel-output && \
+    spanner-toolchain-cache-guard /bazel-disk-cache && \
     cd /src && \
     REPO_CACHE_FLAG="" && \
     if [ -n "$OFFLINE_DIR" ] && [ -d "/src/$OFFLINE_DIR" ]; then \
@@ -164,16 +182,41 @@ RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,s
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
     bazel --host_jvm_args=-Djdk.lang.Process.launchMechanism=posix_spawn \
-      --output_base=/bazel-output build -c dbg --strip=always --spawn_strategy=standalone \
-      --jobs=${BAZEL_JOBS} --local_ram_resources=${BAZEL_RAM} \
+      --output_base=/bazel-output build -c opt --strip=always --spawn_strategy=standalone \
+      --jobs=${BAZEL_JOBS} --local_resources=memory=${BAZEL_RAM} \
       --disk_cache=/bazel-disk-cache \
+      --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_MAX_BYTES} \
+      --experimental_disk_cache_gc_idle_delay=0s \
       ${REPO_CACHE_FLAG} \
-      -- ... -third_party/spanner_pg/src/... && \
+      //binaries:emulator_main //binaries:gateway_main && \
     mkdir -p /build/output && \
     cp -L bazel-bin/binaries/emulator_main /build/output/ && \
     cp -L bazel-bin/binaries/gateway_main_/gateway_main /build/output/ && \
     strip /build/output/emulator_main && \
-    strip /build/output/gateway_main
+    strip /build/output/gateway_main && \
+    if [ "$BAZEL_DISK_CACHE_MAX_BYTES" -gt 0 ]; then \
+      CACHE_LIMIT_KIB=$((BAZEL_DISK_CACHE_MAX_BYTES / 1024)); \
+      CACHE_WAIT_SECONDS=0; \
+      CACHE_SIZE_KIB="$(du -sk /bazel-disk-cache)"; \
+      CACHE_SIZE_KIB="${CACHE_SIZE_KIB%%[!0-9]*}"; \
+      while [ "$CACHE_SIZE_KIB" -gt "$CACHE_LIMIT_KIB" ] && \
+            [ "$CACHE_WAIT_SECONDS" -lt 120 ]; do \
+        sleep 1; \
+        CACHE_WAIT_SECONDS=$((CACHE_WAIT_SECONDS + 1)); \
+        CACHE_SIZE_KIB="$(du -sk /bazel-disk-cache)"; \
+        CACHE_SIZE_KIB="${CACHE_SIZE_KIB%%[!0-9]*}"; \
+      done; \
+    fi && \
+    bazel --host_jvm_args=-Djdk.lang.Process.launchMechanism=posix_spawn \
+      --output_base=/bazel-output shutdown && \
+    if [ "$BAZEL_DISK_CACHE_MAX_BYTES" -gt 0 ]; then \
+      CACHE_SIZE_KIB="$(du -sk /bazel-disk-cache)"; \
+      CACHE_SIZE_KIB="${CACHE_SIZE_KIB%%[!0-9]*}"; \
+      if [ "$CACHE_SIZE_KIB" -gt "$CACHE_LIMIT_KIB" ]; then \
+        echo "WARN: Bazel disk cache GC exceeded 120s; clearing the CI disk cache." >&2; \
+        find /bazel-disk-cache -mindepth 1 -maxdepth 1 -exec rm -rf {} +; \
+      fi; \
+    fi
 
 # Generate licenses file. Reuse the persistent output base so external repos
 # are already extracted.
@@ -194,6 +237,49 @@ RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,s
       echo "No external repos found — skipping license generation." > /build/output/licenses.txt && \
       gzip /build/output/licenses.txt; \
     fi
+
+################################################################################
+#                           CACHE ARCHIVE EXPORT                               #
+################################################################################
+# Workflow-only target: emit compressed cache-mount snapshots without loading
+# multi-gigabyte extraction images into the Docker daemon.
+FROM toolchain AS cache-export
+
+ARG BAZEL_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+ARG BAZEL_REPO_CACHE_NAMESPACE=spanner-emulator-${TARGETARCH}
+ARG CACHE_EXPORT_MAX_BYTES=2147483648
+ARG CACHE_EXPORT_NONCE=manual
+ARG CACHE_EXPORT_DISK=true
+ARG CACHE_EXPORT_REPO=true
+RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-disk,target=/bazel-disk-cache,sharing=locked \
+    --mount=type=cache,id=${BAZEL_REPO_CACHE_NAMESPACE}-repo,target=/bazel-repo-cache,sharing=locked \
+    echo "$CACHE_EXPORT_NONCE" >/dev/null && \
+    rm -f /bazel-disk-cache/buildstamp /bazel-repo-cache/buildstamp && \
+    mkdir -p /cache-archives && \
+    CACHE_EXPORT_LIMIT_KIB=$((CACHE_EXPORT_MAX_BYTES / 1024)) && \
+    DISK_CACHE_KIB="$(du -sk /bazel-disk-cache)" && \
+    DISK_CACHE_KIB="${DISK_CACHE_KIB%%[!0-9]*}" && \
+    if [ "$CACHE_EXPORT_DISK" != "true" ]; then \
+      touch /cache-archives/disk-skipped; \
+    elif [ "$CACHE_EXPORT_MAX_BYTES" -eq 0 ] || \
+         [ "$DISK_CACHE_KIB" -le "$CACHE_EXPORT_LIMIT_KIB" ]; then \
+      tar -C /bazel-disk-cache -czf /cache-archives/disk.tar.gz .; \
+    else \
+      touch /cache-archives/disk-too-large; \
+    fi && \
+    REPO_CACHE_KIB="$(du -sk /bazel-repo-cache)" && \
+    REPO_CACHE_KIB="${REPO_CACHE_KIB%%[!0-9]*}" && \
+    if [ "$CACHE_EXPORT_REPO" != "true" ]; then \
+      touch /cache-archives/repo-skipped; \
+    elif [ "$CACHE_EXPORT_MAX_BYTES" -eq 0 ] || \
+         [ "$REPO_CACHE_KIB" -le "$CACHE_EXPORT_LIMIT_KIB" ]; then \
+      tar -C /bazel-repo-cache -czf /cache-archives/repo.tar.gz .; \
+    else \
+      touch /cache-archives/repo-too-large; \
+    fi
+
+FROM scratch AS cache-archives
+COPY --from=cache-export /cache-archives/ /
 
 ################################################################################
 #                                   RELEASE                                    #

@@ -24,7 +24,7 @@
 #include <string>
 #include <thread>
 
-#include "zetasql/public/value.h"
+#include "googlesql/public/value.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
@@ -74,7 +74,7 @@ class PersistentStorage : public Storage {
 
   absl::Status Lookup(absl::Time timestamp, const TableID& table_id,
                       const Key& key, const std::vector<ColumnID>& column_ids,
-                      std::vector<zetasql::Value>* values) const override;
+                      std::vector<googlesql::Value>* values) const override;
 
   absl::Status Read(absl::Time timestamp, const TableID& table_id,
                     const KeyRange& key_range,
@@ -83,7 +83,7 @@ class PersistentStorage : public Storage {
 
   absl::Status Write(absl::Time timestamp, const TableID& table_id,
                      const Key& key, const std::vector<ColumnID>& column_ids,
-                     const std::vector<zetasql::Value>& values) override;
+                     const std::vector<googlesql::Value>& values) override;
 
   absl::Status Delete(absl::Time timestamp, const TableID& table_id,
                       const KeyRange& key_range) override;
@@ -156,7 +156,7 @@ class PersistentStorage : public Storage {
 
   // Finds the value for a specific cell at or before the given timestamp.
   // Uses LevelDB iterator seek to find the most recent version.
-  zetasql::Value GetCellValueAtTimestamp(const TableID& table_id,
+  googlesql::Value GetCellValueAtTimestamp(const TableID& table_id,
                                            const std::string& encoded_key,
                                            const ColumnID& column_id,
                                            absl::Time timestamp) const;

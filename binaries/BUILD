@@ -42,7 +42,7 @@ cc_binary(
         "@com_google_absl//absl/strings",
         "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
         "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_proto",
-        "@com_google_zetasql//zetasql/base",
+        "@com_google_absl//absl/log:absl_log",
     ],
 )
 

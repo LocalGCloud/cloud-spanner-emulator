@@ -29,7 +29,7 @@
 #include "common/config.h"
 #include "frontend/persistence/metadata_store.h"
 #include "frontend/server/server.h"
-#include "zetasql/base/logging.h"
+#include "absl/log/absl_log.h"
 
 using Server = ::google::spanner::emulator::frontend::Server;
 namespace config = ::google::spanner::emulator::config;

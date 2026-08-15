@@ -1,0 +1,28 @@
+insecure-entitlements = ["network.host"]
+
+[worker.oci]
+  gc = true
+  reservedSpace = "30%"
+  maxUsedSpace = "75%"
+  minFreeSpace = "15GB"
+
+  [worker.oci.labels]
+    "org.localgcloud.spanner-cache-policy" = "v1"
+
+  [[worker.oci.gcpolicy]]
+    filters = ["type==source.local", "type==source.git.checkout"]
+    keepDuration = "48h"
+    maxUsedSpace = "1GB"
+
+  [[worker.oci.gcpolicy]]
+    filters = ["type==exec.cachemount"]
+    keepDuration = "1440h"
+    reservedSpace = "30%"
+    maxUsedSpace = "70%"
+    minFreeSpace = "15GB"
+
+  [[worker.oci.gcpolicy]]
+    all = true
+    reservedSpace = "30%"
+    maxUsedSpace = "75%"
+    minFreeSpace = "15GB"

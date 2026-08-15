@@ -25,7 +25,7 @@
 #include <vector>
 
 #include "absl/algorithm/container.h"
-#include "zetasql/base/no_destructor.h"
+#include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
@@ -68,15 +68,17 @@ const char kChangeStreamExcludeDeleteOptionName[] = "exclude_delete";
 const char kChangeStreamExcludeUpdateOptionName[] = "exclude_update";
 const char kChangeStreamExcludeTtlDeletesOptionName[] = "exclude_ttl_deletes";
 const char kChangeStreamAllowTxnExclusionOptionName[] = "allow_txn_exclusion";
-const zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
+const char kChangeStreamPartitionModeOptionName[] = "partition_mode";
+const absl::NoDestructor<absl::flat_hash_set<std::string>>
     kChangeStreamBooleanOptions{{kChangeStreamExcludeInsertOptionName,
                                  kChangeStreamExcludeDeleteOptionName,
                                  kChangeStreamExcludeUpdateOptionName,
                                  kChangeStreamExcludeTtlDeletesOptionName,
                                  kChangeStreamAllowTxnExclusionOptionName}};
-const zetasql_base::NoDestructor<absl::flat_hash_set<std::string>>
+const absl::NoDestructor<absl::flat_hash_set<std::string>>
     kChangeStreamStringOptions{{kChangeStreamValueCaptureTypeOptionName,
-                                kChangeStreamRetentionPeriodOptionName}};
+                                kChangeStreamRetentionPeriodOptionName,
+                                kChangeStreamPartitionModeOptionName}};
 const char kSearchIndexOptionSortOrderShardingName[] = "sort_order_sharding";
 const char kSearchIndexOptionsDisableAutomaticUidName[] =
     "disable_automatic_uid_column";
@@ -91,6 +93,7 @@ const char kVersionRetentionPeriodOptionName[] = "version_retention_period";
 const char kDefaultSequenceKindOptionName[] = "default_sequence_kind";
 const char kDefaultTimeZoneOptionName[] = "default_time_zone";
 const char kColumnarPolicyOptionName[] = "columnar_policy";
+const char kFulltextDictionaryTableOptionName[] = "fulltext_dictionary_table";
 const char kVectorIndexTreeDepth[] = "tree_depth";
 const char kVectorIndexNumberOfLeaves[] = "num_leaves";
 const char kVectorIndexNumberOfBranches[] = "num_branches";
@@ -138,7 +141,7 @@ bool UnescapeStringLiteral(absl::string_view val, std::string* result,
     return false;
   }
   ABSL_CHECK_EQ(val[0], val[val.size() - 1]);
-  ZETASQL_VLOG(val[0] == '\'' || val[0] == '"');
+  GOOGLESQL_VLOG(val[0] == '\'' || val[0] == '"');
   if (!absl::CUnescape(absl::ClippedSubstr(val, 1, val.size() - 2), result)) {
     *error = absl::StrCat("Cannot parse string literal: ", val);
     return false;
@@ -381,6 +384,23 @@ void VisitStringOrNullOptionValNode(const SimpleNode* value_node,
   option->set_string_value(string_value);
 }
 
+void VisitBoolOrNullOptionValNode(const SimpleNode* value_node,
+                                  SetOption* option,
+                                  std::vector<std::string>* errors) {
+  if (value_node->getId() == JJTBOOL_TRUE_VAL) {
+    option->set_bool_value(true);
+  } else if (value_node->getId() == JJTBOOL_FALSE_VAL) {
+    option->set_bool_value(false);
+  } else if (value_node->getId() == JJTNULLL) {
+    option->set_null_value(true);
+  } else {
+    errors->push_back(
+        absl::StrCat("Unexpected value for option: ", option->option_name(),
+                     ". Supported option values are booleans and NULL."));
+    return;
+  }
+}
+
 void VisitLocalityGroupName(const SimpleNode* node, OptionList* options,
                             std::vector<std::string>* errors) {
   std::string option_name = kLocalityGroupOptionName;
@@ -420,6 +440,11 @@ void VisitTableOptionKeyValNode(const SimpleNode* node, OptionList* options,
     option->set_option_name(option_name);
     const SimpleNode* value_node = GetChildNode(node, 1);
     VisitStringOrNullOptionValNode(value_node, option, errors);
+  } else if (option_name == kFulltextDictionaryTableOptionName) {
+    SetOption* option = options->Add();
+    option->set_option_name(option_name);
+    const SimpleNode* child = GetChildNode(node, 1);
+    VisitBoolOrNullOptionValNode(child, option, errors);
   } else {
     // If this is an invalid option, return error.
     errors->push_back(
@@ -1481,24 +1506,16 @@ void VisitFunctionOptionsNode(const SimpleNode* node,
           absl::StrCat("Unexpected child node: ", child->toString()));
       continue;
     }
+
     auto option = create_function->add_options();
-    option->set_option_name(
-        ExtractTextForNode(GetChildNode(child, 0), ddl_text));
-    if (auto str_node = GetFirstDescendantNode(child, JJTANY_STRING_LITERAL);
-        str_node != nullptr) {
-      option->set_string_value(
-          StripQuotes(ExtractTextForNode(str_node, ddl_text)));
-    } else if (auto int_node = GetFirstDescendantNode(child, JJTINTEGER_VAL);
-               int_node != nullptr) {
-      int64_t int64_value;
-      if (!absl::SimpleAtoi(ExtractTextForNode(int_node, ddl_text),
-                            &int64_value)) {
-        errors->push_back(absl::StrCat("Failed to parse integer value: ",
-                                       ExtractTextForNode(int_node, ddl_text)));
-        continue;
-      }
-      option->set_int64_value(int64_value);
-    }
+    ABSL_CHECK_EQ(2, child->jjtGetNumChildren());
+    option->set_name(ExtractTextForNode(GetChildNode(child, 0), ddl_text));
+    option->set_sql_value(ExtractTextForNode(GetChildNode(child, 1), ddl_text));
+
+    auto sql_option = create_function->add_sql_options();
+    sql_option->set_name(ExtractTextForNode(GetChildNode(child, 0), ddl_text));
+    sql_option->set_sql_value(
+        ExtractTextForNode(GetChildNode(child, 1), ddl_text));
   }
 }
 
@@ -1549,18 +1566,17 @@ void VisitCreateFunctionNode(const SimpleNode* node,
     create_function->set_is_remote(true);
   }
 
-  auto language = Function::SQL;
-  const SimpleNode* language_node = GetFirstChildNode(node, JJTLANGUAGE);
-  if (language_node) {
-    absl::string_view language_text =
-        ExtractTextForNode(language_node, ddl_text);
-    if (language_text == "REMOTE") {
-      language = Function::REMOTE;
+  if (const SimpleNode* language_node = GetFirstChildNode(node, JJTLANGUAGE);
+      language_node) {
+    absl::string_view language = ExtractTextForNode(language_node, ddl_text);
+    if (language == "SQL") {
+      create_function->set_language(Function::SQL);
+    } else if (language == "REMOTE") {
+      create_function->set_language(Function::REMOTE);
+    } else {
+      errors->push_back(absl::StrCat("Unsupported language: ", language));
+      return;
     }
-  }
-
-  if (!create_function->is_remote()) {
-    create_function->set_language(language);
   }
 
   const SimpleNode* options_clause =
@@ -1590,14 +1606,16 @@ void VisitCreateFunctionNode(const SimpleNode* node,
                      create_function->language() == Function::REMOTE;
     if (!is_remote) {
       errors->push_back(
-          "DETERMINISM clause is not supported for remote functions.");
+          "DETERMINISM clause is not supported for SQL functions.");
       return;
     }
     absl::string_view determinism_text =
         ExtractTextForNode(determinism_node, ddl_text);
-    if (determinism_text != "NOT DETERMINISTIC") {
+    if (determinism_text == "NOT DETERMINISTIC") {
+      create_function->set_determinism(Function::NOT_DETERMINISTIC_VOLATILE);
+    } else {
       errors->push_back(
-          "Only NOT DETERMINISTIC is supported for remote functions.");
+          absl::StrCat("Unsupported determinism: ", determinism_text));
       return;
     }
   }
@@ -1626,8 +1644,16 @@ void VisitCreateViewNode(const SimpleNode* node, CreateFunction* function,
     function->set_is_or_replace(true);
   }
 
-  if (GetFirstChildNode(node, JJTSQL_SECURITY)) {
-    function->set_sql_security(Function::INVOKER);
+  const SimpleNode* sql_security_node =
+      GetFirstChildNode(node, JJTSQL_SECURITY);
+  if (sql_security_node != nullptr) {
+    absl::string_view security_text =
+        ExtractTextForNode(sql_security_node, ddl_text);
+    if (absl::EqualsIgnoreCase(security_text, "DEFINER")) {
+      function->set_sql_security(Function::DEFINER);
+    } else {
+      function->set_sql_security(Function::INVOKER);
+    }
   }
 
   const SimpleNode* view_definition =
@@ -2290,23 +2316,6 @@ void VisitInt64OrNullOptionValNode(const SimpleNode* value_node,
     errors->push_back(
         absl::StrCat("Unexpected value for option: ", option->option_name(),
                      ". Supported option values are integers and NULL."));
-    return;
-  }
-}
-
-void VisitBoolOrNullOptionValNode(const SimpleNode* value_node,
-                                  SetOption* option,
-                                  std::vector<std::string>* errors) {
-  if (value_node->getId() == JJTBOOL_TRUE_VAL) {
-    option->set_bool_value(true);
-  } else if (value_node->getId() == JJTBOOL_FALSE_VAL) {
-    option->set_bool_value(false);
-  } else if (value_node->getId() == JJTNULLL) {
-    option->set_null_value(true);
-  } else {
-    errors->push_back(
-        absl::StrCat("Unexpected value for option: ", option->option_name(),
-                     ". Supported option values are booleans and NULL."));
     return;
   }
 }

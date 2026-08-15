@@ -42,7 +42,7 @@ package(
     ],
 )
 
-licenses(["restricted"])
+licenses(["notice"])
 
 cc_library(
     name = "backend_with_shims",
@@ -101,6 +101,7 @@ cc_library(
         "//third_party/spanner_pg/src/backend/access/table",
         "//third_party/spanner_pg/src/backend/access/tablesample",
         "//third_party/spanner_pg/src/backend/access/transam",
+        "//third_party/spanner_pg/src/backend/archive",
         "//third_party/spanner_pg/src/backend/bootstrap",
         "//third_party/spanner_pg/src/backend/catalog",
         "//third_party/spanner_pg/src/backend/commands",

@@ -118,13 +118,13 @@ char* GetTableNameC(Oid relid);
 char* GetNamespaceNameC(Oid relid);
 
 // Given an oid, looks up a table and its columns info in the thread-local
-// catalog adapter and ZetaSQL catalog. Updates ncolumns with the correct
+// catalog adapter and GoogleSQL catalog. Updates ncolumns with the correct
 // number of columns and real_colnames with palloc'd copy of the column name
 // strings. THIS FUNCTION THROWS EXCEPTIONS if it fails to get the column names.
 void GetColumnNamesC(Oid relid, char*** real_colnames, int* ncolumns);
 
 // Given an oid, looks up a table and its columns info in the thread-local
-// catalog adapter and ZetaSQL catalog. Updates ncolumns with the correct
+// catalog adapter and GoogleSQL catalog. Updates ncolumns with the correct
 // number of columns and coltypes/coltypmods/colcollations with the column type
 // information. Uses InvalidOid if the column type is unsupported.
 // THIS FUNCTION THROWS EXCEPTIONS if it fails to get the column types.
@@ -132,10 +132,14 @@ void GetColumnTypesC(Oid relid, List** coltypes, List** coltypmods,
                      List** colcollations, int* ncolumns);
 
 // Given an oid and column name, looks up a table and its columns info in the
-// thread-local catalog adapter and ZetaSQL catalog.
+// thread-local catalog adapter and GoogleSQL catalog.
 // Returns the column attr number of the column name or InvalidAttrNumber if the
 // column or table don't exist.
 int GetColumnAttrNumber(Oid relid, const char* column_name);
+
+// Look up a namespace by oid in the thread-local catalog adapter and bootstrap
+// catalog.
+char* GetNamespaceNameByOid(Oid namespace_oid);
 
 // Wrapper functions for Bootstrap Catalog to be called directly from PostgreSQL
 // source or catalog shim C functions. If BootstrapCatalog returns an error,
@@ -150,7 +154,6 @@ const FormData_pg_language* GetLanguageByNameFromBootstrapCatalog(
     const char* name);
 Oid GetNamespaceByNameFromBootstrapCatalog(const char* name);
 Oid GetCollationOidByNameFromBootstrapCatalog(const char* name);
-char* GetNamespaceNameByOidFromBootstrapCatalog(Oid namespace_oid);
 
 // These functions get a list of results matching a name by returning a pointer
 // to <result>* and a length to avoid copying the Span data into a new temporary

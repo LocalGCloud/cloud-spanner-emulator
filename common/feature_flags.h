@@ -53,7 +53,9 @@ class EmulatorFeatureFlags {
     bool enable_property_graph_information_schema = true;
     bool enable_interleave_in = true;
     bool enable_insert_on_conflict_dml = true;
-    bool enable_alter_table_if_exists = false;
+    bool enable_alter_table_if_exists = true;
+    bool enable_mutable_key_range_change_stream = true;
+    bool enable_remote_udf = true;
   };
 
   static const EmulatorFeatureFlags& instance() {
