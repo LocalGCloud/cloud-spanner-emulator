@@ -108,6 +108,11 @@ absl::StatusOr<googlesql::Value> RetrieveChangeStreamWithPartitionToken(
       active_partition_tokens.push_back(itr->ColumnValue(0).string_value());
     }
   }
+  if (active_partition_tokens.empty()) {
+    return error::Internal(absl::StrCat(
+        "No active partition token found for change stream: ",
+        change_stream->Name()));
+  }
   std::sort(active_partition_tokens.begin(), active_partition_tokens.end());
   return googlesql::Value::String(active_partition_tokens[0]);
 }

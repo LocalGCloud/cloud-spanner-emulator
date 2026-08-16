@@ -74,6 +74,7 @@ cc_test(
         ":database",
         "//backend/access:read",
         "//backend/datamodel:key_set",
+        "//backend/schema/catalog:schema",
         "//backend/schema/updater:schema_updater",
         "//backend/transaction:read_only_transaction",
         "//common:clock",

@@ -183,6 +183,8 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
         absl::InfinitePast()) {
       context.schema_change_timestamp =
           schema_change_operation.schema_change_timestamp;
+    } else {
+      context.schema_change_timestamp = clock->Now();
     }
     SchemaUpdater updater;
     GOOGLESQL_ASSIGN_OR_RETURN(

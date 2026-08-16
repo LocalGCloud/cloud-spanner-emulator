@@ -223,13 +223,12 @@ absl::Status ChangeStreamPartitionChurner::ChurnPartitions(
         GOOGLESQL_RETURN_IF_ERROR(
             SplitPartition(change_stream_name, partition_token, txn.get()));
       }
-    } else {
-      int number_of_tokens = partition_tokens.size();
-      // Check that the number of tokens to merge is exactly 2.
-      GOOGLESQL_RET_CHECK(churn_type == "MERGE");
-      GOOGLESQL_RET_CHECK(number_of_tokens == 2);
-      GOOGLESQL_RETURN_IF_ERROR(MergePartition(change_stream_name, partition_tokens[0],
-                                     partition_tokens[1], txn.get()));
+    } else if (churn_type == "MERGE") {
+      for (size_t i = 0; i + 1 < partition_tokens.size(); i += 2) {
+        GOOGLESQL_RETURN_IF_ERROR(MergePartition(
+            change_stream_name, partition_tokens[i], partition_tokens[i + 1],
+            txn.get()));
+      }
     }
   }
   return txn->Commit();

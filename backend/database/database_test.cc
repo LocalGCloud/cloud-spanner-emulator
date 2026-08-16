@@ -24,6 +24,8 @@
 #include "absl/status/status.h"
 #include "backend/access/read.h"
 #include "backend/datamodel/key_set.h"
+#include "backend/schema/catalog/change_stream.h"
+#include "backend/schema/catalog/schema.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/transaction/options.h"
 #include "common/clock.h"
@@ -461,6 +463,40 @@ TEST_F(DatabaseTest, RecoveryGateRejectsTransactionsCreatedBeforeQuarantine) {
       db->CreateReadWriteTransaction(ReadWriteOptions(), RetryState()),
       StatusIs(absl::StatusCode::kFailedPrecondition));
   GOOGLESQL_EXPECT_OK(read_write->Rollback());
+}
+
+TEST_F(DatabaseTest, ChangeStreamCreationTimePersistsAndMatchesCreateTime) {
+  const absl::Time create_start_time = clock_.Now();
+  const std::vector<std::string> create_statements = {
+      "CREATE TABLE T(k1 INT64, c1 STRING(MAX)) PRIMARY KEY(k1)",
+      "CREATE CHANGE STREAM CS FOR ALL",
+  };
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Database> baseline,
+      Database::Create(&clock_, kDatabaseId,
+                       SchemaChangeOperation{.statements = create_statements}));
+
+  const auto* baseline_cs =
+      baseline->GetLatestSchema()->FindChangeStream("CS");
+  ASSERT_NE(baseline_cs, nullptr);
+  EXPECT_GE(baseline_cs->creation_time(), create_start_time);
+  EXPECT_LE(baseline_cs->creation_time(), clock_.Now());
+
+  // Simulate restore replaying the batch at the exact schema_change_timestamp
+  const absl::Time original_ts = baseline_cs->creation_time();
+  std::vector<SchemaChangeOperation> operations = {
+      {.statements = create_statements,
+       .schema_change_timestamp = original_ts},
+  };
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Database> restored,
+      Database::Create(&clock_, kDatabaseId, operations,
+                       baseline->GetIdCounterValues(), ""));
+
+  const auto* restored_cs =
+      restored->GetLatestSchema()->FindChangeStream("CS");
+  ASSERT_NE(restored_cs, nullptr);
+  EXPECT_EQ(restored_cs->creation_time(), original_ts);
 }
 
 }  // namespace
