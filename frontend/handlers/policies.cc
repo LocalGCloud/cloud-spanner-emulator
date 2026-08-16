@@ -14,10 +14,17 @@
 // limitations under the License.
 //
 
+#include <string>
+
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
+#include "frontend/persistence/metadata_store.h"
+#include "frontend/server/handler.h"
 #include "google/iam/v1/iam_policy.pb.h"
 #include "google/iam/v1/policy.pb.h"
-#include "common/errors.h"
-#include "frontend/server/handler.h"
+#include "googlesql/base/status_macros.h"
 
 namespace iam_api = ::google::iam::v1;
 
@@ -25,12 +32,42 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace frontend {
-
 // Sets the access control policy on a resource.
 absl::Status SetIamPolicy(RequestContext* ctx,
                           const iam_api::SetIamPolicyRequest* request,
                           iam_api::Policy* response) {
-  return error::IAMPoliciesNotSupported();
+  absl::MutexLock transaction_lock(&ctx->env()->admin_transaction_mutex());
+  GOOGLESQL_RETURN_IF_ERROR(
+      ctx->env()->ValidateIamResource(request->resource()));
+
+  *response = request->policy();
+  if (response->etag().empty()) {
+    response->set_etag(absl::StrCat(
+        "localcloud-", absl::ToUnixNanos(ctx->env()->clock()->Now())));
+  }
+  const auto previous = ctx->env()->GetIamPolicy(request->resource());
+  ctx->env()->SetIamPolicy(request->resource(), *response);
+
+  if (auto* metadata = ctx->env()->metadata_store(); metadata != nullptr) {
+    const auto previous_persisted =
+        metadata->GetIamPolicy(request->resource());
+    metadata->SetIamPolicy(request->resource(), *response);
+    absl::Status status = metadata->Save();
+    if (!status.ok()) {
+      if (previous.has_value()) {
+        ctx->env()->SetIamPolicy(request->resource(), *previous);
+      } else {
+        ctx->env()->RemoveIamPolicy(request->resource());
+      }
+      if (previous_persisted.has_value()) {
+        metadata->SetIamPolicy(request->resource(), *previous_persisted);
+      } else {
+        metadata->RemoveIamPolicy(request->resource());
+      }
+      return status;
+    }
+  }
+  return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(InstanceAdmin, SetIamPolicy);
 REGISTER_GRPC_HANDLER(DatabaseAdmin, SetIamPolicy);
@@ -39,7 +76,20 @@ REGISTER_GRPC_HANDLER(DatabaseAdmin, SetIamPolicy);
 absl::Status GetIamPolicy(RequestContext* ctx,
                           const iam_api::GetIamPolicyRequest* request,
                           iam_api::Policy* response) {
-  return error::IAMPoliciesNotSupported();
+  absl::MutexLock transaction_lock(&ctx->env()->admin_transaction_mutex());
+  GOOGLESQL_RETURN_IF_ERROR(
+      ctx->env()->ValidateIamResource(request->resource()));
+
+  if (auto policy = ctx->env()->GetIamPolicy(request->resource());
+      policy.has_value()) {
+    *response = *policy;
+    return absl::OkStatus();
+  }
+
+
+
+  response->Clear();
+  return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(InstanceAdmin, GetIamPolicy);
 REGISTER_GRPC_HANDLER(DatabaseAdmin, GetIamPolicy);
@@ -48,7 +98,14 @@ REGISTER_GRPC_HANDLER(DatabaseAdmin, GetIamPolicy);
 absl::Status TestIamPermissions(
     RequestContext* ctx, const iam_api::TestIamPermissionsRequest* request,
     iam_api::TestIamPermissionsResponse* response) {
-  return error::IAMPoliciesNotSupported();
+  absl::MutexLock transaction_lock(&ctx->env()->admin_transaction_mutex());
+  GOOGLESQL_RETURN_IF_ERROR(
+      ctx->env()->ValidateIamResource(request->resource()));
+  response->clear_permissions();
+  for (const std::string& permission : request->permissions()) {
+    response->add_permissions(permission);
+  }
+  return absl::OkStatus();
 }
 REGISTER_GRPC_HANDLER(InstanceAdmin, TestIamPermissions);
 REGISTER_GRPC_HANDLER(DatabaseAdmin, TestIamPermissions);

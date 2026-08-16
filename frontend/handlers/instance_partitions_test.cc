@@ -15,25 +15,25 @@
 //
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
-#include "google/longrunning/operations.pb.h"
-#include "google/protobuf/empty.pb.h"
-#include "google/spanner/admin/database/v1/spanner_database_admin.pb.h"
-#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
-#include "googlesql/base/testing/status_matchers.h"
-#include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "frontend/common/uris.h"
+#include "gmock/gmock.h"
+#include "google/longrunning/operations.pb.h"
+#include "google/protobuf/empty.pb.h"
+#include "google/spanner/admin/database/v1/spanner_database_admin.pb.h"
+#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
+#include "googlesql/base/status_macros.h"
+#include "googlesql/base/testing/status_matchers.h"
+#include "grpcpp/client_context.h"
+#include "gtest/gtest.h"
 #include "tests/common/proto_matchers.h"
 #include "tests/common/test_env.h"
-#include "googlesql/base/status_macros.h"
-#include "grpcpp/client_context.h"
 
 namespace google {
 namespace spanner {
@@ -69,8 +69,9 @@ class InstancePartitionsApiTest : public test::ServerTest {
     request.mutable_instance()->set_node_count(5);
     grpc::ClientContext context;
     longrunning::Operation operation;
-    GOOGLESQL_RETURN_IF_ERROR(test_env()->instance_admin_client()->CreateInstance(
-        &context, request, &operation));
+    GOOGLESQL_RETURN_IF_ERROR(
+        test_env()->instance_admin_client()->CreateInstance(&context, request,
+                                                            &operation));
     return WaitForOperation(operation.name(), &operation);
   }
 
@@ -157,8 +158,9 @@ class InstancePartitionsApiTest : public test::ServerTest {
       request.add_extra_statements(stmt);
     }
     longrunning::Operation operation;
-    GOOGLESQL_RETURN_IF_ERROR(test_env()->database_admin_client()->CreateDatabase(
-        &context, request, &operation));
+    GOOGLESQL_RETURN_IF_ERROR(
+        test_env()->database_admin_client()->CreateDatabase(&context, request,
+                                                            &operation));
     return WaitForOperation(operation.name(), &operation);
   }
 };
@@ -303,19 +305,70 @@ TEST_F(InstancePartitionsApiTest, CreateInstancePartitionInvalidUnits) {
                                   "for values below 1000")));
 }
 
-TEST_F(InstancePartitionsApiTest, UpdateInstancePartitionReturnsUnimplemented) {
+TEST_F(InstancePartitionsApiTest, UpdatesInstancePartitionDisplayName) {
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("test-partition"));
   instance_api::UpdateInstancePartitionRequest request;
   request.mutable_instance_partition()->set_name(
       MakeInstancePartitionUri(test_instance_uri_, "test-partition"));
+  request.mutable_instance_partition()->set_display_name("Updated partition");
   request.mutable_field_mask()->add_paths("display_name");
 
-  grpc::ClientContext context;
+  grpc::ClientContext update_context;
   longrunning::Operation operation;
-  EXPECT_THAT(test_env()->instance_admin_client()->UpdateInstancePartition(
-                  &context, request, &operation),
-              StatusIs(absl::StatusCode::kUnimplemented,
-                       testing::HasSubstr("does not support updating instance "
-                                          "partitions")));
+  GOOGLESQL_EXPECT_OK(
+      test_env()->instance_admin_client()->UpdateInstancePartition(
+          &update_context, request, &operation));
+
+  instance_api::GetInstancePartitionRequest get_request;
+  get_request.set_name(request.instance_partition().name());
+  instance_api::InstancePartition partition;
+  grpc::ClientContext get_context;
+  GOOGLESQL_EXPECT_OK(test_env()->instance_admin_client()->GetInstancePartition(
+      &get_context, get_request, &partition));
+  EXPECT_EQ(partition.display_name(), "Updated partition");
+}
+
+TEST_F(InstancePartitionsApiTest,
+       UpdateValidatesEveryFieldBeforeMutation) {
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("test-partition"));
+  instance_api::UpdateInstancePartitionRequest request;
+  request.mutable_instance_partition()->set_name(
+      MakeInstancePartitionUri(test_instance_uri_, "test-partition"));
+  request.mutable_instance_partition()->set_display_name("should-not-stick");
+  request.mutable_field_mask()->add_paths("display_name");
+  request.mutable_field_mask()->add_paths("unsupported");
+  longrunning::Operation operation;
+  grpc::ClientContext invalid_mask_context;
+  EXPECT_THAT(
+      test_env()->instance_admin_client()->UpdateInstancePartition(
+          &invalid_mask_context, request, &operation),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+
+  instance_api::InstancePartition partition;
+  GOOGLESQL_EXPECT_OK(GetInstancePartition("test-partition", &partition));
+  EXPECT_EQ(partition.display_name(), "test-partition-display");
+
+  request.mutable_field_mask()->clear_paths();
+  request.mutable_field_mask()->add_paths("processing_units");
+  request.mutable_instance_partition()->set_processing_units(550);
+  grpc::ClientContext invalid_capacity_context;
+  EXPECT_THAT(
+      test_env()->instance_admin_client()->UpdateInstancePartition(
+          &invalid_capacity_context, request, &operation),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+
+  request.mutable_field_mask()->clear_paths();
+  request.mutable_field_mask()->add_paths("node_count");
+  request.mutable_instance_partition()->set_node_count(
+      std::numeric_limits<int32_t>::max());
+  grpc::ClientContext overflow_capacity_context;
+  EXPECT_THAT(
+      test_env()->instance_admin_client()->UpdateInstancePartition(
+          &overflow_capacity_context, request, &operation),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+
+  GOOGLESQL_EXPECT_OK(GetInstancePartition("test-partition", &partition));
+  EXPECT_EQ(partition.node_count(), 1);
 }
 
 TEST_F(InstancePartitionsApiTest, ListInstancePartitionsPagination) {

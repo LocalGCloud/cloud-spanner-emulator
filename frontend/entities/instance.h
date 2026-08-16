@@ -19,9 +19,11 @@
 
 #include <string>
 
-#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
 #include "absl/strings/string_view.h"
+#include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "frontend/common/labels.h"
+#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
 #include "googlesql/base/clock.h"
 
 namespace google {
@@ -49,13 +51,34 @@ class Instance {
     update_time_ = current_time;
   }
 
+  Instance(const std::string& name, const std::string config,
+           const std::string& display_name, int32_t processing_units,
+           Labels labels, absl::Time create_time, absl::Time update_time)
+      : name_(name),
+        config_(config),
+        display_name_(display_name),
+        node_count_(processing_units / 1000),
+        processing_units_(processing_units),
+        labels_(std::move(labels)),
+        create_time_(create_time),
+        update_time_(update_time) {}
+
   // Returns the URI for this instance
   const std::string& instance_uri() const { return name_; }
 
   // Converts this instance object to its proto representation.
   void ToProto(admin::instance::v1::Instance* instance) const;
 
+  void UpdateDisplayName(const std::string& display_name,
+                         absl::Time update_time);
+  void UpdateNodeCount(int32_t node_count, absl::Time update_time);
+  void UpdateProcessingUnits(int32_t processing_units,
+                             absl::Time update_time);
+  void UpdateLabels(Labels labels, absl::Time update_time);
+  void UpdateConfig(const std::string& config, absl::Time update_time);
+
  private:
+  mutable absl::Mutex mu_;
   // The name for this instance.
   std::string name_;
 

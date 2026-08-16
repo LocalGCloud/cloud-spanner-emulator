@@ -64,6 +64,7 @@ cc_library(
     deps = [
         "//backend/database",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
     ],
@@ -80,6 +81,7 @@ cc_library(
     deps = [
         "//frontend/common:labels",
         "//frontend/converters:time",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/strings",
         "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_grpc",
         "@com_google_googlesql//googlesql/base:clock",
@@ -96,6 +98,7 @@ cc_library(
     ],
     deps = [
         "//frontend/converters:time",
+        "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",
         "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_grpc",
         "@com_google_googlesql//googlesql/base:clock",

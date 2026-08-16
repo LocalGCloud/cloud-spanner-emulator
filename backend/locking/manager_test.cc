@@ -26,6 +26,7 @@
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
+#include "absl/synchronization/notification.h"
 #include "absl/time/clock.h"
 #include "backend/common/ids.h"
 
@@ -187,6 +188,63 @@ TEST_F(LockManagerTest, EnsuresSerializationWithParallelTransactions) {
 
   // Expect that the counter was incremented n*k times.
   EXPECT_EQ(n * k, GetValue(absl::InfiniteFuture()));
+}
+
+TEST_F(LockManagerTest, SerializesActionsBetweenCommitTimestamps) {
+  std::unique_ptr<LockHandle> first =
+      manager()->CreateHandle(TransactionID(1),
+                              /*try_abort_fn=*/nullptr, TransactionPriority(1));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(const absl::Time first_timestamp,
+                                 first->ReserveCommitTimestamp());
+
+  std::atomic<bool> first_action_started = false;
+  absl::StatusOr<absl::Time> first_action_timestamp;
+  std::thread first_action([&] {
+    first_action_timestamp = manager()->RunWithCommitSerialization([&] {
+      first_action_started = true;
+      return absl::OkStatus();
+    });
+  });
+  absl::SleepFor(absl::Milliseconds(10));
+  EXPECT_FALSE(first_action_started);
+  GOOGLESQL_EXPECT_OK(first->MarkCommitted());
+  first_action.join();
+  GOOGLESQL_ASSERT_OK(first_action_timestamp.status());
+  EXPECT_LT(first_timestamp, *first_action_timestamp);
+  first->UnlockAll();
+
+  absl::Notification action_started;
+  absl::Notification release_action;
+  absl::StatusOr<absl::Time> serialized_timestamp;
+  std::thread serialized_action([&] {
+    serialized_timestamp = manager()->RunWithCommitSerialization([&] {
+      action_started.Notify();
+      release_action.WaitForNotification();
+      return absl::OkStatus();
+    });
+  });
+  action_started.WaitForNotification();
+
+  std::atomic<bool> later_commit_finished = false;
+  absl::StatusOr<absl::Time> later_commit_timestamp;
+  std::unique_ptr<LockHandle> later =
+      manager()->CreateHandle(TransactionID(2),
+                              /*try_abort_fn=*/nullptr, TransactionPriority(1));
+  std::thread later_commit([&] {
+    later_commit_timestamp = later->ReserveCommitTimestamp();
+    later_commit_finished = true;
+  });
+  absl::SleepFor(absl::Milliseconds(10));
+  EXPECT_FALSE(later_commit_finished);
+  release_action.Notify();
+  serialized_action.join();
+  later_commit.join();
+
+  GOOGLESQL_ASSERT_OK(serialized_timestamp.status());
+  GOOGLESQL_ASSERT_OK(later_commit_timestamp.status());
+  EXPECT_LT(*serialized_timestamp, *later_commit_timestamp);
+  GOOGLESQL_EXPECT_OK(later->MarkCommitted());
+  later->UnlockAll();
 }
 
 }  // namespace

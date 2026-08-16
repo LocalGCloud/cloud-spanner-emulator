@@ -179,6 +179,20 @@ TEST(Operation, SetResponseClearsError) {
       )"));
 }
 
+TEST(Operation, RestoresCompleteProto) {
+  google::longrunning::Operation restored;
+  restored.set_name("projects/123/instances/456/operations/_auto7");
+  restored.set_done(true);
+  restored.mutable_error()->set_code(10);
+  restored.mutable_error()->set_message("restored");
+
+  Operation operation(restored);
+  google::longrunning::Operation actual;
+  operation.ToProto(&actual);
+
+  EXPECT_THAT(actual, test::EqualsProto(restored));
+}
+
 }  // namespace
 
 }  // namespace frontend

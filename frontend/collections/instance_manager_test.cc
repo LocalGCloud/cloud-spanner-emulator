@@ -16,6 +16,8 @@
 
 #include "frontend/collections/instance_manager.h"
 
+#include <limits>
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
@@ -189,6 +191,20 @@ TEST(InstanceManagerTest,
           MatchesRegex(".*Processing units should be "
                        "multiple of 100 for values below 1000 and multiples of "
                        "1000 for values above 1000.*")));
+}
+
+TEST(InstanceManagerTest, CannotCreateInstanceOutsideCapacityRange) {
+  InstanceManager instance_manager;
+  admin::instance::v1::Instance instance_proto;
+  instance_proto.set_node_count(-1);
+  EXPECT_THAT(instance_manager.CreateInstance("projects/123/instances/456",
+                                              instance_proto),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  instance_proto.set_node_count(std::numeric_limits<int32_t>::max());
+  EXPECT_THAT(instance_manager.CreateInstance("projects/123/instances/456",
+                                              instance_proto),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(InstanceManagerTest, GetInstance) {

@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 
+#include <utility>
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
@@ -67,6 +68,11 @@ bool ConsumeInstancePartition(absl::string_view* resource_uri,
 bool ConsumeDatabase(absl::string_view* resource_uri,
                      absl::string_view* database_id) {
   return ConsumeResource("databases/", resource_uri, database_id);
+}
+
+bool ConsumeBackup(absl::string_view* resource_uri,
+                   absl::string_view* backup_id) {
+  return ConsumeResource("backups/", resource_uri, backup_id);
 }
 
 bool ConsumeSession(absl::string_view* resource_uri,
@@ -197,36 +203,55 @@ absl::Status ParseSessionUri(absl::string_view resource_uri,
 
 absl::Status ParseOperationUri(absl::string_view operation_uri,
                                std::string* resource_uri,
-                               absl::string_view* operation_id) {
-  absl::string_view project_id, instance_id, database_id, instance_partition_id;
+                               absl::string_view* operation_id,
+                               OperationResourceType* resource_type) {
+  absl::string_view project_id, instance_id, instance_config_id, database_id,
+      instance_partition_id, backup_id;
   if (!ConsumeProject(&operation_uri, &project_id)) {
     return error::InvalidProjectURI(operation_uri);
   }
-  if (!ConsumeInstance(&operation_uri, &instance_id)) {
-    return error::InvalidInstanceURI(operation_uri);
-  }
-  // Operations may be performed on an instance, an instance partition, or a
-  // database. Call ConsumeDatabase or ConsumeInstancePartition to remove
-  // "databases/<database_id>" or "instancePartitions/<id>" if exists. Proceed
-  // regardless of the returned value.
-  if (ConsumeDatabase(&operation_uri, &database_id)) {
-    if (resource_uri != nullptr) {
-      *resource_uri = MakeDatabaseUri(MakeInstanceUri(project_id, instance_id),
-                                      database_id);
+
+  std::string parsed_resource_uri;
+  if (ConsumeInstance(&operation_uri, &instance_id)) {
+    const std::string instance_uri = MakeInstanceUri(project_id, instance_id);
+    if (ConsumeDatabase(&operation_uri, &database_id)) {
+      parsed_resource_uri = MakeDatabaseUri(instance_uri, database_id);
+      if (resource_type != nullptr) {
+        *resource_type = OperationResourceType::kDatabase;
+      }
+    } else if (ConsumeInstancePartition(&operation_uri,
+                                        &instance_partition_id)) {
+      parsed_resource_uri =
+          MakeInstancePartitionUri(instance_uri, instance_partition_id);
+      if (resource_type != nullptr) {
+        *resource_type = OperationResourceType::kInstancePartition;
+      }
+    } else if (ConsumeBackup(&operation_uri, &backup_id)) {
+      parsed_resource_uri =
+          absl::StrCat(instance_uri, "/backups/", backup_id);
+      if (resource_type != nullptr) {
+        *resource_type = OperationResourceType::kBackup;
+      }
+    } else {
+      parsed_resource_uri = instance_uri;
+      if (resource_type != nullptr) {
+        *resource_type = OperationResourceType::kInstance;
+      }
     }
-  } else if (ConsumeInstancePartition(&operation_uri, &instance_partition_id)) {
-    if (resource_uri != nullptr) {
-      *resource_uri = MakeInstancePartitionUri(
-          MakeInstanceUri(project_id, instance_id), instance_partition_id);
+  } else if (ConsumeInstanceConfig(&operation_uri, &instance_config_id)) {
+    parsed_resource_uri = MakeInstanceConfigUri(project_id, instance_config_id);
+    if (resource_type != nullptr) {
+      *resource_type = OperationResourceType::kInstanceConfig;
     }
   } else {
-    if (resource_uri != nullptr) {
-      *resource_uri = MakeInstanceUri(project_id, instance_id);
-    }
+    return error::InvalidInstanceURI(operation_uri);
   }
 
   if (!ConsumeOperation(&operation_uri, operation_id)) {
     return error::InvalidOperationURI(operation_uri);
+  }
+  if (resource_uri != nullptr) {
+    *resource_uri = std::move(parsed_resource_uri);
   }
   return absl::OkStatus();
 }

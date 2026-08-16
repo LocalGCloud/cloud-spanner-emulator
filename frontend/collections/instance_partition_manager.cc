@@ -17,11 +17,13 @@
 #include "frontend/collections/instance_partition_manager.h"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
@@ -68,10 +70,26 @@ absl::StatusOr<std::shared_ptr<InstancePartition>>
 InstancePartitionManager::CreateInstancePartition(
     const std::string& partition_uri,
     const instance_api::InstancePartition& partition_proto) {
+  const absl::Time now = googlesql_base::Clock::RealClock()->TimeNow();
+  return CreateInstancePartition(partition_uri, partition_proto, now, now);
+}
+
+absl::StatusOr<std::shared_ptr<InstancePartition>>
+InstancePartitionManager::CreateInstancePartition(
+    const std::string& partition_uri,
+    const instance_api::InstancePartition& partition_proto,
+    absl::Time create_time, absl::Time update_time) {
   absl::MutexLock lock(mu_);
   if (partition_proto.node_count() > 0 &&
       partition_proto.processing_units() > 0) {
     return error::InvalidCreateInstancePartitionRequestUnitsNotBoth();
+  }
+  if (partition_proto.node_count() < 0 ||
+      partition_proto.node_count() >
+          std::numeric_limits<int32_t>::max() / 1000 ||
+      partition_proto.processing_units() < 0) {
+    return absl::InvalidArgumentError(
+        "Node count or processing units is outside the valid range");
   }
   if (partition_proto.processing_units() > 0 &&
       partition_proto.processing_units() < 1000 &&
@@ -93,7 +111,7 @@ InstancePartitionManager::CreateInstancePartition(
        std::make_shared<InstancePartition>(
            partition_uri, partition_proto.config(),
            partition_proto.display_name(), partition_proto.node_count(),
-           processing_units, googlesql_base::Clock::RealClock())});
+           processing_units, create_time, update_time)});
   if (!inserted.second) {
     return error::InstancePartitionAlreadyExists(partition_uri);
   }

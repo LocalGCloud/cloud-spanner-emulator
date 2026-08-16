@@ -17,6 +17,7 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_READ_WRITE_TRANSACTION_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_READ_WRITE_TRANSACTION_H_
 
+#include <atomic>
 #include <memory>
 #include <queue>
 
@@ -84,7 +85,8 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
                        TransactionID transaction_id, Clock* clock,
                        Storage* storage, LockManager* lock_manager,
                        const VersionedCatalog* const versioned_catalog,
-                       ActionManager* action_manager);
+                       ActionManager* action_manager,
+                       const std::atomic<bool>* restore_required = nullptr);
 
   absl::Status Read(const ReadArg& read_arg,
                     std::unique_ptr<RowCursor>* cursor) override
@@ -197,6 +199,10 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
 
   // Action Manager for the transaction.
   ActionManager* action_manager_;
+
+  // Database-wide recovery gate shared with transactions created before a
+  // durable schema promotion failure.
+  const std::atomic<bool>* restore_required_;
   ActionRegistry* action_registry_;
   std::unique_ptr<ActionContext> action_context_;
 

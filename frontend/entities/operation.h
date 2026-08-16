@@ -19,11 +19,10 @@
 
 #include <string>
 
-#include "google/longrunning/operations.pb.h"
-#include "google/protobuf/message.h"
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
-#include "absl/status/status.h"
+#include "google/longrunning/operations.pb.h"
+#include "google/protobuf/message.h"
 
 namespace google {
 namespace spanner {
@@ -40,11 +39,12 @@ namespace frontend {
 //    https://cloud.google.com/spanner/docs/reference/rpc/google.longrunning#google.longrunning.Operation
 class Operation {
  public:
-  // Constructs an empty operation.
+  // Constructs a new empty operation or restores an existing operation proto.
   explicit Operation(const std::string& operation_uri);
-
+  explicit Operation(const google::longrunning::Operation& operation);
   // Sets the metadata for an operation.
-  void SetMetadata(const google::protobuf::Message& metadata) ABSL_LOCKS_EXCLUDED(mu_);
+  void SetMetadata(const google::protobuf::Message& metadata)
+      ABSL_LOCKS_EXCLUDED(mu_);
 
   // Sets the error for an operation (puts the operation in a done state).
   // If a response has been set previously, it will be cleared.
@@ -52,27 +52,16 @@ class Operation {
 
   // Sets the response for an operation (puts the operation in a done state).
   // If an error status was set previously, it will be cleared.
-  void SetResponse(const google::protobuf::Message& response) ABSL_LOCKS_EXCLUDED(mu_);
+  void SetResponse(const google::protobuf::Message& response)
+      ABSL_LOCKS_EXCLUDED(mu_);
 
-  // Converts an operation to its proto version.
-  void ToProto(google::longrunning::Operation* operation_pb)
+  // Copies the complete operation proto.
+  void ToProto(google::longrunning::Operation* operation_pb) const
       ABSL_LOCKS_EXCLUDED(mu_);
 
  private:
-  // The immutable URI for an operation.
-  const std::string operation_uri_;
-
-  // Mutex to guard state below.
-  absl::Mutex mu_;
-
-  // The metadata for this operation.
-  std::unique_ptr<google::protobuf::Message> metadata_ ABSL_GUARDED_BY(mu_);
-
-  // The response for this operation if the operation was successful.
-  std::unique_ptr<google::protobuf::Message> response_ ABSL_GUARDED_BY(mu_);
-
-  // The status for this operation if this operation was not successful.
-  absl::Status status_ ABSL_GUARDED_BY(mu_);
+  mutable absl::Mutex mu_;
+  google::longrunning::Operation operation_ ABSL_GUARDED_BY(mu_);
 };
 
 }  // namespace frontend

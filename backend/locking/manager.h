@@ -17,6 +17,7 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_LOCKING_MANAGER_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_LOCKING_MANAGER_H_
 
+#include <functional>
 #include <memory>
 
 #include "absl/base/thread_annotations.h"
@@ -56,6 +57,14 @@ class LockManager {
 
   // Returns the timestamp at which last schema update or commit completed.
   absl::Time LastCommitTimestamp();
+
+  // Runs an action after every previously timestamped commit has completed and
+  // prevents later commits from reserving a timestamp until the action
+  // finishes. Returns a timestamp that externally orders the action between
+  // those two sets of commits.
+  absl::StatusOr<absl::Time> RunWithCommitSerialization(
+      const std::function<absl::Status()>& action)
+      ABSL_LOCKS_EXCLUDED(mu_);
 
  private:
   // LockHandle simply forwards requests to the LockManager.

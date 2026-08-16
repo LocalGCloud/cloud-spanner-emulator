@@ -20,8 +20,9 @@
 #include <cstdint>
 #include <string>
 
-#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
+#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
 #include "googlesql/base/clock.h"
 
 namespace google {
@@ -38,6 +39,10 @@ class InstancePartition {
   InstancePartition(const std::string& name, const std::string& config,
                     const std::string& display_name, int32_t node_count,
                     int32_t processing_units, googlesql_base::Clock* clock);
+  InstancePartition(const std::string& name, const std::string& config,
+                    const std::string& display_name, int32_t node_count,
+                    int32_t processing_units, absl::Time create_time,
+                    absl::Time update_time);
 
   // Returns the URI for this instance partition.
   const std::string& partition_uri() const { return name_; }
@@ -51,7 +56,14 @@ class InstancePartition {
   // Converts this instance partition object to its proto representation.
   void ToProto(admin::instance::v1::InstancePartition* partition) const;
 
+  void UpdateDisplayName(const std::string& display_name,
+                         absl::Time update_time);
+  void UpdateNodeCount(int32_t node_count, absl::Time update_time);
+  void UpdateProcessingUnits(int32_t processing_units,
+                             absl::Time update_time);
+
  private:
+  mutable absl::Mutex mu_;
   // The name (URI) for this instance partition.
   std::string name_;
 

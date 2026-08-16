@@ -162,6 +162,11 @@ class SpannerService : public spanner_api::Spanner::Service {
   DEFINE_GRPC_METHOD(Spanner, BatchWrite, spanner_api::BatchWriteRequest,
                      grpc::ServerWriter<v1::BatchWriteResponse>);
 
+  // Client cache.
+  DEFINE_GRPC_METHOD(Spanner, FetchCacheUpdate,
+                     spanner_api::FetchCacheUpdateRequest,
+                     grpc::ServerWriter<spanner_api::CacheUpdate>);
+
   // Partitions.
   DEFINE_GRPC_METHOD(Spanner, PartitionRead, spanner_api::PartitionReadRequest,
                      spanner_api::PartitionResponse);
@@ -196,8 +201,51 @@ class DatabaseAdminService : public database_api::DatabaseAdmin::Service {
                      operations_api::Operation);
   DEFINE_GRPC_METHOD(DatabaseAdmin, GetDatabase,
                      database_api::GetDatabaseRequest, database_api::Database);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, UpdateDatabase,
+                     database_api::UpdateDatabaseRequest,
+                     operations_api::Operation);
   DEFINE_GRPC_METHOD(DatabaseAdmin, DropDatabase,
                      database_api::DropDatabaseRequest, protobuf_api::Empty);
+
+  // Backups.
+  DEFINE_GRPC_METHOD(DatabaseAdmin, CreateBackup,
+                     database_api::CreateBackupRequest,
+                     operations_api::Operation);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, CopyBackup,
+                     database_api::CopyBackupRequest,
+                     operations_api::Operation);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, GetBackup,
+                     database_api::GetBackupRequest, database_api::Backup);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, ListBackups,
+                     database_api::ListBackupsRequest,
+                     database_api::ListBackupsResponse);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, UpdateBackup,
+                     database_api::UpdateBackupRequest, database_api::Backup);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, DeleteBackup,
+                     database_api::DeleteBackupRequest, protobuf_api::Empty);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, RestoreDatabase,
+                     database_api::RestoreDatabaseRequest,
+                     operations_api::Operation);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, ListBackupOperations,
+                     database_api::ListBackupOperationsRequest,
+                     database_api::ListBackupOperationsResponse);
+
+  // Backup schedules.
+  DEFINE_GRPC_METHOD(DatabaseAdmin, CreateBackupSchedule,
+                     database_api::CreateBackupScheduleRequest,
+                     database_api::BackupSchedule);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, GetBackupSchedule,
+                     database_api::GetBackupScheduleRequest,
+                     database_api::BackupSchedule);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, ListBackupSchedules,
+                     database_api::ListBackupSchedulesRequest,
+                     database_api::ListBackupSchedulesResponse);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, UpdateBackupSchedule,
+                     database_api::UpdateBackupScheduleRequest,
+                     database_api::BackupSchedule);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, DeleteBackupSchedule,
+                     database_api::DeleteBackupScheduleRequest,
+                     protobuf_api::Empty);
 
   // Schema.
   DEFINE_GRPC_METHOD(DatabaseAdmin, UpdateDatabaseDdl,
@@ -206,6 +254,20 @@ class DatabaseAdminService : public database_api::DatabaseAdmin::Service {
   DEFINE_GRPC_METHOD(DatabaseAdmin, GetDatabaseDdl,
                      database_api::GetDatabaseDdlRequest,
                      database_api::GetDatabaseDdlResponse);
+
+  // Extended database administration.
+  DEFINE_GRPC_METHOD(DatabaseAdmin, AddSplitPoints,
+                     database_api::AddSplitPointsRequest,
+                     database_api::AddSplitPointsResponse);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, InternalUpdateGraphOperation,
+                     database_api::InternalUpdateGraphOperationRequest,
+                     database_api::InternalUpdateGraphOperationResponse);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, ListDatabaseOperations,
+                     database_api::ListDatabaseOperationsRequest,
+                     database_api::ListDatabaseOperationsResponse);
+  DEFINE_GRPC_METHOD(DatabaseAdmin, ListDatabaseRoles,
+                     database_api::ListDatabaseRolesRequest,
+                     database_api::ListDatabaseRolesResponse);
 
   // Policies.
   DEFINE_GRPC_METHOD(InstanceAdmin, SetIamPolicy, iam_api::SetIamPolicyRequest,
@@ -232,6 +294,18 @@ class InstanceAdminService : public instance_api::InstanceAdmin::Service {
   DEFINE_GRPC_METHOD(InstanceAdmin, GetInstanceConfig,
                      instance_api::GetInstanceConfigRequest,
                      instance_api::InstanceConfig);
+  DEFINE_GRPC_METHOD(InstanceAdmin, CreateInstanceConfig,
+                     instance_api::CreateInstanceConfigRequest,
+                     operations_api::Operation);
+  DEFINE_GRPC_METHOD(InstanceAdmin, UpdateInstanceConfig,
+                     instance_api::UpdateInstanceConfigRequest,
+                     operations_api::Operation);
+  DEFINE_GRPC_METHOD(InstanceAdmin, DeleteInstanceConfig,
+                     instance_api::DeleteInstanceConfigRequest,
+                     protobuf_api::Empty);
+  DEFINE_GRPC_METHOD(InstanceAdmin, ListInstanceConfigOperations,
+                     instance_api::ListInstanceConfigOperationsRequest,
+                     instance_api::ListInstanceConfigOperationsResponse);
 
   // Instances.
   DEFINE_GRPC_METHOD(InstanceAdmin, ListInstances,
@@ -247,6 +321,9 @@ class InstanceAdminService : public instance_api::InstanceAdmin::Service {
                      operations_api::Operation);
   DEFINE_GRPC_METHOD(InstanceAdmin, DeleteInstance,
                      instance_api::DeleteInstanceRequest, protobuf_api::Empty);
+  DEFINE_GRPC_METHOD(InstanceAdmin, MoveInstance,
+                     instance_api::MoveInstanceRequest,
+                     operations_api::Operation);
 
   // Instance partitions.
   DEFINE_GRPC_METHOD(InstanceAdmin, ListInstancePartitions,
@@ -314,16 +391,30 @@ Server::Server(std::unique_ptr<ServerEnv> env)
       spanner_service_(new SpannerService(env_.get())) {}
 
 // Server lifecycle methods.
+std::unique_ptr<Server> Server::CreateUnstarted() {
+  return absl::WrapUnique(new Server(std::make_unique<ServerEnv>()));
+}
+
 std::unique_ptr<Server> Server::Create(const Server::Options& options) {
-  auto env = std::make_unique<ServerEnv>();
-  std::unique_ptr<Server> server = absl::WrapUnique(new Server(std::move(env)));
+  std::unique_ptr<Server> server = CreateUnstarted();
+  if (!server->Start(options)) {
+    return nullptr;
+  }
+  return server;
+}
+
+bool Server::Start(const Server::Options& options) {
+  if (grpc_server_ != nullptr) {
+    ABSL_LOG(ERROR) << "Server has already been started.";
+    return false;
+  }
   ::grpc::ServerBuilder builder;
 
   // Configure server address.
-  server->host_ = options.server_address.substr(
+  host_ = options.server_address.substr(
       0, options.server_address.find_last_of(':'));
   builder.AddListeningPort(options.server_address,
-                           ::grpc::InsecureServerCredentials(), &server->port_);
+                           ::grpc::InsecureServerCredentials(), &port_);
 
   // Configure server message limits.
   builder.AddChannelArgument(GRPC_ARG_MAX_SEND_MESSAGE_LENGTH,
@@ -332,19 +423,19 @@ std::unique_ptr<Server> Server::Create(const Server::Options& options) {
                              limits::kMaxGRPCIncomingMessageSize);
 
   // Configure services exported on this server.
-  builder.RegisterService(server->spanner_service_.get())
-      .RegisterService(server->database_admin_service_.get())
-      .RegisterService(server->instance_admin_service_.get())
-      .RegisterService(server->operations_service_.get());
+  builder.RegisterService(spanner_service_.get())
+      .RegisterService(database_admin_service_.get())
+      .RegisterService(instance_admin_service_.get())
+      .RegisterService(operations_service_.get());
 
-  // Actually start the server.
-  server->grpc_server_ = builder.BuildAndStart();
-  if (server->port_ < 0) {
+  grpc_server_ = builder.BuildAndStart();
+  if (grpc_server_ == nullptr || port_ < 0) {
     ABSL_LOG(ERROR) << "Failed to bind to address: " << options.server_address;
-    return nullptr;
+    grpc_server_.reset();
+    port_ = -1;
+    return false;
   }
-
-  return server;
+  return true;
 }
 
 void Server::WaitForShutdown() { grpc_server_->Wait(); }

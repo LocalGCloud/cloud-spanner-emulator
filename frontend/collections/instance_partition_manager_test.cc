@@ -16,6 +16,8 @@
 
 #include "frontend/collections/instance_partition_manager.h"
 
+#include <limits>
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
@@ -82,6 +84,25 @@ TEST(InstancePartitionManagerTest,
           proto),
       StatusIs(absl::StatusCode::kInvalidArgument,
                MatchesRegex(".*Processing units should be multiple of 100.*")));
+}
+
+TEST(InstancePartitionManagerTest,
+     CannotCreateInstancePartitionOutsideCapacityRange) {
+  InstancePartitionManager manager;
+  instance_api::InstancePartition proto;
+  proto.set_node_count(-1);
+  EXPECT_THAT(
+      manager.CreateInstancePartition(
+          "projects/123/instances/456/instancePartitions/test-partition",
+          proto),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+
+  proto.set_node_count(std::numeric_limits<int32_t>::max());
+  EXPECT_THAT(
+      manager.CreateInstancePartition(
+          "projects/123/instances/456/instancePartitions/test-partition",
+          proto),
+      StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST(InstancePartitionManagerTest, GetInstancePartition) {

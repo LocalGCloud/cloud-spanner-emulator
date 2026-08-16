@@ -70,10 +70,19 @@ absl::Status ParseSessionUri(absl::string_view resource_uri,
                              absl::string_view* database_id,
                              absl::string_view* session_id);
 
+enum class OperationResourceType {
+  kInstance,
+  kDatabase,
+  kInstancePartition,
+  kBackup,
+  kInstanceConfig,
+};
+
 // Parses an operation URI into its components.
-absl::Status ParseOperationUri(absl::string_view operation_uri,
-                               std::string* resource_uri,
-                               absl::string_view* operation_id);
+absl::Status ParseOperationUri(
+    absl::string_view operation_uri, std::string* resource_uri,
+    absl::string_view* operation_id,
+    OperationResourceType* resource_type = nullptr);
 
 // Constructs a project URI from its components.
 std::string MakeProjectUri(absl::string_view project_id);

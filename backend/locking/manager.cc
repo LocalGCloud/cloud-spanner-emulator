@@ -148,6 +148,18 @@ absl::Time LockManager::LastCommitTimestamp() {
   return last_commit_timestamp_;
 }
 
+absl::StatusOr<absl::Time> LockManager::RunWithCommitSerialization(
+    const std::function<absl::Status()>& action) {
+  absl::MutexLock lock(mu_);
+  while (pending_commit_timestamp_ != absl::InfiniteFuture()) {
+    pending_commit_cvar_.Wait(&mu_);
+  }
+  const absl::Time serialized_timestamp = clock_->Now();
+  absl::Status status = action();
+  if (!status.ok()) return status;
+  return serialized_timestamp;
+}
+
 }  // namespace backend
 }  // namespace emulator
 }  // namespace spanner

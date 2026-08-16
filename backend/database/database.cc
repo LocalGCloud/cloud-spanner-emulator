@@ -16,16 +16,17 @@
 
 #include "backend/database/database.h"
 
+#include <filesystem>
 #include <memory>
 #include <thread>  // NOLINT
+#include <system_error>
 #include <utility>
 
-#include "google/spanner/admin/database/v1/common.pb.h"
-#include "googlesql/public/types/type_factory.h"
 #include "absl/functional/bind_front.h"
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -50,8 +51,9 @@
 #include "common/clock.h"
 #include "common/config.h"
 #include "common/errors.h"
+#include "google/spanner/admin/database/v1/common.pb.h"
 #include "googlesql/base/status_macros.h"
-#include "absl/status/status.h"
+#include "googlesql/public/types/type_factory.h"
 
 namespace google {
 namespace spanner {
@@ -73,28 +75,83 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
     Clock* clock, std::string_view database_id,
     const SchemaChangeOperation& schema_change_operation,
     const IdCounterValues& id_counters) {
+  return Create(clock, database_id, schema_change_operation, id_counters,
+                database_id);
+}
+
+absl::StatusOr<std::string> Database::PersistentStorageDirectory(
+    std::string_view data_dir, std::string_view storage_namespace) {
+  const std::filesystem::path namespace_path{std::string(storage_namespace)};
+  if (namespace_path.empty() || namespace_path.is_absolute() ||
+      namespace_path.lexically_normal() != namespace_path) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid persistent storage namespace: ",
+                     storage_namespace));
+  }
+  std::filesystem::path current{std::string(data_dir)};
+  for (const auto& component : namespace_path) {
+    if (component == "." || component == "..") {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid persistent storage namespace: ",
+                       storage_namespace));
+    }
+    current /= component;
+    std::error_code error;
+    const std::filesystem::file_status status =
+        std::filesystem::symlink_status(current, error);
+    if (error == std::errc::no_such_file_or_directory) {
+      error.clear();
+    } else if (error) {
+      return absl::InternalError(absl::StrCat(
+          "Failed to inspect persistent database path ", current.string(),
+          ": ", error.message()));
+    }
+    if (std::filesystem::exists(status) &&
+        std::filesystem::is_symlink(status)) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Persistent database path contains a symbolic link: ",
+          current.string()));
+    }
+  }
+  return (std::filesystem::path(std::string(data_dir)) / namespace_path /
+          "storage")
+      .string();
+}
+
+absl::Status Database::DeletePersistentStorageDirectory(
+    std::string_view data_dir, std::string_view storage_namespace) {
+  if (data_dir.empty()) return absl::OkStatus();
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      const std::string storage_directory,
+      PersistentStorageDirectory(data_dir, storage_namespace));
+  const std::filesystem::path database_root =
+      std::filesystem::path(storage_directory).parent_path();
+  std::error_code error;
+  std::filesystem::remove_all(database_root, error);
+  if (error) {
+    return absl::InternalError(
+        absl::StrCat("Failed to remove persistent database directory ",
+                     database_root.string(), ": ", error.message()));
+  }
+  return absl::OkStatus();
+}
+
+absl::StatusOr<std::unique_ptr<Database>> Database::Create(
+    Clock* clock, std::string_view database_id,
+    const SchemaChangeOperation& schema_change_operation,
+    const IdCounterValues& id_counters,
+    std::string_view storage_namespace) {
   auto database = absl::WrapUnique(new Database());
   database->clock_ = clock;
   database->database_id_ = database_id;
 
-  // Seed ID generators from persisted values so that restored schemas get
-  // the same table/column IDs that were used to write data to LevelDB.
-  if (id_counters.table_id > 0) {
-    database->table_id_generator_.Seed(id_counters.table_id);
-  }
-  if (id_counters.column_id > 0) {
-    database->column_id_generator_.Seed(id_counters.column_id);
-  }
-  if (id_counters.change_stream_id > 0) {
-    database->change_stream_id_generator_.Seed(id_counters.change_stream_id);
-  }
-
   std::string data_dir = config::data_dir();
   if (!data_dir.empty()) {
-    // Use persistent storage with a per-database subdirectory.
-    std::string db_data_dir =
-        absl::StrCat(data_dir, "/", database_id, "/storage");
-    auto persistent_storage = PersistentStorage::Create(db_data_dir);
+    // Use persistent storage with a caller-selected per-database namespace.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        const std::string storage_directory,
+        PersistentStorageDirectory(data_dir, storage_namespace));
+    auto persistent_storage = PersistentStorage::Create(storage_directory);
     if (!persistent_storage.ok()) {
       return persistent_storage.status();
     }
@@ -121,13 +178,33 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
       database->versioned_catalog_ = std::make_unique<VersionedCatalog>();
     }
   } else {
+    auto context = database->GetSchemaChangeContext();
+    if (schema_change_operation.schema_change_timestamp !=
+        absl::InfinitePast()) {
+      context.schema_change_timestamp =
+          schema_change_operation.schema_change_timestamp;
+    }
     SchemaUpdater updater;
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::unique_ptr<const Schema> schema,
-        updater.CreateSchemaFromDDL(schema_change_operation,
-                                    database->GetSchemaChangeContext()));
+        updater.CreateSchemaFromDDL(schema_change_operation, context));
     database->versioned_catalog_ =
         std::make_unique<VersionedCatalog>(std::move(schema));
+  }
+
+  // Replaying the persisted DDL must start from zero so schema object IDs
+  // match the keys already stored in LevelDB. Afterwards advance generators
+  // to the persisted high-water marks, which may include dropped objects that
+  // no longer appear in the current DDL.
+  if (id_counters.table_id > database->table_id_generator_.current_value()) {
+    database->table_id_generator_.Seed(id_counters.table_id);
+  }
+  if (id_counters.column_id > database->column_id_generator_.current_value()) {
+    database->column_id_generator_.Seed(id_counters.column_id);
+  }
+  if (id_counters.change_stream_id >
+      database->change_stream_id_generator_.current_value()) {
+    database->change_stream_id_generator_.Seed(id_counters.change_stream_id);
   }
 
   database->query_engine_ = std::make_unique<QueryEngine>(
@@ -158,20 +235,79 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
 
   return database;
 }
+
+absl::StatusOr<std::unique_ptr<Database>> Database::Create(
+    Clock* clock, std::string_view database_id,
+    const std::vector<SchemaChangeOperation>& schema_change_operations,
+    const IdCounterValues& id_counters,
+    std::string_view storage_namespace) {
+  const SchemaChangeOperation empty_operation;
+  const SchemaChangeOperation& initial_operation =
+      schema_change_operations.empty() ? empty_operation
+                                       : schema_change_operations.front();
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::unique_ptr<Database> database,
+      Create(clock, database_id, initial_operation, IdCounterValues{},
+             storage_namespace));
+  for (std::size_t index = 1; index < schema_change_operations.size();
+       ++index) {
+    const SchemaChangeOperation& operation = schema_change_operations[index];
+    if (operation.statements.empty()) continue;
+    int successful_statements = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_RETURN_IF_ERROR(database->UpdateSchema(
+        operation, &successful_statements, &commit_timestamp,
+        &backfill_status));
+    if (successful_statements != operation.statements.size()) {
+      return absl::DataLossError(
+          "Persisted schema-change batch was only partially replayed");
+    }
+    GOOGLESQL_RETURN_IF_ERROR(backfill_status);
+  }
+  if (id_counters.table_id > database->table_id_generator_.current_value()) {
+    database->table_id_generator_.Seed(id_counters.table_id);
+  }
+  if (id_counters.column_id >
+      database->column_id_generator_.current_value()) {
+    database->column_id_generator_.Seed(id_counters.column_id);
+  }
+  if (id_counters.change_stream_id >
+      database->change_stream_id_generator_.current_value()) {
+    database->change_stream_id_generator_.Seed(id_counters.change_stream_id);
+  }
+  return database;
+}
 absl::StatusOr<std::unique_ptr<ReadOnlyTransaction>>
 Database::CreateReadOnlyTransaction(const ReadOnlyOptions& options) {
+  if (restore_required()) {
+    return absl::FailedPreconditionError(
+        "Database recovery is required before serving transactions");
+  }
   return std::make_unique<ReadOnlyTransaction>(
       options, transaction_id_generator_.NextId(), clock_, storage_.get(),
-      lock_manager_.get(), versioned_catalog_.get());
+      lock_manager_.get(), versioned_catalog_.get(), &restore_required_);
 }
 
 absl::StatusOr<std::unique_ptr<ReadWriteTransaction>>
 Database::CreateReadWriteTransaction(const ReadWriteOptions& options,
                                      const RetryState& retry_state) {
+  if (restore_required()) {
+    return absl::FailedPreconditionError(
+        "Database recovery is required before serving transactions");
+  }
   return std::make_unique<ReadWriteTransaction>(
       options, retry_state, transaction_id_generator_.NextId(), clock_,
       storage_.get(), lock_manager_.get(), versioned_catalog_.get(),
-      action_manager_.get());
+      action_manager_.get(), &restore_required_);
+}
+
+void Database::MarkRestoreRequired() {
+  restore_required_.store(true, std::memory_order_release);
+}
+
+bool Database::restore_required() const {
+  return restore_required_.load(std::memory_order_acquire);
 }
 
 SchemaChangeContext Database::GetSchemaChangeContext() {
@@ -189,6 +325,35 @@ absl::Status Database::UpdateSchema(
     const SchemaChangeOperation& schema_change_operation,
     int* num_succesful_statements, absl::Time* commit_timestamp,
     absl::Status* backfill_status) {
+  return UpdateSchemaInternal(schema_change_operation, nullptr, nullptr,
+                              nullptr, num_succesful_statements,
+                              commit_timestamp, backfill_status);
+}
+
+absl::Status Database::UpdateSchemaWithRollbackCheckpoint(
+    const SchemaChangeOperation& schema_change_operation,
+    const std::string& rollback_directory,
+    const std::function<absl::Status()>& rollback_checkpoint_ready,
+    const std::function<absl::Status()>& schema_change_applied,
+    int* num_succesful_statements, absl::Time* commit_timestamp,
+    absl::Status* backfill_status) {
+  return UpdateSchemaInternal(
+      schema_change_operation, &rollback_directory,
+      &rollback_checkpoint_ready, &schema_change_applied,
+      num_succesful_statements, commit_timestamp, backfill_status);
+}
+
+absl::Status Database::UpdateSchemaInternal(
+    const SchemaChangeOperation& schema_change_operation,
+    const std::string* rollback_directory,
+    const std::function<absl::Status()>* rollback_checkpoint_ready,
+    const std::function<absl::Status()>* schema_change_applied,
+    int* num_succesful_statements, absl::Time* commit_timestamp,
+    absl::Status* backfill_status) {
+  if (restore_required()) {
+    return absl::FailedPreconditionError(
+        "Database recovery is required before applying schema changes");
+  }
   if (schema_change_operation.statements.empty()) {
     return error::UpdateDatabaseMissingStatements();
   }
@@ -198,21 +363,34 @@ absl::Status Database::UpdateSchema(
   ScopedSchemaChangeLock lock{transaction_id_generator_.NextId(),
                               lock_manager_.get()};
   GOOGLESQL_RETURN_IF_ERROR(lock.Wait());
+  if (rollback_directory != nullptr) {
+    auto checkpoint = CreateBackupCheckpoint(*rollback_directory);
+    if (!checkpoint.ok()) return checkpoint.status();
+    GOOGLESQL_RETURN_IF_ERROR((*rollback_checkpoint_ready)());
+  }
 
   // Reserve a commit timestamp for the schema changes. Even if the
   // schema change fails, it will result in a no-op commit that will
   // be invisible to other read-only/read-write transactions.
-  GOOGLESQL_ASSIGN_OR_RETURN(auto update_timestamp, lock.ReserveCommitTimestamp());
+  GOOGLESQL_ASSIGN_OR_RETURN(auto update_timestamp,
+                             lock.ReserveCommitTimestamp());
+  // Recovery replay carries the originally committed timestamps so
+  // time-based schema state (for example change stream creation times)
+  // comes back exactly as it was before the restart.
+  if (schema_change_operation.schema_change_timestamp !=
+      absl::InfinitePast()) {
+    update_timestamp = schema_change_operation.schema_change_timestamp;
+  }
 
   auto context = GetSchemaChangeContext();
   context.schema_change_timestamp = update_timestamp;
   const Schema* existing_schema = versioned_catalog_->GetLatestSchema();
   SchemaUpdater updater;
-  GOOGLESQL_ASSIGN_OR_RETURN(auto result,
-                   updater.UpdateSchemaFromDDL(
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      auto result, updater.UpdateSchemaFromDDL(
                        existing_schema, schema_change_operation, context));
   *commit_timestamp = update_timestamp;
-  *num_succesful_statements = result.num_successful_statements;
+  *num_succesful_statements = result.num_successful_input_statements;
   *backfill_status = result.backfill_status;
 
   // We update the schema even if the backfill status was not OK, the returned
@@ -240,12 +418,27 @@ absl::Status Database::UpdateSchema(
   storage_->CleanUpDeletedTables(update_timestamp);
   storage_->CleanUpDeletedColumns(update_timestamp);
   versioned_catalog_->RemoveExpiredSchemas(update_timestamp);
+  if (schema_change_applied != nullptr) {
+    GOOGLESQL_RETURN_IF_ERROR((*schema_change_applied)());
+  }
 
   return absl::OkStatus();
 }
 
 const Schema* Database::GetLatestSchema() const {
   return versioned_catalog_->GetLatestSchema();
+}
+
+absl::StatusOr<absl::Time> Database::CreateBackupCheckpoint(
+    const std::string& output_dir) const {
+  const auto* persistent_storage =
+      dynamic_cast<const PersistentStorage*>(storage_.get());
+  if (persistent_storage == nullptr) {
+    return absl::FailedPreconditionError(
+        "Native backups require --data_dir persistent storage");
+  }
+  return lock_manager_->RunWithCommitSerialization(
+      [&] { return persistent_storage->CreateCheckpoint(output_dir); });
 }
 
 Database::IdCounterValues Database::GetIdCounterValues() const {

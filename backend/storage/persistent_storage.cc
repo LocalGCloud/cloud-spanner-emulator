@@ -16,6 +16,8 @@
 
 #include "backend/storage/persistent_storage.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // C++17
@@ -26,8 +28,6 @@
 #include <utility>
 #include <vector>
 
-#include "googlesql/public/value.h"
-#include "googlesql/base/status_macros.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -36,6 +36,8 @@
 #include "backend/storage/key_codec.h"
 #include "backend/storage/value_codec.h"
 #include "common/errors.h"
+#include "googlesql/base/status_macros.h"
+#include "googlesql/public/value.h"
 #include "leveldb/db.h"
 #include "leveldb/iterator.h"
 #include "leveldb/options.h"
@@ -53,12 +55,9 @@ static constexpr char kExistsColumn[] = "_exists";
 
 absl::Status LevelDBStatusToAbsl(const leveldb::Status& status) {
   if (status.ok()) return absl::OkStatus();
-  if (status.IsNotFound())
-    return absl::NotFoundError(status.ToString());
-  if (status.IsCorruption())
-    return absl::DataLossError(status.ToString());
-  if (status.IsIOError())
-    return absl::UnavailableError(status.ToString());
+  if (status.IsNotFound()) return absl::NotFoundError(status.ToString());
+  if (status.IsCorruption()) return absl::DataLossError(status.ToString());
+  if (status.IsIOError()) return absl::UnavailableError(status.ToString());
   if (status.IsNotSupportedError())
     return absl::UnimplementedError(status.ToString());
   if (status.IsInvalidArgument())
@@ -86,8 +85,7 @@ bool ReadLengthPrefix(const char* data, size_t data_size, size_t offset,
   const auto* p = reinterpret_cast<const unsigned char*>(data + offset);
   *len = (static_cast<uint32_t>(p[0]) << 24) |
          (static_cast<uint32_t>(p[1]) << 16) |
-         (static_cast<uint32_t>(p[2]) << 8) |
-         static_cast<uint32_t>(p[3]);
+         (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
   return true;
 }
 
@@ -146,6 +144,53 @@ absl::Status CheckIteratorStatus(const leveldb::Iterator& it) {
   return absl::OkStatus();
 }
 
+class SnapshotGuard {
+ public:
+  explicit SnapshotGuard(leveldb::DB* db)
+      : db_(db), snapshot_(db == nullptr ? nullptr : db->GetSnapshot()) {}
+
+  SnapshotGuard(const SnapshotGuard&) = delete;
+  SnapshotGuard& operator=(const SnapshotGuard&) = delete;
+
+  ~SnapshotGuard() {
+    if (db_ != nullptr && snapshot_ != nullptr) {
+      db_->ReleaseSnapshot(snapshot_);
+    }
+  }
+
+  const leveldb::Snapshot* get() const { return snapshot_; }
+
+  const leveldb::Snapshot* Release() {
+    return std::exchange(snapshot_, nullptr);
+  }
+
+ private:
+  leveldb::DB* db_;
+  const leveldb::Snapshot* snapshot_;
+};
+
+class DirectoryCleanupGuard {
+ public:
+  explicit DirectoryCleanupGuard(std::filesystem::path path)
+      : path_(std::move(path)) {}
+
+  DirectoryCleanupGuard(const DirectoryCleanupGuard&) = delete;
+  DirectoryCleanupGuard& operator=(const DirectoryCleanupGuard&) = delete;
+
+  ~DirectoryCleanupGuard() {
+    if (armed_) {
+      std::error_code ignored;
+      std::filesystem::remove_all(path_, ignored);
+    }
+  }
+
+  void Disarm() { armed_ = false; }
+
+ private:
+  std::filesystem::path path_;
+  bool armed_ = true;
+};
+
 }  // namespace
 
 // A StorageIterator wrapper that releases a LevelDB snapshot on destruction.
@@ -196,21 +241,111 @@ absl::StatusOr<std::unique_ptr<PersistentStorage>> PersistentStorage::Create(
   std::error_code ec;
   std::filesystem::create_directories(data_dir, ec);
   if (ec) {
-    return absl::InternalError(
-        absl::StrCat("Failed to create directory ", data_dir, ": ",
-                     ec.message()));
+    return absl::InternalError(absl::StrCat("Failed to create directory ",
+                                            data_dir, ": ", ec.message()));
   }
 
   leveldb::DB* raw_db = nullptr;
   leveldb::Status status = leveldb::DB::Open(options, data_dir, &raw_db);
   if (!status.ok()) {
-    return absl::InternalError(
-        absl::StrCat("Failed to open LevelDB at ", data_dir, ": ",
-                     status.ToString()));
+    return absl::InternalError(absl::StrCat("Failed to open LevelDB at ",
+                                            data_dir, ": ", status.ToString()));
   }
 
   return absl::WrapUnique(
       new PersistentStorage(std::unique_ptr<leveldb::DB>(raw_db)));
+}
+
+absl::Status PersistentStorage::CreateCheckpoint(
+    const std::string& output_dir) const {
+  if (output_dir.empty()) {
+    return absl::InvalidArgumentError(
+        "Backup checkpoint directory must not be empty");
+  }
+  std::error_code filesystem_error;
+  const bool output_exists =
+      std::filesystem::exists(output_dir, filesystem_error);
+  if (filesystem_error) {
+    return absl::InternalError(absl::StrCat(
+        "Failed to inspect backup checkpoint destination: ",
+        filesystem_error.message()));
+  }
+  if (output_exists) {
+    return absl::AlreadyExistsError(
+        absl::StrCat("Backup checkpoint already exists: ", output_dir));
+  }
+
+  const std::filesystem::path output_parent =
+      std::filesystem::path(output_dir).parent_path();
+  if (!output_parent.empty()) {
+    std::filesystem::create_directories(output_parent, filesystem_error);
+  }
+  if (filesystem_error) {
+    return absl::InternalError(
+        absl::StrCat("Failed to create backup checkpoint parent: ",
+                     filesystem_error.message()));
+  }
+  static std::atomic<uint64_t> temporary_sequence{0};
+  const std::filesystem::path temporary_directory = absl::StrCat(
+      output_dir, ".tmp-",
+      std::chrono::steady_clock::now().time_since_epoch().count(), "-",
+      temporary_sequence.fetch_add(1));
+  DirectoryCleanupGuard cleanup(temporary_directory);
+
+  leveldb::Options options;
+  options.create_if_missing = true;
+  leveldb::DB* destination_raw = nullptr;
+  leveldb::Status open_status =
+      leveldb::DB::Open(options, temporary_directory.string(),
+                        &destination_raw);
+  if (!open_status.ok()) {
+    return LevelDBStatusToAbsl(open_status);
+  }
+  std::unique_ptr<leveldb::DB> destination(destination_raw);
+
+  SnapshotGuard snapshot(db_.get());
+  leveldb::ReadOptions read_options;
+  read_options.snapshot = snapshot.get();
+  std::unique_ptr<leveldb::Iterator> iterator(db_->NewIterator(read_options));
+  leveldb::WriteOptions write_options;
+  write_options.sync = true;
+  leveldb::WriteBatch batch;
+  size_t batch_bytes = 0;
+  constexpr size_t kMaximumBatchBytes = 4 * 1024 * 1024;
+
+  absl::Status result = absl::OkStatus();
+  for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) {
+    batch.Put(iterator->key(), iterator->value());
+    batch_bytes += iterator->key().size() + iterator->value().size();
+    if (batch_bytes >= kMaximumBatchBytes) {
+      leveldb::Status write_status = destination->Write(write_options, &batch);
+      if (!write_status.ok()) {
+        result = LevelDBStatusToAbsl(write_status);
+        break;
+      }
+      batch.Clear();
+      batch_bytes = 0;
+    }
+  }
+  if (result.ok()) {
+    result = CheckIteratorStatus(*iterator);
+  }
+  if (result.ok() && batch_bytes > 0) {
+    result = LevelDBStatusToAbsl(destination->Write(write_options, &batch));
+  }
+  destination.reset();
+  if (result.ok()) {
+    std::filesystem::rename(temporary_directory, output_dir, filesystem_error);
+    if (filesystem_error) {
+      result = absl::InternalError(absl::StrCat(
+          "Failed to publish backup checkpoint: ",
+          filesystem_error.message()));
+    }
+  }
+  if (result.ok()) {
+    cleanup.Disarm();
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,8 +434,8 @@ std::string PersistentStorage::MakeLevelDBKey(const TableID& table_id,
                                               const ColumnID& column_id,
                                               absl::Time timestamp) {
   std::string result;
-  result.reserve(4 + table_id.size() + 4 + encoded_key.size() +
-                 4 + column_id.size() + 8);
+  result.reserve(4 + table_id.size() + 4 + encoded_key.size() + 4 +
+                 column_id.size() + 8);
   AppendLengthPrefixed(&result, table_id);
   AppendLengthPrefixed(&result, encoded_key);
   AppendLengthPrefixed(&result, column_id);
@@ -472,10 +607,9 @@ static Key DecodeKeyData(const googlesql::Value& key_data) {
   if (end - ptr < 4) return reconstructed_key;
 
   const auto* up = reinterpret_cast<const unsigned char*>(ptr);
-  int32_t num_cols = static_cast<int32_t>(up[0]) |
-                     (static_cast<int32_t>(up[1]) << 8) |
-                     (static_cast<int32_t>(up[2]) << 16) |
-                     (static_cast<int32_t>(up[3]) << 24);
+  int32_t num_cols =
+      static_cast<int32_t>(up[0]) | (static_cast<int32_t>(up[1]) << 8) |
+      (static_cast<int32_t>(up[2]) << 16) | (static_cast<int32_t>(up[3]) << 24);
   ptr += 4;
   for (int i = 0; i < num_cols && ptr < end; ++i) {
     if (end - ptr < 2) break;  // Need at least 2 bytes for desc + nulls_last.
@@ -544,16 +678,17 @@ absl::Status PersistentStorage::Read(
   // Single-pass scan: iterate through the range and collect the best
   // (latest <= timestamp) value for each (encoded_key, column) pair.
   struct CellData {
-    std::string best_value;       // encoded value from LevelDB
-    std::string best_timestamp;   // 8-byte encoded timestamp of best match
+    std::string best_value;      // encoded value from LevelDB
+    std::string best_timestamp;  // 8-byte encoded timestamp of best match
   };
   // Map: encoded_key -> (column_id -> best cell data)
   std::map<std::string, std::map<std::string, CellData>> rows_data;
 
-  // Acquire a LevelDB snapshot for point-in-time read consistency.
-  const leveldb::Snapshot* snapshot = db_->GetSnapshot();
+  // Acquire a LevelDB snapshot for point-in-time read consistency. The guard
+  // transfers ownership only after the result iterator is fully constructed.
+  SnapshotGuard snapshot(db_.get());
   leveldb::ReadOptions read_options;
-  read_options.snapshot = snapshot;
+  read_options.snapshot = snapshot.get();
 
   std::unique_ptr<leveldb::Iterator> it(db_->NewIterator(read_options));
   for (it->Seek(seek_start); it->Valid(); it->Next()) {
@@ -651,8 +786,8 @@ absl::Status PersistentStorage::Read(
     rows.emplace_back(std::make_pair(reconstructed_key, std::move(values)));
   }
 
-  *itr = std::make_unique<SnapshotOwningIterator>(std::move(rows),
-                                                   db_.get(), snapshot);
+  *itr = std::make_unique<SnapshotOwningIterator>(
+      std::move(rows), db_.get(), snapshot.Release());
   return absl::OkStatus();
 }
 
@@ -844,9 +979,9 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
   return absl::OkStatus();
 }
 
-void PersistentStorage::RemoveExpiredVersions(
-    const std::string& cell_prefix, absl::Time timestamp,
-    leveldb::WriteBatch* batch) {
+void PersistentStorage::RemoveExpiredVersions(const std::string& cell_prefix,
+                                              absl::Time timestamp,
+                                              leveldb::WriteBatch* batch) {
   absl::MutexLock lock(&version_retention_period_mu_);
   absl::Time cutoff = timestamp - version_retention_period_;
   std::string cutoff_ts = EncodeTimestamp(cutoff);

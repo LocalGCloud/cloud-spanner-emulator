@@ -53,7 +53,7 @@ register_toolchains("@gcc_toolchain//:all")
 # GoogleAPIs                                                                   #
 ################################################################################
 
-bazel_dep(name = "googleapis", version = "0.0.0-20260223-edfe7983", repo_name = "com_google_googleapis")
+bazel_dep(name = "googleapis", version = "0.0.0-20260525-ef19b7b7", repo_name = "com_google_googleapis")
 bazel_dep(name = "googleapis-cc", version = "1.0.0")
 bazel_dep(name = "googleapis-grpc-cc", version = "1.0.0")
 bazel_dep(name = "googleapis-go", version = "1.0.0")

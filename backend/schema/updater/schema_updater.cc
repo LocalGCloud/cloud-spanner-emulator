@@ -241,6 +241,10 @@ class SchemaUpdaterImpl {
     return std::move(intermediate_schemas_);
   }
 
+  std::vector<int> GetIntermediateSchemaStatementIndexes() {
+    return std::move(intermediate_schema_statement_indexes_);
+  }
+
  private:
   SchemaUpdaterImpl(googlesql::TypeFactory* type_factory,
                     TableIDGenerator* table_id_generator,
@@ -737,6 +741,8 @@ class SchemaUpdaterImpl {
   // The intermediate schema snapshots representing the schema state after
   // applying each statement.
   std::vector<std::unique_ptr<const Schema>> intermediate_schemas_;
+  // Input statement index corresponding to each non-no-op intermediate schema.
+  std::vector<int> intermediate_schema_statement_indexes_;
 
   // Validation context for the statement being currently processed.
   // This is also being used in SchemaGraphEditor. Please make sure this is only
@@ -1200,6 +1206,7 @@ absl::StatusOr<std::vector<SchemaValidationContext>>
 SchemaUpdaterImpl::ApplyDDLStatements(
     const SchemaChangeOperation& schema_change_operation) {
   std::vector<SchemaValidationContext> pending_work;
+  int statement_index = 0;
 
   for (const auto& statement : schema_change_operation.statements) {
     GOOGLESQL_VLOG(2) << "Applying statement " << statement;
@@ -1241,9 +1248,11 @@ SchemaUpdaterImpl::ApplyDDLStatements(
     // This indicates that the statement was a no-op, e.g., a CREATE SEQUENCE IF
     // NOT EXISTS statement for an existent sequence.
     if (new_schema == nullptr) {
+      ++statement_index;
       continue;
     }
 
+    intermediate_schema_statement_indexes_.push_back(statement_index);
     // We save every schema snapshot as verifiers/backfillers from the
     // current/next statement may need to refer to the previous/current
     // schema snapshots.
@@ -1268,6 +1277,7 @@ SchemaUpdaterImpl::ApplyDDLStatements(
       }
       dropped_columns_.clear();
     }
+    ++statement_index;
   }
 
   return pending_work;
@@ -4119,8 +4129,9 @@ absl::StatusOr<const ChangeStream*> SchemaUpdaterImpl::CreateChangeStream(
   // Validate the change stream tvf name in global_names_
   GOOGLESQL_RETURN_IF_ERROR(global_names_.AddName("Change Stream", tvf_name));
 
-  // Set the creation time to now
-  builder.set_creation_time(absl::Now());
+  // Set the creation time to the schema change timestamp so recovery replay
+  // restores the original creation time instead of the replay wall clock.
+  builder.set_creation_time(schema_change_timestamp_);
 
   GOOGLESQL_RETURN_IF_ERROR(AddNode(builder.build()));
   GOOGLESQL_RETURN_IF_ERROR(AddNode(std::move(change_stream_partition_table)));
@@ -6915,12 +6926,24 @@ absl::StatusOr<SchemaChangeResult> SchemaUpdater::UpdateSchemaFromDDL(
   GOOGLESQL_ASSIGN_OR_RETURN(pending_work_,
                    updater.ApplyDDLStatements(schema_change_operation));
   intermediate_schemas_ = updater.GetIntermediateSchemas();
+  const std::vector<int> intermediate_schema_statement_indexes =
+      updater.GetIntermediateSchemaStatementIndexes();
+  GOOGLESQL_RET_CHECK_EQ(intermediate_schemas_.size(),
+                         intermediate_schema_statement_indexes.size());
 
   // Use the schema snapshot for the last succesful statement.
   int num_successful = 0;
   std::unique_ptr<const Schema> new_schema = nullptr;
 
   absl::Status backfill_status = RunPendingActions(&num_successful);
+  int num_successful_input_statements =
+      static_cast<int>(schema_change_operation.statements.size());
+  if (!backfill_status.ok()) {
+    GOOGLESQL_RET_CHECK_LT(num_successful,
+                           intermediate_schema_statement_indexes.size());
+    num_successful_input_statements =
+        intermediate_schema_statement_indexes[num_successful];
+  }
   if (num_successful > 0) {
     new_schema = std::move(intermediate_schemas_[num_successful - 1]);
     GOOGLESQL_RETURN_IF_ERROR(context.pg_oid_assigner->EndAssignmentAtIntermediateSchema(
@@ -6929,6 +6952,8 @@ absl::StatusOr<SchemaChangeResult> SchemaUpdater::UpdateSchemaFromDDL(
   GOOGLESQL_RET_CHECK_LE(num_successful, intermediate_schemas_.size());
   return SchemaChangeResult{
       .num_successful_statements = num_successful,
+      .num_successful_input_statements =
+          num_successful_input_statements,
       .updated_schema = std::move(new_schema),
       .backfill_status = backfill_status,
   };

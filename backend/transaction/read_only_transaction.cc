@@ -44,12 +44,14 @@ namespace backend {
 ReadOnlyTransaction::ReadOnlyTransaction(
     const ReadOnlyOptions& options, TransactionID transaction_id, Clock* clock,
     Storage* storage, LockManager* lock_manager,
-    const VersionedCatalog* const versioned_catalog)
+    const VersionedCatalog* const versioned_catalog,
+    const std::atomic<bool>* restore_required)
     : options_(options),
       id_(transaction_id),
       clock_(clock),
       base_storage_(storage),
       versioned_catalog_(versioned_catalog),
+      restore_required_(restore_required),
       lock_manager_(lock_manager),
       version_retention_period_(versioned_catalog->version_retention_period()) {
   lock_handle_ = lock_manager_->CreateHandle(transaction_id,
@@ -61,6 +63,11 @@ ReadOnlyTransaction::ReadOnlyTransaction(
 absl::Status ReadOnlyTransaction::Read(const ReadArg& read_arg,
                                        std::unique_ptr<RowCursor>* cursor) {
   absl::MutexLock lock(mu_);
+  if (restore_required_ != nullptr &&
+      restore_required_->load(std::memory_order_acquire)) {
+    return absl::FailedPreconditionError(
+        "Database recovery is required before serving transactions");
+  }
   // Wait for any concurrent schema change or read-write transactions to commit
   // before accessing database state to perform a read.
   lock_handle_->WaitForSafeRead(read_timestamp_);

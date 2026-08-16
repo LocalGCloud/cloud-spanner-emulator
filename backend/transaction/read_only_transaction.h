@@ -17,6 +17,7 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_READ_ONLY_TRANSACTION_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_READ_ONLY_TRANSACTION_H_
 
+#include <atomic>
 #include <memory>
 
 #include "absl/base/thread_annotations.h"
@@ -50,7 +51,8 @@ class ReadOnlyTransaction : public RowReader {
   ReadOnlyTransaction(const ReadOnlyOptions& options,
                       TransactionID transaction_id, Clock* clock,
                       Storage* storage, LockManager* lock_manager,
-                      const VersionedCatalog* versioned_catalog);
+                      const VersionedCatalog* versioned_catalog,
+                      const std::atomic<bool>* restore_required = nullptr);
 
   absl::Status Read(const ReadArg& read_arg,
                     std::unique_ptr<RowCursor>* cursor) override
@@ -88,6 +90,10 @@ class ReadOnlyTransaction : public RowReader {
 
   // VersionedCatalog for the database provided at transaction creation.
   const VersionedCatalog* const versioned_catalog_;
+
+  // Database-wide recovery gate shared with transactions created before a
+  // durable schema promotion failure.
+  const std::atomic<bool>* restore_required_;
 
   // Transaction lock management.
   std::unique_ptr<LockHandle> lock_handle_;

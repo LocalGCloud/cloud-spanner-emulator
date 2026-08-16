@@ -130,6 +130,23 @@ absl::Status BackfillChangeStream(const ChangeStream* change_stream,
                                   const SchemaValidationContext* context) {
   const Table* change_stream_partition_table =
       change_stream->change_stream_partition_table();
+  // Recovery replay re-applies CREATE CHANGE STREAM against storage that
+  // already contains the initial partitions. Minting fresh ones would orphan
+  // the persisted partition history and duplicate parent-less partitions in
+  // every root-partition query.
+  {
+    const ColumnID partition_token_column_id =
+        change_stream_partition_table->FindKeyColumn("partition_token")
+            ->column()
+            ->id();
+    std::unique_ptr<StorageIterator> itr;
+    GOOGLESQL_RETURN_IF_ERROR(context->storage()->Read(
+        context->pending_commit_timestamp(), change_stream_partition_table->id(),
+        KeyRange::All(), {partition_token_column_id}, &itr));
+    if (itr != nullptr && itr->Next()) {
+      return absl::OkStatus();
+    }
+  }
   absl::Span<const Column* const> change_stream_partition_table_columns =
       change_stream_partition_table->columns();
   std::vector<ColumnID> change_stream_partition_table_column_ids =

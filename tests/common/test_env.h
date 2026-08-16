@@ -71,6 +71,7 @@ class TestEnv {
   }
   OperationsStub* operations_client() const { return operations_client_.get(); }
   SpannerStub* spanner_client() const { return spanner_client_.get(); }
+  frontend::Server* server() const { return server_.get(); }
 
  private:
   void SetupServer();

@@ -18,8 +18,6 @@
 
 #include <string>
 
-#include "google/rpc/status.pb.h"
-#include "absl/strings/str_cat.h"
 #include "frontend/common/protos.h"
 
 namespace google {
@@ -27,44 +25,36 @@ namespace spanner {
 namespace emulator {
 namespace frontend {
 
-Operation::Operation(const std::string& operation_uri)
-    : operation_uri_(operation_uri) {}
+Operation::Operation(const std::string& operation_uri) {
+  operation_.set_name(operation_uri);
+}
+
+Operation::Operation(const google::longrunning::Operation& operation)
+    : operation_(operation) {}
 
 void Operation::SetMetadata(const google::protobuf::Message& metadata) {
   absl::MutexLock lock(mu_);
-  metadata_.reset(metadata.New());
-  metadata_->CopyFrom(metadata);
+  ToAnyProto(metadata, operation_.mutable_metadata());
 }
 
 void Operation::SetError(const absl::Status& status) {
   absl::MutexLock lock(mu_);
-  status_ = status;
-  response_.reset();
+  operation_.set_done(true);
+  operation_.clear_response();
+  operation_.mutable_error()->set_code(status.raw_code());
+  operation_.mutable_error()->set_message(std::string(status.message()));
 }
 
 void Operation::SetResponse(const google::protobuf::Message& response) {
   absl::MutexLock lock(mu_);
-  response_.reset(response.New());
-  response_->CopyFrom(response);
-  status_ = absl::OkStatus();
+  operation_.set_done(true);
+  operation_.clear_error();
+  ToAnyProto(response, operation_.mutable_response());
 }
 
-void Operation::ToProto(google::longrunning::Operation* operation_pb) {
-  absl::MutexLock lock(mu_);
-
-  operation_pb->set_name(operation_uri_);
-  operation_pb->set_done(!status_.ok() || response_ != nullptr);
-
-  if (metadata_ != nullptr) {
-    ToAnyProto(*metadata_, operation_pb->mutable_metadata());
-  }
-
-  if (response_ != nullptr) {
-    ToAnyProto(*response_, operation_pb->mutable_response());
-  } else if (!status_.ok()) {
-    operation_pb->mutable_error()->set_code(status_.raw_code());
-    operation_pb->mutable_error()->set_message(std::string(status_.message()));
-  }
+void Operation::ToProto(google::longrunning::Operation* operation_pb) const {
+  absl::ReaderMutexLock lock(mu_);
+  *operation_pb = operation_;
 }
 
 }  // namespace frontend

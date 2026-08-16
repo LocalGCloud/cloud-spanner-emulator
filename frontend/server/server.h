@@ -56,8 +56,15 @@ class Server {
     std::string server_address;
   };
 
-  // Returns an initialized Server, or nullptr if the initialization failed.
+  // Creates a Server whose environment can be initialized before the listener
+  // starts accepting RPCs.
+  static std::unique_ptr<Server> CreateUnstarted();
+
+  // Returns an initialized and started Server, or nullptr if binding fails.
   static std::unique_ptr<Server> Create(const Options& options);
+
+  // Binds and starts an unstarted server. Returns false if binding fails.
+  bool Start(const Options& options);
 
   std::string host() const { return host_; }
   int port() const { return port_; }

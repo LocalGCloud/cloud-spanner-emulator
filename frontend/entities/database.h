@@ -17,13 +17,14 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_DATABASE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_DATABASE_H_
 
+#include <atomic>
 #include <string>
 
-#include "google/spanner/admin/database/v1/spanner_database_admin.pb.h"
 #include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "backend/database/database.h"
-#include "absl/status/status.h"
+#include "google/spanner/admin/database/v1/spanner_database_admin.pb.h"
 
 namespace google {
 namespace spanner {
@@ -50,8 +51,19 @@ class Database {
   // Returns the handle to the backend database.
   backend::Database* backend() const { return backend_.get(); }
 
+  // Serializes schema changes with backup metadata capture so a checkpoint
+  // cannot pair rows with a different schema generation.
+  absl::Mutex& schema_change_mutex() { return schema_change_mu_; }
+
   // Converts this database object to its proto representation.
   absl::Status ToProto(admin::database::v1::Database* database);
+
+  bool enable_drop_protection() const {
+    return enable_drop_protection_.load(std::memory_order_relaxed);
+  }
+  void set_enable_drop_protection(bool enabled) {
+    enable_drop_protection_.store(enabled, std::memory_order_relaxed);
+  }
 
  private:
   // The URI for this database.
@@ -60,8 +72,12 @@ class Database {
   // The backend object which implements core database functionality.
   std::unique_ptr<backend::Database> backend_;
 
+  absl::Mutex schema_change_mu_;
+
   // The time at which this database was created.
   const absl::Time create_time_;
+
+  std::atomic<bool> enable_drop_protection_{false};
 };
 
 }  // namespace frontend

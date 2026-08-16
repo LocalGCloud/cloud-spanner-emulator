@@ -21,10 +21,6 @@
 #include <utility>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
-#include "googlesql/base/testing/status_matchers.h"
-#include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "backend/access/read.h"
 #include "backend/datamodel/key_set.h"
@@ -33,6 +29,11 @@
 #include "common/clock.h"
 #include "common/config.h"
 #include "common/errors.h"
+#include "gmock/gmock.h"
+#include "googlesql/base/testing/status_matchers.h"
+#include "gtest/gtest.h"
+#include "tests/common/proto_matchers.h"
+#include "tests/common/test.pb.h"
 
 namespace google {
 namespace spanner {
@@ -85,6 +86,127 @@ TEST_F(DatabaseTest, CreateSuccessful) {
   // Verifies that by default, a GoogleSQL database is created.
   EXPECT_EQ(database->dialect(),
             database_api::DatabaseDialect::GOOGLE_STANDARD_SQL);
+}
+
+TEST_F(DatabaseTest, PersistentStorageDirectoryUsesStorageNamespace) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      const std::string legacy,
+      Database::PersistentStorageDirectory("/tmp/data", kDatabaseId));
+  EXPECT_EQ(legacy, "/tmp/data/test-db/storage");
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      const std::string scoped,
+      Database::PersistentStorageDirectory(
+          "/tmp/data", "projects/p/instances/i/databases/test-db"));
+  EXPECT_EQ(scoped, "/tmp/data/projects/p/instances/i/databases/test-db/storage");
+  EXPECT_THAT(
+      Database::PersistentStorageDirectory("/tmp/data", "../backups/x"),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(
+      Database::PersistentStorageDirectory(
+          "/tmp/data", "projects/p/instances/i/databases/db/../../backups/x"),
+      StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
+TEST_F(DatabaseTest, PersistedIdCountersAdvanceAfterSchemaReplay) {
+  const std::vector<std::string> statements = {R"(
+    CREATE TABLE T(
+      k1 INT64,
+      k2 STRING(MAX),
+    ) PRIMARY KEY(k1)
+  )"};
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Database> baseline,
+      Database::Create(&clock_, kDatabaseId,
+                       SchemaChangeOperation{.statements = statements}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Database> restored,
+      Database::Create(&clock_, kDatabaseId,
+                       SchemaChangeOperation{.statements = statements},
+                       Database::IdCounterValues{
+                           .table_id = 7,
+                           .column_id = 11,
+                           .change_stream_id = 13,
+                       }));
+
+  ASSERT_NE(baseline->GetLatestSchema()->FindTable("T"), nullptr);
+  ASSERT_NE(restored->GetLatestSchema()->FindTable("T"), nullptr);
+  EXPECT_EQ(restored->GetLatestSchema()->FindTable("T")->id(),
+            baseline->GetLatestSchema()->FindTable("T")->id());
+  EXPECT_EQ(restored->GetIdCounterValues().table_id, 7);
+  EXPECT_EQ(restored->GetIdCounterValues().column_id, 11);
+  EXPECT_EQ(restored->GetIdCounterValues().change_stream_id, 13);
+}
+
+TEST_F(DatabaseTest, ReplaysCommittedSchemaBatchesInOrder) {
+  std::vector<std::vector<std::string>> batches = {
+      {"CREATE TABLE T (K INT64) PRIMARY KEY (K)"},
+      {"DROP TABLE T"},
+      {"CREATE TABLE T (K INT64, V STRING(MAX)) PRIMARY KEY (K)"},
+  };
+  std::vector<SchemaChangeOperation> operations;
+  operations.reserve(batches.size());
+  for (const auto& batch : batches) {
+    operations.push_back({.statements = batch});
+  }
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Database> baseline,
+      Database::Create(&clock_, kDatabaseId, operations.front()));
+  for (int i = 1; i < operations.size(); ++i) {
+    int completed_statements = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_EXPECT_OK(baseline->UpdateSchema(
+        operations[i], &completed_statements, &commit_timestamp,
+        &backfill_status));
+  }
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Database> restored,
+      Database::Create(&clock_, kDatabaseId, operations,
+                       Database::IdCounterValues{}, ""));
+  const auto* baseline_table = baseline->GetLatestSchema()->FindTable("T");
+  const auto* restored_table = restored->GetLatestSchema()->FindTable("T");
+  ASSERT_NE(baseline_table, nullptr);
+  ASSERT_NE(restored_table, nullptr);
+  EXPECT_NE(restored_table->FindColumn("V"), nullptr);
+  EXPECT_EQ(restored_table->id(), baseline_table->id());
+  EXPECT_EQ(restored->GetIdCounterValues().table_id,
+            baseline->GetIdCounterValues().table_id);
+  EXPECT_EQ(restored->GetIdCounterValues().column_id,
+            baseline->GetIdCounterValues().column_id);
+}
+
+TEST_F(DatabaseTest, ReplaysEachProtoDescriptorBatchWithItsOwnBundle) {
+  google::protobuf::FileDescriptorSet descriptor_set;
+  ::emulator::tests::common::Simple::descriptor()->file()->CopyTo(
+      descriptor_set.add_file());
+  const std::string descriptor_bytes = descriptor_set.SerializeAsString();
+  const std::vector<std::vector<std::string>> statement_batches = {
+      {"CREATE TABLE T (K INT64) PRIMARY KEY (K)"},
+      {
+          "CREATE PROTO BUNDLE (emulator.tests.common.Simple)",
+          "ALTER TABLE T ADD COLUMN ProtoValue "
+          "emulator.tests.common.Simple",
+      },
+  };
+  const std::vector<SchemaChangeOperation> operations = {
+      {.statements = statement_batches[0]},
+      {.statements = statement_batches[1],
+       .proto_descriptor_bytes = descriptor_bytes},
+  };
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<Database> restored,
+      Database::Create(&clock_, kDatabaseId, operations,
+                       Database::IdCounterValues{}, ""));
+
+  const auto* table = restored->GetLatestSchema()->FindTable("T");
+  ASSERT_NE(table, nullptr);
+  EXPECT_NE(table->FindColumn("ProtoValue"), nullptr);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      const std::string restored_descriptors,
+      restored->GetLatestSchema()->proto_bundle()->GetProtoDescriptorBytes());
+  EXPECT_EQ(restored_descriptors, descriptor_bytes);
 }
 
 TEST_F(DatabaseTest, CreateWithGSQLDialectSuccessful) {
@@ -197,6 +319,11 @@ TEST_F(DatabaseTest, UpdateSchemaPartialSuccess) {
   GOOGLESQL_ASSERT_OK(txn->Commit());
 
   std::vector<std::string> update_statements = {R"(
+    CREATE TABLE IF NOT EXISTS T(
+      ignored INT64,
+    ) PRIMARY KEY(ignored)
+  )",
+                                                R"(
     CREATE TABLE T1(
       a INT64,
     ) PRIMARY KEY(a)
@@ -223,8 +350,8 @@ TEST_F(DatabaseTest, UpdateSchemaPartialSuccess) {
   EXPECT_EQ(backfill_status,
             error::UniqueIndexViolationOnIndexCreation("Idx", "{Int64(2)}"));
 
-  // Only the first statement in the batch is successfuly applied.
-  EXPECT_EQ(completed_statements, 1);
+  // The no-op and the following schema mutation form the committed prefix.
+  EXPECT_EQ(completed_statements, 2);
 }
 
 TEST_F(DatabaseTest, ConcurrentSchemaChangeIsAborted) {
@@ -297,9 +424,43 @@ TEST_F(DatabaseTest, SchemaChangeLocksSuccesfullyReleased) {
   std::unique_ptr<RowCursor> row_cursor;
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<ReadWriteTransaction> txn,
+
       db->CreateReadWriteTransaction(ReadWriteOptions(), RetryState()));
   GOOGLESQL_EXPECT_OK(txn->Read(read_column("T", "k1"), &row_cursor));
   GOOGLESQL_EXPECT_OK(txn->Commit());
+}
+TEST_F(DatabaseTest, RecoveryGateRejectsTransactionsCreatedBeforeQuarantine) {
+  std::vector<std::string> create_statements = {R"(
+    CREATE TABLE T(
+      k1 INT64,
+    ) PRIMARY KEY(k1)
+  )"};
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto db,
+      Database::Create(&clock_, kDatabaseId,
+                       SchemaChangeOperation{.statements = create_statements}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<ReadWriteTransaction> read_write,
+      db->CreateReadWriteTransaction(ReadWriteOptions(), RetryState()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<ReadOnlyTransaction> read_only,
+      db->CreateReadOnlyTransaction(ReadOnlyOptions()));
+
+  db->MarkRestoreRequired();
+
+  Mutation mutation;
+  mutation.AddWriteOp(MutationOpType::kInsert, "T", {"k1"}, {{Int64(1)}});
+  EXPECT_THAT(read_write->Write(mutation),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(read_write->Commit(),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  std::unique_ptr<RowCursor> cursor;
+  EXPECT_THAT(read_only->Read(read_column("T", "k1"), &cursor),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(
+      db->CreateReadWriteTransaction(ReadWriteOptions(), RetryState()),
+      StatusIs(absl::StatusCode::kFailedPrecondition));
+  GOOGLESQL_EXPECT_OK(read_write->Rollback());
 }
 
 }  // namespace

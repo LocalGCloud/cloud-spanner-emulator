@@ -26,6 +26,7 @@
 #include "absl/container/btree_map.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "frontend/entities/instance_partition.h"
 
 namespace google {
@@ -41,6 +42,11 @@ class InstancePartitionManager {
   absl::StatusOr<std::shared_ptr<InstancePartition>> CreateInstancePartition(
       const std::string& partition_uri,
       const admin::instance::v1::InstancePartition& partition_proto)
+      ABSL_LOCKS_EXCLUDED(mu_);
+  absl::StatusOr<std::shared_ptr<InstancePartition>> CreateInstancePartition(
+      const std::string& partition_uri,
+      const admin::instance::v1::InstancePartition& partition_proto,
+      absl::Time create_time, absl::Time update_time)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   // Returns an instance partition with the given URI.

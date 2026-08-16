@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 
+#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "frontend/common/uris.h"
 #include "frontend/entities/instance.h"
@@ -33,6 +34,9 @@ absl::StatusOr<std::shared_ptr<Instance>> GetInstance(
     RequestContext* ctx, const std::string& instance_uri) {
   absl::string_view project_id, instance_id;
   GOOGLESQL_RETURN_IF_ERROR(ParseInstanceUri(instance_uri, &project_id, &instance_id));
+  if (MakeInstanceUri(project_id, instance_id) != instance_uri) {
+    return absl::InvalidArgumentError("Instance name must be canonical");
+  }
   return ctx->env()->instance_manager()->GetInstance(instance_uri);
 }
 
@@ -41,6 +45,10 @@ absl::StatusOr<std::shared_ptr<Database>> GetDatabase(
   absl::string_view project_id, instance_id, database_id;
   GOOGLESQL_RETURN_IF_ERROR(
       ParseDatabaseUri(database_uri, &project_id, &instance_id, &database_id));
+  if (MakeDatabaseUri(MakeInstanceUri(project_id, instance_id), database_id) !=
+      database_uri) {
+    return absl::InvalidArgumentError("Database name must be canonical");
+  }
   // Note that databases aren't tied to instances as per the current
   // implementation in emulator. The check below only verifies that the
   // instances do exist for client unit tests to produce correct output.
@@ -57,6 +65,11 @@ absl::StatusOr<std::shared_ptr<Session>> GetSession(
   absl::string_view project_id, instance_id, database_id, session_id;
   GOOGLESQL_RETURN_IF_ERROR(ParseSessionUri(session_uri, &project_id, &instance_id,
                                   &database_id, &session_id));
+  if (MakeSessionUri(
+          MakeDatabaseUri(MakeInstanceUri(project_id, instance_id), database_id),
+          session_id) != session_uri) {
+    return absl::InvalidArgumentError("Session name must be canonical");
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::shared_ptr<Database> database,
       GetDatabase(ctx, MakeDatabaseUri(MakeInstanceUri(project_id, instance_id),

@@ -17,13 +17,13 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_DATABASE_DATABASE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_DATABASE_DATABASE_H_
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "google/spanner/admin/database/v1/common.pb.h"
-#include "googlesql/public/type.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -43,7 +43,8 @@
 #include "backend/transaction/read_only_transaction.h"
 #include "backend/transaction/read_write_transaction.h"
 #include "common/clock.h"
-#include "absl/status/status.h"
+#include "google/spanner/admin/database/v1/common.pb.h"
+#include "googlesql/public/type.h"
 
 namespace google {
 namespace spanner {
@@ -80,8 +81,39 @@ class Database {
       const SchemaChangeOperation& schema_change_operation,
       const IdCounterValues& id_counters);
 
+  // Overload that uses storage_namespace as the persistent-storage identity.
+  // Frontend callers pass the validated full database resource name; isolated
+  // backend tests continue to use the database ID through the overload above.
+  static absl::StatusOr<std::unique_ptr<Database>> Create(
+      Clock* clock, std::string_view database_id,
+      const SchemaChangeOperation& schema_change_operation,
+      const IdCounterValues& id_counters,
+      std::string_view storage_namespace);
+
+  // Replays committed schema-change requests with their original descriptor
+  // bundles before advancing ID generators to persisted high-water marks.
+  static absl::StatusOr<std::unique_ptr<Database>> Create(
+      Clock* clock, std::string_view database_id,
+      const std::vector<SchemaChangeOperation>& schema_change_operations,
+      const IdCounterValues& id_counters,
+      std::string_view storage_namespace);
+
+  // Returns a lexically safe storage directory below data_dir.
+  static absl::StatusOr<std::string> PersistentStorageDirectory(
+      std::string_view data_dir, std::string_view storage_namespace);
+
+  // Deletes the resource-scoped persistent database root. Callers must release
+  // every live Database handle before invoking this method.
+  static absl::Status DeletePersistentStorageDirectory(
+      std::string_view data_dir, std::string_view storage_namespace);
+
   // Returns the current ID counter values for persistence.
   IdCounterValues GetIdCounterValues() const;
+
+  // Writes an immutable persistent-storage checkpoint serialized between
+  // commits and returns the checkpoint's externally consistent timestamp.
+  absl::StatusOr<absl::Time> CreateBackupCheckpoint(
+      const std::string& output_dir) const;
 
   // Creates a read only transaction attached to this database.
   absl::StatusOr<std::unique_ptr<ReadOnlyTransaction>>
@@ -126,6 +158,22 @@ class Database {
       int* num_succesful_statements, absl::Time* commit_timestamp,
       absl::Status* backfill_status);
 
+  // Applies a schema change while holding the schema-change transaction lock.
+  // It checkpoints storage, publishes the rollback intent, applies the
+  // mutation, and calls `schema_change_applied` before releasing the lock.
+  absl::Status UpdateSchemaWithRollbackCheckpoint(
+      const SchemaChangeOperation& schema_change_operation,
+      const std::string& rollback_directory,
+      const std::function<absl::Status()>& rollback_checkpoint_ready,
+      const std::function<absl::Status()>& schema_change_applied,
+      int* num_succesful_statements, absl::Time* commit_timestamp,
+      absl::Status* backfill_status);
+
+  // Quarantines a live database whose durable control state may require
+  // checkpoint restoration. New transactions fail until process restart.
+  void MarkRestoreRequired();
+  bool restore_required() const;
+
   // Retrives the current version of the schema.
   const Schema* GetLatestSchema() const;
 
@@ -148,12 +196,20 @@ class Database {
   Database& operator=(const Database&) = delete;
 
   SchemaChangeContext GetSchemaChangeContext();
+  absl::Status UpdateSchemaInternal(
+      const SchemaChangeOperation& schema_change_operation,
+      const std::string* rollback_directory,
+      const std::function<absl::Status()>* rollback_checkpoint_ready,
+      const std::function<absl::Status()>* schema_change_applied,
+      int* num_succesful_statements, absl::Time* commit_timestamp,
+      absl::Status* backfill_status);
 
   // Clock to provide commit timestamps.
   Clock* clock_;
 
   // Holds the database id.
   std::string database_id_;
+  std::atomic<bool> restore_required_{false};
 
   // Unique ID generator for TransactionID.
   TransactionIDGenerator transaction_id_generator_;

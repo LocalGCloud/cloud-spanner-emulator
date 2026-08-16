@@ -47,6 +47,11 @@ struct SchemaChangeOperation {
   absl::string_view proto_descriptor_bytes;
   ::google::spanner::admin::database::v1::DatabaseDialect database_dialect =
       ::google::spanner::admin::database::v1::GOOGLE_STANDARD_SQL;
+  // When set (not absl::InfinitePast()), the schema change is applied at this
+  // exact timestamp instead of reserving a fresh commit timestamp. Recovery
+  // replay uses this to restore time-based schema state such as change stream
+  // creation times.
+  absl::Time schema_change_timestamp = absl::InfinitePast();
 };
 
 // Database context within which a schema change is processed.
@@ -79,6 +84,10 @@ struct SchemaChangeContext {
 struct SchemaChangeResult {
   // The number of successfully applied DDL statements.
   int num_successful_statements;
+
+  // Number of input statements in the committed prefix. This includes
+  // successful no-op statements that do not create an action context.
+  int num_successful_input_statements;
 
   // The schema snapshot resulting from the last successfully applied
   // DDL statement.

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 import tarfile
@@ -35,9 +36,19 @@ ROOT_FILES = (
     "go.mod",
     "go.sum",
 )
+BAZEL_GLOB_PLACEHOLDERS = (
+    "tests/common/testdata/*.test",
+    "tests/conformance/data/schema_changes/**/*.test",
+    "tests/conformance/data/schemas/*.test",
+    "third_party/spanner_pg/bootstrap_catalog/spanner_pg_data/pg_*.dat",
+    "third_party/spanner_pg/ddl/types/testdata/*.json",
+    "third_party/spanner_pg/src/backend/snowball/stopwords/*.stop",
+    "third_party/spanner_pg/src/include/**/*.h",
+    "third_party/spanner_pg/src/include/catalog/pg_*.dat",
+)
 
 
-def bazel_manifest() -> list[str]:
+def bazel_manifest() -> tuple[list[str], set[str]]:
     paths: set[str] = set()
 
     for directory, directories, filenames in os.walk(WORKSPACE):
@@ -56,7 +67,14 @@ def bazel_manifest() -> list[str]:
                 paths.add((relative_directory / filename).as_posix())
 
     paths.update(name for name in ROOT_FILES if (WORKSPACE / name).exists())
-    return sorted(paths)
+    placeholders = {
+        source.relative_to(WORKSPACE).as_posix()
+        for pattern in BAZEL_GLOB_PLACEHOLDERS
+        for source in WORKSPACE.glob(pattern)
+        if source.is_file()
+    }
+    paths.update(placeholders)
+    return sorted(paths), placeholders
 
 
 def normalized_tarinfo(
@@ -73,7 +91,7 @@ def normalized_tarinfo(
 
 
 def main() -> None:
-    paths = bazel_manifest()
+    paths, placeholders = bazel_manifest()
     manifest_tmp = MANIFEST_PATH.with_suffix(".txt.tmp")
     archive_tmp = ARCHIVE_PATH.with_suffix(".tar.tmp")
 
@@ -83,7 +101,10 @@ def main() -> None:
         for relative_path in paths:
             source = WORKSPACE / relative_path
             info = normalized_tarinfo(archive, source, relative_path)
-            if info.isfile():
+            if relative_path in placeholders:
+                info.size = 0
+                archive.addfile(info, io.BytesIO())
+            elif info.isfile():
                 with source.open("rb") as file:
                     archive.addfile(info, file)
             else:
@@ -91,7 +112,10 @@ def main() -> None:
 
     os.replace(manifest_tmp, MANIFEST_PATH)
     os.replace(archive_tmp, ARCHIVE_PATH)
-    print(f"Created {ARCHIVE_PATH.name} from {len(paths)} Bazel metadata files")
+    print(
+        f"Created {ARCHIVE_PATH.name} from {len(paths) - len(placeholders)} "
+        f"Bazel metadata files and {len(placeholders)} glob placeholders"
+    )
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "frontend/entities/instance.h"
 #include "absl/status/status.h"
 
@@ -36,6 +37,13 @@ class InstanceManager {
   absl::StatusOr<std::shared_ptr<Instance>> CreateInstance(
       const std::string& instance_uri,
       const admin::instance::v1::Instance& instance_proto)
+      ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Restores an instance with its persisted output-only timestamps.
+  absl::StatusOr<std::shared_ptr<Instance>> CreateInstance(
+      const std::string& instance_uri,
+      const admin::instance::v1::Instance& instance_proto,
+      absl::Time create_time, absl::Time update_time)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   // Returns an instance with the given URI.

@@ -236,7 +236,8 @@ ReadWriteTransaction::ReadWriteTransaction(
     const ReadWriteOptions& options, const RetryState& retry_state,
     TransactionID transaction_id, Clock* clock, Storage* storage,
     LockManager* lock_manager, const VersionedCatalog* const versioned_catalog,
-    ActionManager* action_manager)
+    ActionManager* action_manager,
+    const std::atomic<bool>* restore_required)
     : options_(options),
       retry_state_(MakeRetryState(retry_state, clock)),
       id_(transaction_id),
@@ -250,6 +251,7 @@ ReadWriteTransaction::ReadWriteTransaction(
       transaction_store_(std::make_unique<TransactionStore>(
           base_storage_, lock_handle_.get(), commit_timestamp_tracker_.get())),
       action_manager_(action_manager),
+      restore_required_(restore_required),
       action_context_(std::make_unique<ActionContext>(
           std::make_unique<TransactionReadOnlyStore>(transaction_store_.get()),
           std::make_unique<TransactionEffectsBuffer>(&write_ops_queue_),
@@ -331,6 +333,12 @@ void ReadWriteTransaction::Reset() {
 absl::Status ReadWriteTransaction::GuardedCall(
     OpType op, const std::function<absl::Status()>& fn) {
   absl::MutexLock lock(mu_);
+  if (restore_required_ != nullptr &&
+      restore_required_->load(std::memory_order_acquire) &&
+      op != OpType::kRollback && op != OpType::kInvalidate) {
+    return absl::FailedPreconditionError(
+        "Database recovery is required before serving transactions");
+  }
   switch (state_) {
     case State::kRolledback: {
       return error::Internal(absl::StrCat(

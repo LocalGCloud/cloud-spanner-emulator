@@ -24,7 +24,6 @@
 #include <string>
 #include <thread>
 
-#include "googlesql/public/value.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
@@ -34,6 +33,7 @@
 #include "backend/datamodel/key_range.h"
 #include "backend/storage/iterator.h"
 #include "backend/storage/storage.h"
+#include "googlesql/public/value.h"
 #include "leveldb/db.h"
 #include "leveldb/write_batch.h"
 
@@ -87,6 +87,10 @@ class PersistentStorage : public Storage {
 
   absl::Status Delete(absl::Time timestamp, const TableID& table_id,
                       const KeyRange& key_range) override;
+
+  // Creates an immutable, point-in-time LevelDB copy at output_dir. The
+  // destination must not exist.
+  absl::Status CreateCheckpoint(const std::string& output_dir) const;
 
   void SetVersionRetentionPeriod(
       absl::Duration version_retention_period) override;
@@ -170,8 +174,7 @@ class PersistentStorage : public Storage {
   // Mirrors InMemoryStorage::RemoveExpiredVersions behavior: keeps the most
   // recent version within the retention window, deletes everything older.
   void RemoveExpiredVersions(const std::string& cell_prefix,
-                             absl::Time timestamp,
-                             leveldb::WriteBatch* batch);
+                             absl::Time timestamp, leveldb::WriteBatch* batch);
 
   mutable absl::Mutex mu_;
   std::unique_ptr<leveldb::DB> db_;

@@ -288,6 +288,10 @@ COPY --from=cache-export /cache-archives/ /
 # Now build the release image from the build image.
 FROM gcr.io/distroless/cc-debian12
 
+ARG SOURCE_REVISION=unknown
+LABEL org.opencontainers.image.source="https://github.com/LocalGCloud/cloud-spanner-emulator" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}"
+
 # Copy binaries (persisted from cache mount during build).
 COPY --from=build /build/output/emulator_main .
 COPY --from=build /build/output/gateway_main .

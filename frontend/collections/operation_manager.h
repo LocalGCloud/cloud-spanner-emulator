@@ -17,16 +17,17 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_COLLECTIONS_OPERATION_MANAGER_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_COLLECTIONS_OPERATION_MANAGER_H_
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
-
+#include <vector>
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
 #include "frontend/entities/operation.h"
-#include "absl/status/status.h"
+#include "google/longrunning/operations.pb.h"
 
 namespace google {
 namespace spanner {
@@ -45,16 +46,9 @@ namespace frontend {
 // - Create a database
 // - Update a database
 //
-// The emulator implementation of these operations executes the operation
-// synchronously, but returns an incomplete operation response. The completed
-// operation is registered with this OperationManager. This ensures that
-// applications developed against the emulator don't assume that the operations
-// finish immediately and have to query the operations api to get the status of
-// the operation.
-//
-// The interface below does not implement the Cancel and Wait operations. Cancel
-// returns success at the handler level as there is nothing to cancel. Wait is
-// not implemented by Cloud Spanner, so we don't need to implement it here.
+// The emulator executes these operations synchronously, then registers their
+// terminal responses with this manager. Clients can retrieve, list, wait for,
+// cancel, and delete those operations through the handler layer.
 //
 // For more details on the long running operations api, see
 //     https://cloud.google.com/spanner/docs/reference/rpc/google.longrunning
@@ -69,6 +63,12 @@ class OperationManager {
   // System generated ids always start with "_auto".
   absl::StatusOr<std::shared_ptr<Operation>> CreateOperation(
       const std::string& resource_uri, const std::string& operation_id)
+      ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Restores a complete operation proto and advances generated IDs past any
+  // restored _autoN suffix.
+  absl::StatusOr<std::shared_ptr<Operation>> RestoreOperation(
+      const google::longrunning::Operation& operation)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   // Gets the operation with the specified URI, or returns NOT_FOUND if no such
@@ -90,7 +90,7 @@ class OperationManager {
   absl::Mutex mu_;
 
   // Counter for the system assigned operation id.
-  int next_operation_id_ ABSL_GUARDED_BY(mu_) = 0;
+  int64_t next_operation_id_ ABSL_GUARDED_BY(mu_) = 0;
 
   // Map from operation URI to actual operation.
   std::map<std::string, std::shared_ptr<Operation>> operations_map_

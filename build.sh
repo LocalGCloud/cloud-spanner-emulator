@@ -15,6 +15,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+SOURCE_REVISION="${SOURCE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 PLATFORM="arm64"
@@ -63,6 +64,7 @@ echo "============================================"
 echo "  Building Spanner Emulator"
 echo "  Platform: linux/${PLATFORM}"
 echo "  Cache:    $TOOLCHAIN_CACHE_EPOCH"
+echo "  Revision: $SOURCE_REVISION"
 if [ -n "$OFFLINE_DIR" ]; then
   echo "  Mode:     offline (repo cache: $OFFLINE_DIR)"
 else
@@ -197,6 +199,7 @@ DOCKER_BUILDKIT=1 docker buildx build \
   --build-arg BAZEL_CACHE_NAMESPACE="$BAZEL_CACHE_NAMESPACE" \
   --build-arg BAZEL_REPO_CACHE_NAMESPACE="$BAZEL_REPO_CACHE_NAMESPACE" \
   --build-arg BAZEL_JOBS="$BAZEL_JOBS" \
+  --build-arg SOURCE_REVISION="$SOURCE_REVISION" \
   --build-arg 'BAZEL_RAM=HOST_RAM*.8' \
   -t "$IMAGE_TAG" .
 

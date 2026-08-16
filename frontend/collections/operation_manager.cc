@@ -16,12 +16,15 @@
 
 #include "frontend/collections/operation_manager.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
-
 #include "absl/status/statusor.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
@@ -39,16 +42,28 @@ absl::StatusOr<std::shared_ptr<Operation>> OperationManager::CreateOperation(
     const std::string& resource_uri, const std::string& operation_id) {
   absl::MutexLock lock(mu_);
 
-  // Generate an operation id if the user did not specify one.
-  std::string operation_uri = MakeOperationUri(
-      resource_uri, operation_id.empty()
-                        ? absl::StrCat("_auto", next_operation_id_++)
-                        : operation_id);
-
-  // Double-check that the operation does not already exist.
-  auto itr = operations_map_.find(operation_uri);
-  if (itr != operations_map_.end()) {
-    return error::OperationAlreadyExists(operation_uri);
+  // Generate an operation id if the user did not specify one. Restored
+  // operations may already occupy an auto-generated ID, so advance past them.
+  std::string operation_uri;
+  if (operation_id.empty()) {
+    if (next_operation_id_ == std::numeric_limits<int64_t>::max()) {
+      return absl::OutOfRangeError(
+          "System-generated operation IDs are exhausted");
+    }
+    do {
+      operation_uri = MakeOperationUri(
+          resource_uri, absl::StrCat("_auto", next_operation_id_++));
+      if (next_operation_id_ == std::numeric_limits<int64_t>::max() &&
+          operations_map_.contains(operation_uri)) {
+        return absl::OutOfRangeError(
+            "System-generated operation IDs are exhausted");
+      }
+    } while (operations_map_.contains(operation_uri));
+  } else {
+    operation_uri = MakeOperationUri(resource_uri, operation_id);
+    if (operations_map_.contains(operation_uri)) {
+      return error::OperationAlreadyExists(operation_uri);
+    }
   }
 
   // Finally, create the operation.
@@ -56,6 +71,50 @@ absl::StatusOr<std::shared_ptr<Operation>> OperationManager::CreateOperation(
       std::make_shared<Operation>(operation_uri);
   operations_map_[operation_uri] = operation;
 
+  return operation;
+}
+
+absl::StatusOr<std::shared_ptr<Operation>>
+OperationManager::RestoreOperation(
+    const google::longrunning::Operation& operation_proto) {
+  if (operation_proto.name().empty() || !operation_proto.done()) {
+    return absl::InvalidArgumentError(
+        "Restored operation must have a name and be terminal");
+  }
+
+  std::string resource_uri;
+  absl::string_view operation_id;
+  absl::Status parse_status =
+      ParseOperationUri(operation_proto.name(), &resource_uri, &operation_id);
+  if (!parse_status.ok()) {
+    return parse_status;
+  }
+  if (MakeOperationUri(resource_uri, operation_id) != operation_proto.name()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid restored operation name: ",
+                     operation_proto.name()));
+  }
+
+  absl::MutexLock lock(mu_);
+  if (operations_map_.contains(operation_proto.name())) {
+    return error::OperationAlreadyExists(operation_proto.name());
+  }
+
+  if (absl::StartsWith(operation_id, "_auto")) {
+    int64_t restored_id = 0;
+    if (absl::SimpleAtoi(operation_id.substr(5), &restored_id) &&
+        restored_id >= 0) {
+      if (restored_id == std::numeric_limits<int64_t>::max()) {
+        return absl::OutOfRangeError(
+            "Restored operation ID exceeds the supported range");
+      }
+      next_operation_id_ =
+          std::max(next_operation_id_, restored_id + int64_t{1});
+    }
+  }
+
+  auto operation = std::make_shared<Operation>(operation_proto);
+  operations_map_.emplace(operation_proto.name(), operation);
   return operation;
 }
 
@@ -81,9 +140,13 @@ absl::StatusOr<std::vector<std::shared_ptr<Operation>>>
 OperationManager::ListOperations(const std::string& resource_uri) {
   absl::MutexLock lock(mu_);
   std::vector<std::shared_ptr<Operation>> operations;
-  auto itr = operations_map_.lower_bound(resource_uri);
+  std::string prefix = resource_uri;
+  if (!absl::EndsWith(prefix, "/")) {
+    prefix.push_back('/');
+  }
+  auto itr = operations_map_.lower_bound(prefix);
   while (itr != operations_map_.end()) {
-    if (!absl::StartsWith(itr->first, resource_uri)) {
+    if (!absl::StartsWith(itr->first, prefix)) {
       break;
     }
     operations.push_back(itr->second);

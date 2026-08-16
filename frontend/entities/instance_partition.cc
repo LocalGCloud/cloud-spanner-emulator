@@ -19,8 +19,8 @@
 #include <cstdint>
 #include <string>
 
-#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
 #include "frontend/converters/time.h"
+#include "google/spanner/admin/instance/v1/spanner_instance_admin.pb.h"
 
 namespace google {
 namespace spanner {
@@ -45,8 +45,24 @@ InstancePartition::InstancePartition(const std::string& name,
   update_time_ = current_time;
 }
 
+InstancePartition::InstancePartition(const std::string& name,
+                                     const std::string& config,
+                                     const std::string& display_name,
+                                     int32_t node_count,
+                                     int32_t processing_units,
+                                     absl::Time create_time,
+                                     absl::Time update_time)
+    : name_(name),
+      config_(config),
+      display_name_(display_name),
+      node_count_(node_count),
+      processing_units_(processing_units),
+      create_time_(create_time),
+      update_time_(update_time) {}
+
 void InstancePartition::ToProto(
     instance_api::InstancePartition* partition) const {
+  absl::ReaderMutexLock lock(mu_);
   partition->Clear();
   partition->set_name(name_);
   partition->set_config(config_);
@@ -63,6 +79,29 @@ void InstancePartition::ToProto(
   if (auto update_time = TimestampToProto(update_time_); update_time.ok()) {
     *partition->mutable_update_time() = *update_time;
   }
+}
+
+void InstancePartition::UpdateDisplayName(const std::string& display_name,
+                                          absl::Time update_time) {
+  absl::MutexLock lock(mu_);
+  display_name_ = display_name;
+  update_time_ = update_time;
+}
+
+void InstancePartition::UpdateNodeCount(int32_t node_count,
+                                        absl::Time update_time) {
+  absl::MutexLock lock(mu_);
+  node_count_ = node_count;
+  processing_units_ = 0;
+  update_time_ = update_time;
+}
+
+void InstancePartition::UpdateProcessingUnits(int32_t processing_units,
+                                              absl::Time update_time) {
+  absl::MutexLock lock(mu_);
+  processing_units_ = processing_units;
+  node_count_ = 0;
+  update_time_ = update_time;
 }
 
 }  // namespace frontend

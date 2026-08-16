@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+#include <limits>
 #include <string>
 
 #include "google/longrunning/operations.pb.h"
@@ -251,8 +252,8 @@ TEST_F(InstanceApiTest, ListsPaginatedInstances) {
   // Using the next_page_token pointing to test-instance5, list next at most 5
   // instances test-instance5, test-instance6 and test-instance7.
   instance_api::ListInstancesResponse response2;
-  GOOGLESQL_EXPECT_OK(ListInstances(test_instance_uri_, page_size,
-                          response.next_page_token(), &response2));
+  GOOGLESQL_EXPECT_OK(ListInstances(test_project_uri_, page_size,
+                                    response.next_page_token(), &response2));
   EXPECT_EQ(response2.instances_size(), last_page_size);
   for (int i = 0; i < last_page_size; i++) {
     EXPECT_EQ(response2.instances(i).name(),
@@ -260,6 +261,46 @@ TEST_F(InstanceApiTest, ListsPaginatedInstances) {
   }
   // No more instances left to be returned and thus next_page_token is not set.
   EXPECT_EQ(response2.next_page_token(), "");
+}
+
+TEST_F(InstanceApiTest, UpdateValidatesEveryFieldBeforeMutation) {
+  GOOGLESQL_EXPECT_OK(CreateInstance(test_instance_name_));
+
+  instance_api::UpdateInstanceRequest request;
+  request.mutable_instance()->set_name(test_instance_uri_);
+  request.mutable_instance()->set_display_name("should-not-stick");
+  request.mutable_field_mask()->add_paths("display_name");
+  request.mutable_field_mask()->add_paths("unsupported");
+  longrunning::Operation operation;
+  grpc::ClientContext invalid_mask_context;
+  EXPECT_THAT(test_env()->instance_admin_client()->UpdateInstance(
+                  &invalid_mask_context, request, &operation),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  instance_api::Instance instance;
+  GOOGLESQL_EXPECT_OK(GetInstance(test_instance_name_, &instance));
+  EXPECT_EQ(instance.display_name(), test_instance_name_ + "-display");
+
+  request.mutable_field_mask()->clear_paths();
+  request.mutable_field_mask()->add_paths("processing_units");
+  request.mutable_instance()->set_processing_units(550);
+  grpc::ClientContext invalid_capacity_context;
+  EXPECT_THAT(test_env()->instance_admin_client()->UpdateInstance(
+                  &invalid_capacity_context, request, &operation),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  request.mutable_field_mask()->clear_paths();
+  request.mutable_field_mask()->add_paths("node_count");
+  request.mutable_instance()->set_node_count(
+      std::numeric_limits<int32_t>::max());
+  grpc::ClientContext overflow_capacity_context;
+  EXPECT_THAT(test_env()->instance_admin_client()->UpdateInstance(
+                  &overflow_capacity_context, request, &operation),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  GOOGLESQL_EXPECT_OK(GetInstance(test_instance_name_, &instance));
+  EXPECT_EQ(instance.node_count(), 5);
+  EXPECT_EQ(instance.processing_units(), 5000);
 }
 
 TEST_F(InstanceApiTest, DeleteInstance) {
