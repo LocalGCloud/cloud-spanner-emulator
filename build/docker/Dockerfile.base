@@ -34,7 +34,7 @@ RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries && \
       curl tar build-essential wget python3 zip unzip \
       default-jre default-jdk ca-certificates-java \
       make rename git language-pack-en tzdata dirmngr \
-      libssl-dev zlib1g-dev libtinfo5 \
+      libssl-dev zlib1g-dev libtinfo5 lld \
       gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
                         --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \

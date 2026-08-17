@@ -435,7 +435,7 @@ git push origin v<version>
 A `v*` tag publishes:
 
 - `jaysen2apache/spanner-emulator-extended:latest`
-- `jaysen2apache/spanner-emulator-extended:v<version>`
+- `jaysen2apache/spanner-emulator-extended:<version>`
 - A commit-SHA image tag
 - A `spanner-emulator-macos-arm64.tar.gz` workflow artifact and checksum
 

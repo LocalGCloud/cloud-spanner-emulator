@@ -52,7 +52,7 @@ RUN if [ ! -f /.toolchain-gcc13-ready ]; then \
         default-jre default-jdk ca-certificates-java \
         software-properties-common make rename git \
         language-pack-en tzdata ca-certificates gnupg dirmngr \
-        libssl-dev zlib1g-dev libtinfo5 \
+        libssl-dev zlib1g-dev libtinfo5 lld \
         gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
       update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
                           --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \
@@ -182,7 +182,7 @@ RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,s
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
     bazel --host_jvm_args=-Djdk.lang.Process.launchMechanism=posix_spawn \
-      --output_base=/bazel-output build -c opt --strip=always --spawn_strategy=standalone \
+      --output_base=/bazel-output build -c opt --strip=always \
       --jobs=${BAZEL_JOBS} --local_resources=memory=${BAZEL_RAM} \
       --disk_cache=/bazel-disk-cache \
       --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_MAX_BYTES} \

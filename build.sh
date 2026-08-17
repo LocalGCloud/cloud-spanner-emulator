@@ -2,15 +2,15 @@
 # Build the Spanner emulator using build/docker/Dockerfile.ubuntu
 #
 # Usage:
-#   ./build.sh                                    # online, arm64 (default)
-#   ./build.sh --platform=amd64                   # online, amd64 (emulated on arm64)
-#   ./build.sh --offline-dir=bazel-distdir        # offline, arm64
-#   ./build.sh --offline-dir=bazel-distdir --platform=amd64  # offline, amd64
+#   ./build.sh                                    # arm64, offline (bazel-distdir), base image (default)
+#   ./build.sh --online                           # online mode (skips local bazel-distdir)
+#   ./build.sh --platform=amd64                   # amd64 (x86_64) platform
+#   ./build.sh --offline-dir=custom-dir           # custom offline directory
+#   ./build.sh --base-image=ubuntu:22.04          # specify custom base image
+#   ./build.sh --cache-to=myregistry/repo:tag     # export BuildKit cache to registry
 #
-# When --offline-dir is set, `bazel fetch` is run on the host to populate Bazel's
-# repository cache (sha256-addressed, includes ALL transitive deps), then the
-# cache is passed into Docker via --build-arg OFFLINE_DIR so Bazel uses the
-# cached archives instead of hitting the network.
+# By default, ./build.sh runs in offline mode using bazel-distdir, builds for
+# linux/arm64 (Apple Silicon native), and uses spanner-emulator-base:latest.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,13 +18,18 @@ cd "$SCRIPT_DIR"
 SOURCE_REVISION="${SOURCE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
-PLATFORM="arm64"
-OFFLINE_DIR=""
+PLATFORM="${SPANNER_PLATFORM:-arm64}"
+OFFLINE_DIR="${SPANNER_OFFLINE_DIR:-bazel-distdir}"
+BASE_IMAGE="${SPANNER_BASE_IMAGE:-spanner-emulator-base:latest}"
+CACHE_TO="${SPANNER_CACHE_TO_REF:-}"
 
 for arg in "$@"; do
   case "$arg" in
-    --platform=*)    PLATFORM="${arg#*=}" ;;
-    --offline-dir=*) OFFLINE_DIR="${arg#*=}" ;;
+    --platform=*)          PLATFORM="${arg#*=}" ;;
+    --offline-dir=*)       OFFLINE_DIR="${arg#*=}" ;;
+    --online|--no-offline) OFFLINE_DIR="" ;;
+    --base-image=*)        BASE_IMAGE="${arg#*=}" ;;
+    --cache-to=*)          CACHE_TO="${arg#*=}" ;;
   esac
 done
 case "$PLATFORM" in
@@ -37,6 +42,7 @@ case "$PLATFORM" in
 esac
 BUILDER_NAME="${SPANNER_BUILDER:-spanner-emulator-local}"
 BUILDKIT_CONFIG="$SCRIPT_DIR/build/docker/buildkitd.toml"
+
 
 # Never change the legacy value: it names caches created before epochs existed.
 LEGACY_TOOLCHAIN_CACHE_EPOCH="ubuntu22-gcc13-bazel7.6.1"
@@ -57,20 +63,24 @@ fi
 BAZEL_REPO_CACHE_NAMESPACE="spanner-emulator-${PLATFORM}"
 
 DOCKERFILE="build/docker/Dockerfile.ubuntu"
-IMAGE_TAG="spanner-emulator-build:${PLATFORM}"
+IMAGE_TAG="spanner-emulator-extended:local"
 REGISTRY_CACHE="${SPANNER_REGISTRY_CACHE-jaysen2apache/spanner-emulator-extended:buildcache-${PLATFORM}}"
 
 echo "============================================"
 echo "  Building Spanner Emulator"
-echo "  Platform: linux/${PLATFORM}"
-echo "  Cache:    $TOOLCHAIN_CACHE_EPOCH"
-echo "  Revision: $SOURCE_REVISION"
+echo "  Platform:   linux/${PLATFORM}"
+echo "  Base Image: $BASE_IMAGE"
+echo "  Cache:      $TOOLCHAIN_CACHE_EPOCH"
+echo "  Revision:   $SOURCE_REVISION"
 if [ -n "$OFFLINE_DIR" ]; then
-  echo "  Mode:     offline (repo cache: $OFFLINE_DIR)"
+  echo "  Mode:       offline (repo cache: $OFFLINE_DIR)"
 else
-  echo "  Mode:     online"
+  echo "  Mode:       online"
 fi
-echo "  Started:  $(date)"
+if [ -n "$CACHE_TO" ]; then
+  echo "  Export Cache: $CACHE_TO"
+fi
+echo "  Started:    $(date)"
 echo "============================================"
 BUILD_START=$(date +%s)
 
@@ -91,6 +101,17 @@ else
     echo "ERROR: Could not create Buildx builder '$BUILDER_NAME'." >&2
     echo "If that name already exists but is unusable, set SPANNER_BUILDER to a different name." >&2
     exit 1
+  fi
+fi
+if [ "$BASE_IMAGE" = "spanner-emulator-base:latest" ] || [ "$BASE_IMAGE" = "spanner-emulator-base:${PLATFORM}" ]; then
+  if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+    echo "Base image '$BASE_IMAGE' not found locally. Building base image..."
+    if docker buildx build --builder "$BUILDER_NAME" --platform "linux/${PLATFORM}" --load -f build/docker/Dockerfile.base -t "$BASE_IMAGE" .; then
+      echo "Base image '$BASE_IMAGE' built successfully."
+    else
+      echo "WARN: Could not pre-build '$BASE_IMAGE'; falling back to ubuntu:22.04."
+      BASE_IMAGE="ubuntu:22.04"
+    fi
   fi
 fi
 BUILDER_CACHE_POLICY=$(
@@ -146,9 +167,15 @@ else
   echo ""
   echo "[1/3] Skipping repo cache (online mode)..."
 fi
+BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE}")
+
 if [ -z "$OFFLINE_DIR" ] && [ -n "$REGISTRY_CACHE" ]; then
   echo "  Importing portable BuildKit cache: $REGISTRY_CACHE"
   CACHE_ARGS+=(--cache-from "type=registry,ref=$REGISTRY_CACHE")
+fi
+if [ -n "$CACHE_TO" ]; then
+  echo "  Exporting BuildKit cache to: $CACHE_TO"
+  CACHE_ARGS+=(--cache-to "type=registry,ref=$CACHE_TO,mode=max")
 fi
 
 # ── Build ────────────────────────────────────────────────────────────────────

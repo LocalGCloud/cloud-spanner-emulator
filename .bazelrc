@@ -30,6 +30,7 @@ build:linux --cxxopt=-D_GNU_SOURCE
 build:linux --copt=-D_GNU_SOURCE
 build:linux --cxxopt=-D_GLIBCXX_USE_C99=1
 build:linux --cxxopt=-D_GLIBCXX_USE_CXX11_ABI=1
+build:linux --linkopt=-fuse-ld=lld
 
 # Third-party gRPC headers are not layering-clean under Apple Clang modules.
 build:macos --features=-layering_check

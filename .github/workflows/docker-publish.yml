@@ -514,7 +514,7 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=
             type=ref,event=tag
-
+            type=semver,pattern={{version}}
       - name: Create multi-platform manifest
         working-directory: /tmp/digests
         env:
