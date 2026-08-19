@@ -308,6 +308,18 @@ absl::Status ReadWriteTransaction::ApplyStatementVerifiers() {
   return absl::OkStatus();
 }
 
+absl::Status ReadWriteTransaction::ReverifyBufferedWriteOps() {
+  // GetBufferedOps() (unlike GetDeduplicatedCurrentStatementOps(), which is
+  // cleared at the end of every Write() call) returns every mutation
+  // buffered across the whole transaction, so this re-checks constraints for
+  // rows written in earlier Write() calls too, not just the most recent one.
+  for (const auto& write_op : transaction_store_->GetBufferedOps()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        action_registry_->ExecuteVerifiers(action_context_.get(), write_op));
+  }
+  return absl::OkStatus();
+}
+
 void ReadWriteTransaction::UpdateTrackedCommitTimestamps() {
   transaction_store_->TrackCommitTimestamps();
 }
@@ -630,6 +642,17 @@ absl::Status ReadWriteTransaction::Commit() {
     GOOGLESQL_ASSIGN_OR_RETURN(
         std::unique_ptr<postgres_translator::interfaces::PGArena> arena,
         postgres_translator::spangres::MemoryContextPGArena::Init(nullptr));
+
+    // Re-verify constraints (unique indexes) against the buffered mutations
+    // one last time before committing. This is deliberately done before
+    // reserving a commit timestamp, so a transaction that fails this check
+    // never advances last_commit_timestamp_ or otherwise looks like it made
+    // forward progress. See ReverifyBufferedWriteOps() for why this is
+    // necessary in addition to the verification already performed in
+    // Write(). A failure here is handled identically to a Write()-time
+    // verification failure: GuardedCall's post-processing below resets the
+    // transaction and surfaces a constraint-violation error to the caller.
+    GOOGLESQL_RETURN_IF_ERROR(ReverifyBufferedWriteOps());
 
     // Pick a commit timestamp.
     GOOGLESQL_ASSIGN_OR_RETURN(commit_timestamp_, lock_handle_->ReserveCommitTimestamp());

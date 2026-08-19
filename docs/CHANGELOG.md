@@ -1,5 +1,46 @@
 # Changelog
 
+## [2026-08-18] Unique Index Restore-Time Corruption and Restore Fault Isolation
+
+Implements `openspec/changes/fix-unique-index-restore-isolation/`. Fixes the
+incident where localcloud's console "Add Row" generator produced a duplicate
+key in a unique secondary index (`EmployeesByEmail`) that was accepted at
+write time, only surfaced as `DATA_LOSS` on the next restart, and then took
+down the whole emulator process (and every other instance/database) because
+`RestoreFromMetadata()` propagated a single database's restore failure
+straight to `main()`.
+
+### Investigation
+
+Reviewed `backend/locking/manager.cc` (`LockManager::EnqueueLock`'s
+wound-wait), `backend/transaction/read_write_transaction.cc` (`Write()` /
+`Commit()`), and `frontend/handlers/transactions.cc`'s `Commit` RPC handler.
+Confirmed that a plain mutations-only `Commit` RPC calls `txn->Write(mutation)`
+and `txn->Commit()` as two separate top-level calls in the same handler; each
+only holds `ReadWriteTransaction::mu_` for its own duration
+(`GuardedCall`), so there is a real (if narrow) window between them where
+`LockManager`'s wound-wait can hand the whole-database lock to a different,
+concurrently-arriving transaction. `UniqueIndexVerifier::Verify()`
+(`backend/actions/unique_index.cc`) only runs once, inside `Write()` --
+`Commit()` never re-checks uniqueness before flushing to `PersistentStorage`,
+so nothing re-validates that the verified-at-Write()-time state still holds
+by the time mutations are about to become durable. This is a textbook
+time-of-check-to-time-of-use gap, and it holds regardless of the exact
+interleaving that lets a transaction reach `Commit()` after the world moved
+on underneath it (lock hand-off, or any future change to
+`PersistentStorage`'s read/write ordering, e.g. the separate
+`fix-spanner-leveldb-race` change).
+
+### Fixed
+- **Unique index TOCTOU at commit**: Added `ReadWriteTransaction::ReverifyBufferedWriteOps()`, called in `Commit()` immediately before `FlushWriteOpsToStorage()` (and before reserving a commit timestamp), which re-runs all verifiers -- in practice only `UniqueIndexVerifier`, the only `Verifier` subclass in the codebase -- against every mutation buffered so far in the transaction. Because this runs inside the same continuously-held `mu_` critical section as the flush, it is the last point before mutations become durable and closes the gap described above: a duplicate unique-index key can no longer reach `PersistentStorage`, regardless of what interleaving got the transaction to `Commit()`. A failure here is handled identically to a `Write()`-time verification failure (same `UniqueIndexConstraintViolation` error, same `GuardedCall` reset/cleanup path). See `backend/transaction/read_write_transaction.{h,cc}`.
+- **Per-database restore fault isolation**: `RestoreFromMetadata()` (`binaries/emulator_main.cc`) no longer aborts the whole process when one database fails to restore (for example, discovering a unique-index violation left over from before the fix above, or any other restore error). The per-database restore body is now an isolated lambda; a failure is logged with the database URI and reason, and the loop continues with the next database. `main()` only fails startup for errors that aren't scoped to a single database (the metadata catalog itself being unreadable stays fatal, since no database identities are known at all in that case).
+- **Second-crash fix**: The earlier `MarkDatabaseMetadataCommitted` pass (over all persisted database URIs, before the main per-database restore loop) no longer treats a single database's metadata/storage mismatch as fatal either -- previously, manually removing a corrupted database's on-disk directory to work around the first crash tripped a *second*, different `DATA_LOSS` ("Persistent database root is unavailable for metadata commit") that still took down the whole process. That error message now also names the specific database and, when the root is simply missing, says so explicitly instead of a generic "unavailable" message. See `frontend/collections/database_manager.cc`.
+- **`--repair_corrupted_databases` startup flag**: When a database fails to restore and this flag is set, its on-disk LevelDB directory is moved aside under `<data_dir>/.quarantine/` and its `metadata.json` entry is removed (directory rename first, then `MetadataStore::Save()`'s already-atomic temp-file-plus-rename), so it stops blocking future startups. Without the flag, a database that fails to restore is simply left in place (and unavailable for this run) so an operator can inspect it before deciding to discard it. See `common/config.{h,cc}`, `binaries/emulator_main.cc`.
+
+### Known gaps (not implemented in this pass)
+- A database that fails to restore is *not* currently listed by `DatabaseAdmin.ListDatabases`/`GetDatabase` with an explicit unavailable state (it is simply absent from the catalog for that run, the same as if it were quarantined). Surfacing it as visible-but-unavailable, as originally scoped in `specs/restore-fault-isolation/spec.md`, would need a `state` field threaded through `DatabaseManager`/`frontend::Database` and is left as follow-up work.
+- No automated regression/stress tests were added for either fix (per `tasks.md` sections 1-6) -- this pass was code review and fixes only, with test execution and building explicitly out of scope for this change.
+
 ## [2026-05-08] OPTIMIZER_VERSION Hint and Full-Text Search Fix
 
 ### Added

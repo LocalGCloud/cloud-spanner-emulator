@@ -34,6 +34,7 @@
 #include "absl/time/time.h"
 #include "backend/database/database.h"
 #include "backend/schema/updater/schema_updater.h"
+#include "common/clock.h"
 #include "common/config.h"
 #include "frontend/collections/database_manager.h"
 #include "frontend/common/uris.h"
@@ -68,6 +69,63 @@ absl::StatusOr<absl::Time> ParsePersistedTime(
         error));
   }
   return parsed;
+}
+
+// Moves a corrupted database's on-disk LevelDB directory aside and removes
+// its metadata.json entry, so a subsequent startup no longer attempts (and
+// fails) to restore it. The directory rename happens first, since it is
+// cheap and reversible; the metadata rewrite is already atomic via
+// MetadataStore::Save()'s temp-file-plus-rename (metadata_store.cc). If the
+// process crashes between the two steps, the next startup will find an
+// on-disk root that no longer exists while metadata.json still references
+// it -- that mismatch is diagnosed explicitly (see
+// DatabaseManager::Creation::Publish()'s metadata-commit path) rather than
+// crashing, and re-running with --repair_corrupted_databases completes the
+// metadata removal (the rename below is a no-op the second time, since the
+// source directory is already gone).
+//
+// See openspec change fix-unique-index-restore-isolation, design.md
+// Decision 3.
+static absl::Status QuarantineCorruptedDatabase(
+    const std::string& data_dir, const std::string& instance_name,
+    const std::string& db_name, const std::string& database_uri,
+    ::google::spanner::emulator::frontend::MetadataStore* ms,
+    ::google::spanner::emulator::Clock* clock) {
+  auto storage_directory_or =
+      google::spanner::emulator::backend::Database::
+          PersistentStorageDirectory(data_dir, database_uri);
+  if (!storage_directory_or.ok()) {
+    return storage_directory_or.status();
+  }
+  const std::filesystem::path storage_directory = *storage_directory_or;
+  std::error_code exists_error;
+  if (std::filesystem::exists(storage_directory, exists_error)) {
+    const std::filesystem::path quarantine_root =
+        std::filesystem::path(data_dir) / ".quarantine";
+    std::error_code mkdir_error;
+    std::filesystem::create_directories(quarantine_root, mkdir_error);
+    if (mkdir_error) {
+      return absl::DataLossError(absl::StrCat(
+          "Failed to create quarantine directory ", quarantine_root.string(),
+          " for ", database_uri, ": ", mkdir_error.message()));
+    }
+    // Sanitize the URI into a filesystem-safe, still-recognizable name.
+    std::string sanitized_uri = database_uri;
+    std::replace(sanitized_uri.begin(), sanitized_uri.end(), '/', '_');
+    const std::filesystem::path quarantine_path =
+        quarantine_root / absl::StrCat(sanitized_uri, "-",
+                                       absl::ToUnixMicros(clock->Now()));
+    std::error_code rename_error;
+    std::filesystem::rename(storage_directory, quarantine_path, rename_error);
+    if (rename_error) {
+      return absl::DataLossError(absl::StrCat(
+          "Failed to quarantine on-disk data for ", database_uri, " (",
+          storage_directory.string(), " -> ", quarantine_path.string(),
+          "): ", rename_error.message()));
+    }
+  }
+  ms->RemoveDatabase(instance_name, db_name);
+  return ms->Save();
 }
 
 // Restores instances and databases from persisted metadata.
@@ -146,9 +204,23 @@ static absl::Status RestoreFromMetadata(Server* server) {
         DatabaseManager::ReconcileDeletedDatabaseDirectories(
             config::data_dir(), database_uris));
     for (const std::string& database_uri : database_uris) {
-      GOOGLESQL_RETURN_IF_ERROR(
+      absl::Status metadata_commit_status =
           DatabaseManager::MarkDatabaseMetadataCommitted(config::data_dir(),
-                                                         database_uri));
+                                                          database_uri);
+      if (!metadata_commit_status.ok()) {
+        // Do not let one database's on-disk/metadata mismatch (for example,
+        // an operator manually removing its storage directory by hand
+        // instead of using --repair_corrupted_databases) abort startup for
+        // every other database -- this used to be a second, different
+        // DATA_LOSS that crashed the whole process even after working
+        // around the original restore failure. The per-database restore
+        // loop below independently -- and safely, per-database -- rejects
+        // this same database when it re-checks its storage directory, so
+        // logging and continuing here is sufficient; nothing else needs to
+        // duplicate that check.
+        ABSL_LOG(ERROR) << "Database metadata/storage mismatch for "
+                        << database_uri << ": " << metadata_commit_status;
+      }
     }
     GOOGLESQL_RETURN_IF_ERROR(
         DatabaseManager::CleanupOrphanedRestoreDirectories(
@@ -291,6 +363,16 @@ static absl::Status RestoreFromMetadata(Server* server) {
       std::string database_uri =
           ::google::spanner::emulator::MakeDatabaseUri(inst_name, db_name);
 
+      // Restoring a single database is isolated in its own scope: a failure
+      // here (for example, a persisted unique-index violation discovered
+      // only when the data is re-read -- see openspec change
+      // fix-unique-index-restore-isolation) must not prevent every other
+      // instance/database in this data directory from starting. Every
+      // GOOGLESQL_RETURN_IF_ERROR / GOOGLESQL_ASSIGN_OR_RETURN below returns
+      // from this lambda rather than from RestoreFromMetadata, so a failure
+      // is caught and handled per-database instead of aborting the whole
+      // restore (and, previously, the whole process -- see main()).
+      absl::Status database_restore_status = [&]() -> absl::Status {
       // Determine dialect.
       database_api::DatabaseDialect dialect;
       if (db_info.dialect == "POSTGRESQL") {
@@ -468,7 +550,6 @@ static absl::Status RestoreFromMetadata(Server* server) {
 
       GOOGLESQL_RETURN_IF_ERROR(creation->Publish());
       (*db_or)->set_enable_drop_protection(db_info.enable_drop_protection);
-      restored_databases++;
       const std::filesystem::path restore_marker =
           storage_directory.parent_path() / ".restore-in-progress";
       std::filesystem::remove(restore_marker, storage_error);
@@ -477,6 +558,43 @@ static absl::Status RestoreFromMetadata(Server* server) {
             "Failed to remove completed restore marker for ", database_uri,
             ": ", storage_error.message()));
       }
+      return absl::OkStatus();
+      }();  // End of per-database restore lambda.
+
+      if (!database_restore_status.ok()) {
+        ABSL_LOG(ERROR)
+            << "Failed to restore database " << database_uri
+            << "; it will be unavailable for this run, but every other "
+               "instance and database is unaffected. Reason: "
+            << database_restore_status;
+        if (config::repair_corrupted_databases()) {
+          absl::Status quarantine_status = QuarantineCorruptedDatabase(
+              config::data_dir(), inst_name, db_name, database_uri, ms,
+              env->clock());
+          if (!quarantine_status.ok()) {
+            ABSL_LOG(ERROR) << "Failed to quarantine corrupted database "
+                            << database_uri << ": " << quarantine_status;
+          } else {
+            ABSL_LOG(WARNING)
+                << "Quarantined corrupted database " << database_uri
+                << " (--repair_corrupted_databases): its on-disk data was "
+                   "moved aside under "
+                << config::data_dir()
+                << "/.quarantine and its metadata.json entry was removed. "
+                   "It will no longer appear on future restarts.";
+          }
+        } else {
+          ABSL_LOG(WARNING)
+              << "Restart the emulator with --repair_corrupted_databases to "
+                 "quarantine "
+              << database_uri
+              << " (move its on-disk data aside and remove it from "
+                 "metadata.json) so it stops blocking clean restores.";
+        }
+        continue;
+      }
+
+      restored_databases++;
     }
   }
 

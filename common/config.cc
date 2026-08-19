@@ -48,6 +48,16 @@ ABSL_FLAG(std::string, data_dir, "",
           "the emulator uses in-memory storage. When set, the emulator uses "
           "LevelDB-backed persistent storage at the specified directory.");
 
+ABSL_FLAG(bool, repair_corrupted_databases, false,
+          "If true, a database that fails to restore from --data_dir at "
+          "startup is quarantined: its on-disk storage directory is moved "
+          "aside under --data_dir/.quarantine and its metadata.json entry is "
+          "removed, so it no longer blocks subsequent startups. A database "
+          "that fails to restore never blocks the emulator from starting or "
+          "affects other databases regardless of this flag; it only controls "
+          "whether the corrupted database is left in place for inspection "
+          "(default) or cleaned up automatically.");
+
 ABSL_FLAG(
     int, abort_current_transaction_probability, 20,
     "The probability that the emulator will try to abort the current "
@@ -82,6 +92,10 @@ void set_abort_current_transaction_probability(int probability) {
 }
 
 std::string data_dir() { return absl::GetFlag(FLAGS_data_dir); }
+
+bool repair_corrupted_databases() {
+  return absl::GetFlag(FLAGS_repair_corrupted_databases);
+}
 
 }  // namespace config
 }  // namespace emulator

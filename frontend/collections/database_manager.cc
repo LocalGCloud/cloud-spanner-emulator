@@ -341,9 +341,27 @@ absl::Status DatabaseManager::MarkDatabaseMetadataCommitted(
       std::filesystem::symlink_status(database_root, error);
   if (error || !std::filesystem::is_directory(root_status) ||
       std::filesystem::is_symlink(root_status)) {
+    // Distinguish "the on-disk root simply doesn't exist" -- the specific,
+    // previously-confusing mismatch hit when a database's storage directory
+    // was removed (by hand, or by a prior --repair_corrupted_databases run)
+    // while metadata.json still references it -- from other filesystem
+    // errors, and name the database explicitly. See openspec change
+    // fix-unique-index-restore-isolation, design.md Decision 4: this used to
+    // surface as a generic, unattributed DATA_LOSS that was indistinguishable
+    // from other causes and gave operators no path forward.
+    if (!std::filesystem::exists(root_status)) {
+      return absl::DataLossError(absl::StrCat(
+          "Database ", database_uri, " has no on-disk storage at ",
+          database_root.string(),
+          " but metadata.json still references it. If this database's data "
+          "was removed by hand instead of via --repair_corrupted_databases, "
+          "restart the emulator with --repair_corrupted_databases to remove "
+          "its stale metadata entry; otherwise its data may be recoverable "
+          "under the original --data_dir."));
+    }
     return absl::DataLossError(absl::StrCat(
-        "Persistent database root is unavailable for metadata commit ",
-        database_root.string(),
+        "Persistent database root is unavailable for metadata commit for ",
+        database_uri, " at ", database_root.string(),
         error ? absl::StrCat(": ", error.message()) : ""));
   }
   for (const std::filesystem::path& candidate : {marker, temporary_marker}) {

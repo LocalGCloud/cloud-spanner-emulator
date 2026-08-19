@@ -18,8 +18,11 @@
 
 # Local build artifacts and outputs
 artifacts/
+# bazel-* also matches bazel-distdir/, which build.sh's offline mode needs
+# to COPY into the image (Dockerfile.ubuntu) — un-ignore it explicitly.
 bazel-*
-bazel-distdir/
+!bazel-distdir/
+!bazel-distdir/**
 !build_files.tar
 !build_files.txt
 

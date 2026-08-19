@@ -59,6 +59,16 @@ void set_abort_current_transaction_probability(int probability);
 // When set, the emulator uses LevelDB-backed persistent storage.
 std::string data_dir();
 
+// If true, a database that fails to restore from --data_dir at startup (for
+// example due to a data-integrity violation discovered only at reload time)
+// is quarantined: its on-disk storage directory is moved aside under
+// --data_dir/.quarantine and its metadata.json entry is removed, so it no
+// longer blocks subsequent startups. Every other instance/database is always
+// restored normally regardless of this flag; this only controls whether a
+// database that fails to restore is left in place (default, so an operator
+// can inspect it) or cleaned up automatically.
+bool repair_corrupted_databases();
+
 }  // namespace config
 }  // namespace emulator
 }  // namespace spanner

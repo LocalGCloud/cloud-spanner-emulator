@@ -155,6 +155,21 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
   absl::Status ApplyEffectors(const WriteOp& op);
   absl::Status ApplyStatementVerifiers();
 
+  // Re-runs verifiers (e.g. UniqueIndexVerifier) against every mutation
+  // buffered so far in this transaction, immediately before those mutations
+  // are flushed to base storage in Commit(). ApplyStatementVerifiers() only
+  // checks constraints once, at the end of the Write() call that produced
+  // each mutation; Write() and Commit() are separate top-level calls that
+  // each only hold `mu_` for their own duration (see GuardedCall), so a
+  // transaction that has already passed verification can still have the
+  // database-wide lock change hands before Commit() runs (see
+  // LockManager::EnqueueLock's wound-wait). Re-checking here -- while `mu_`
+  // is held continuously through the flush that follows -- closes that
+  // window: it is the last point before mutations become durable, so it
+  // catches any constraint violation regardless of what interleaving
+  // allowed the transaction to reach Commit() in the first place.
+  absl::Status ReverifyBufferedWriteOps();
+
   // Updates commit timestamp tracking to reflect currently buffered ops.
   void UpdateTrackedCommitTimestamps();
 

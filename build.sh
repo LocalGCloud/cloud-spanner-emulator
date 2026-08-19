@@ -7,10 +7,15 @@
 #   ./build.sh --platform=amd64                   # amd64 (x86_64) platform
 #   ./build.sh --offline-dir=custom-dir           # custom offline directory
 #   ./build.sh --base-image=ubuntu:22.04          # specify custom base image
+#   ./build.sh --base-image-repo=user/repo        # custom Docker Hub repo for the base image
+#   ./build.sh --rebuild-base-image               # force rebuild+push even if the registry tag exists
 #   ./build.sh --cache-to=myregistry/repo:tag     # export BuildKit cache to registry
 #
 # By default, ./build.sh runs in offline mode using bazel-distdir, builds for
-# linux/arm64 (Apple Silicon native), and uses spanner-emulator-base:latest.
+# linux/arm64 (Apple Silicon native), and uses a base image pulled from
+# Docker Hub (jaysen2apache/spanner-emulator-base:<arch>). The base image is
+# a real registry ref (not a local-only tag) so it resolves both from the
+# docker-container buildx builder used here and from GitHub Actions.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,7 +25,9 @@ SOURCE_REVISION="${SOURCE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unk
 # ── Parse arguments ──────────────────────────────────────────────────────────
 PLATFORM="${SPANNER_PLATFORM:-arm64}"
 OFFLINE_DIR="${SPANNER_OFFLINE_DIR:-bazel-distdir}"
-BASE_IMAGE="${SPANNER_BASE_IMAGE:-spanner-emulator-base:latest}"
+BASE_IMAGE_REPO="${SPANNER_BASE_IMAGE_REPO:-jaysen2apache/spanner-emulator-base}"
+BASE_IMAGE="${SPANNER_BASE_IMAGE:-}"
+REBUILD_BASE_IMAGE=0
 CACHE_TO="${SPANNER_CACHE_TO_REF:-}"
 
 for arg in "$@"; do
@@ -29,6 +36,8 @@ for arg in "$@"; do
     --offline-dir=*)       OFFLINE_DIR="${arg#*=}" ;;
     --online|--no-offline) OFFLINE_DIR="" ;;
     --base-image=*)        BASE_IMAGE="${arg#*=}" ;;
+    --base-image-repo=*)   BASE_IMAGE_REPO="${arg#*=}" ;;
+    --rebuild-base-image)  REBUILD_BASE_IMAGE=1 ;;
     --cache-to=*)          CACHE_TO="${arg#*=}" ;;
   esac
 done
@@ -40,6 +49,9 @@ case "$PLATFORM" in
     exit 1
     ;;
 esac
+if [ -z "$BASE_IMAGE" ]; then
+  BASE_IMAGE="${BASE_IMAGE_REPO}:${PLATFORM}"
+fi
 BUILDER_NAME="${SPANNER_BUILDER:-spanner-emulator-local}"
 BUILDKIT_CONFIG="$SCRIPT_DIR/build/docker/buildkitd.toml"
 
@@ -103,13 +115,28 @@ else
     exit 1
   fi
 fi
-if [ "$BASE_IMAGE" = "spanner-emulator-base:latest" ] || [ "$BASE_IMAGE" = "spanner-emulator-base:${PLATFORM}" ]; then
-  if ! docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
-    echo "Base image '$BASE_IMAGE' not found locally. Building base image..."
-    if docker buildx build --builder "$BUILDER_NAME" --platform "linux/${PLATFORM}" --load -f build/docker/Dockerfile.base -t "$BASE_IMAGE" .; then
-      echo "Base image '$BASE_IMAGE' built successfully."
+if [ "$BASE_IMAGE" = "${BASE_IMAGE_REPO}:${PLATFORM}" ]; then
+  # NOTE: the docker-container buildx builder used below runs BuildKit in its
+  # own isolated container and does NOT share the local `docker images` store.
+  # A base image built with `--load` only lands in the host Docker engine, so
+  # a later `FROM` from this builder can't see it and falls back to pulling
+  # from Docker Hub by name — which fails for a local-only tag. Pushing the
+  # base image to a real registry ref sidesteps that: both this builder and
+  # GitHub Actions resolve it the same way any other base image is resolved.
+  BASE_IMAGE_READY=0
+  if [ "$REBUILD_BASE_IMAGE" -eq 0 ] && docker buildx imagetools inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+    BASE_IMAGE_READY=1
+  fi
+  if [ "$BASE_IMAGE_READY" -eq 0 ]; then
+    if [ "$REBUILD_BASE_IMAGE" -eq 1 ]; then
+      echo "Rebuilding base image '$BASE_IMAGE' (--rebuild-base-image)..."
     else
-      echo "WARN: Could not pre-build '$BASE_IMAGE'; falling back to ubuntu:22.04."
+      echo "Base image '$BASE_IMAGE' not found on registry. Building and pushing..."
+    fi
+    if docker buildx build --builder "$BUILDER_NAME" --platform "linux/${PLATFORM}" --push -f build/docker/Dockerfile.base -t "$BASE_IMAGE" .; then
+      echo "Base image '$BASE_IMAGE' pushed successfully."
+    else
+      echo "WARN: Could not build/push '$BASE_IMAGE' (check 'docker login'); falling back to ubuntu:22.04." >&2
       BASE_IMAGE="ubuntu:22.04"
     fi
   fi

@@ -39,6 +39,7 @@ on:
 
 env:
   IMAGE_NAME: jaysen2apache/spanner-emulator-extended
+  BASE_IMAGE_REPO: jaysen2apache/spanner-emulator-base
   REGISTRY: docker.io
 
 jobs:
@@ -113,6 +114,24 @@ jobs:
             | cut -d ' ' -f 1 \
             | sed 's/^/value=/' >> "$GITHUB_OUTPUT"
 
+      # A pre-built base image (pushed via ./build.sh) skips the apt-get
+      # toolchain provisioning entirely on a cold cache. It's a real registry
+      # ref, so it resolves the same way from this CI builder as it does from
+      # the docker-container builder used locally — falls back to the
+      # Dockerfile's own ubuntu:22.04 default when not yet published.
+      - name: Resolve base image
+        id: base-image
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="${{ env.BASE_IMAGE_REPO }}:${{ matrix.arch }}"
+          if docker buildx imagetools inspect "$candidate" >/dev/null 2>&1; then
+            echo "value=$candidate" >> "$GITHUB_OUTPUT"
+          else
+            echo "Base image '$candidate' not published yet; using Dockerfile default."
+            echo "value=" >> "$GITHUB_OUTPUT"
+          fi
+
       # Bazel does not hash host tools such as /usr/bin/gcc into action keys.
       # Resolve the real toolchain image first so disk-cache entries never
       # cross compiler, package, or base-image changes.
@@ -127,6 +146,8 @@ jobs:
           provenance: false
           tags: spanner-emulator-toolchain:${{ matrix.arch }}
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          build-args: |
+            ${{ steps.base-image.outputs.value != '' && format('BASE_IMAGE={0}', steps.base-image.outputs.value) || '' }}
 
       - name: Fingerprint resolved toolchain
         id: toolchain-fingerprint
@@ -250,6 +271,7 @@ jobs:
             BAZEL_CACHE_WARM_NONCE=${{ (steps.bazel-repo-cache.outputs.cache-hit != 'true' || steps.bazel-disk-cache.outputs.cache-hit != 'true' || steps.cache-budget.outputs.trimmed == 'true') && format('{0}-{1}', github.run_id, github.run_attempt) || 'stable' }}
             BAZEL_CACHE_NAMESPACE=spanner-emulator-${{ matrix.arch }}
             BAZEL_REPO_CACHE_NAMESPACE=spanner-emulator-${{ matrix.arch }}
+            ${{ steps.base-image.outputs.value != '' && format('BASE_IMAGE={0}', steps.base-image.outputs.value) || '' }}
 
       - name: Export bounded Bazel cache archives
         if: steps.bazel-repo-cache.outputs.cache-hit != 'true' || steps.bazel-disk-cache.outputs.cache-hit != 'true' || steps.cache-budget.outputs.trimmed == 'true'
