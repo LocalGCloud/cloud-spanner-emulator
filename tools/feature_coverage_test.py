@@ -119,7 +119,7 @@ class FeatureCoverageTest(unittest.TestCase):
         data = base_inventory(); data["features"][0]["docs"] = ["http://example.com"]
         self.assert_invalid(data, "HTTPS")
         data = base_inventory(); data["features"][0]["docs"] = ["https://example.com/docs"]
-        self.assert_invalid(data, "reference Spanner")
+        self.assert_invalid(data, "official Spanner documentation domain")
 
     def test_evidence_path_checks(self):
         data = base_inventory(); data["features"][0]["evidence"]["implementation"] = ["missing.cc"]
@@ -132,12 +132,28 @@ class FeatureCoverageTest(unittest.TestCase):
     def test_supported_requires_evidence(self):
         data = base_inventory()
         data["features"][0]["evidence"] = {"implementation": [], "tests": []}
-        self.assert_invalid(data, "supported records require evidence")
+        self.assert_invalid(data, "supported records require implementation or test evidence")
+
+    def test_supported_rejects_documentation_only_verification(self):
+        data = base_inventory()
+        feature = data["features"][0]
+        feature["verification"] = "documented"
+        self.assert_invalid(data, "must be tested or implementation-verified")
+
+    def test_tested_requires_test_evidence(self):
+        data = base_inventory()
+        data["features"][0]["evidence"]["tests"] = []
+        self.assert_invalid(data, "tested records require test evidence")
+
+    def test_non_official_docs_domain_rejected(self):
+        data = base_inventory()
+        data["features"][0]["docs"] = ["https://example.com/spanner/docs/query"]
+        self.assert_invalid(data, "official Spanner documentation domain")
 
     def test_unsupported_and_not_applicable_require_notes(self):
-        data = base_inventory(); data["features"][0].update(status="unsupported", notes="", evidence={})
+        data = base_inventory(); data["features"][0].update(status="unsupported", notes="", evidence={}, verification="unverified")
         self.assert_invalid(data, "unsupported records require explanatory notes")
-        data = base_inventory(); data["features"][0].update(status="not-applicable", notes="", evidence={})
+        data = base_inventory(); data["features"][0].update(status="not-applicable", notes="", evidence={}, verification="unverified")
         self.assert_invalid(data, "not-applicable records require explanatory notes")
 
     def test_check_detects_stale_markdown(self):

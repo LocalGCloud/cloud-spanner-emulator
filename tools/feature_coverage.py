@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse, collections, copy, json, re, sys
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "docs" / "feature-coverage.yaml"
@@ -99,7 +100,9 @@ def validate(data: dict[str, Any], root: Path = ROOT) -> list[dict[str, Any]]:
         if not isinstance(docs, list): raise CoverageError(f"{fid}: docs must be a list")
         for url in docs:
             if not isinstance(url, str) or not url.startswith("https://"): raise CoverageError(f"{fid}: documentation links must be HTTPS")
-            if "spanner" not in url and f.get("category") != "emulator-specific": raise CoverageError(f"{fid}: documentation links must reference Spanner unless emulator-specific")
+            parsed = urlparse(url)
+            if parsed.hostname not in {"cloud.google.com", "docs.cloud.google.com"} or "/spanner/" not in parsed.path:
+                raise CoverageError(f"{fid}: documentation links must use the official Spanner documentation domain and path")
         evidence = f["evidence"]
         if not isinstance(evidence, dict): raise CoverageError(f"{fid}: evidence must be an object")
         evidence_paths = []
@@ -112,7 +115,14 @@ def validate(data: dict[str, Any], root: Path = ROOT) -> list[dict[str, Any]]:
             try: path.relative_to(root.resolve())
             except ValueError as exc: raise CoverageError(f"{fid}: evidence path escapes repository: {raw}") from exc
             if not path.exists(): raise CoverageError(f"{fid}: evidence path does not exist: {raw}")
-        if f["status"] == "supported" and not evidence_paths: raise CoverageError(f"{fid}: supported records require evidence")
+        implementation = evidence.get("implementation", []) or []
+        tests = evidence.get("tests", []) or []
+        if f["status"] == "supported" and not (implementation or tests):
+            raise CoverageError(f"{fid}: supported records require implementation or test evidence")
+        if f["status"] == "supported" and f["verification"] not in {"tested", "implemented"}:
+            raise CoverageError(f"{fid}: supported records must be tested or implementation-verified")
+        if f["verification"] == "tested" and not tests:
+            raise CoverageError(f"{fid}: tested records require test evidence")
         if not isinstance(f["notes"], str): raise CoverageError(f"{fid}: notes must be text")
         if f["status"] in {"unsupported", "not-applicable"} and not f["notes"].strip(): raise CoverageError(f"{fid}: {f['status']} records require explanatory notes")
     return features

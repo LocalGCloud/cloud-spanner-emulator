@@ -2670,14 +2670,14 @@
       ],
       "evidence": {
         "implementation": [
-          "README.md"
+          "frontend/server/server.cc"
         ],
         "tests": [],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "unverified",
+      "verification": "implemented",
       "notes": "Baseline classification for gRPC endpoint compatibility; conservative where production semantics are broader than emulator evidence."
     },
     {
@@ -2773,14 +2773,14 @@
       ],
       "evidence": {
         "implementation": [
-          "README.md"
+          "build/docker/Dockerfile.ubuntu"
         ],
         "tests": [],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "unverified",
+      "verification": "implemented",
       "notes": "Baseline classification for Docker image usage; conservative where production semantics are broader than emulator evidence."
     },
     {
@@ -2794,14 +2794,16 @@
       ],
       "evidence": {
         "implementation": [
-          "README.md"
+          "backend/storage/in_memory_storage.cc"
         ],
-        "tests": [],
+        "tests": [
+          "backend/storage/in_memory_storage_test.cc"
+        ],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "unverified",
+      "verification": "tested",
       "notes": "Baseline classification for In-memory operation; conservative where production semantics are broader than emulator evidence."
     },
     {
@@ -2836,14 +2838,14 @@
       ],
       "evidence": {
         "implementation": [
-          "README.md"
+          "binaries/emulator_main.cc"
         ],
         "tests": [],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "unverified",
+      "verification": "implemented",
       "notes": "Baseline classification for Startup and ports; conservative where production semantics are broader than emulator evidence."
     },
     {
@@ -2857,14 +2859,15 @@
       ],
       "evidence": {
         "implementation": [
-          "README.md"
+          "build/docker/Dockerfile.ubuntu",
+          ".github/workflows/docker-publish.yml"
         ],
         "tests": [],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "unverified",
+      "verification": "implemented",
       "notes": "Baseline classification for Local binaries and Docker packaging; conservative where production semantics are broader than emulator evidence."
     },
     {
