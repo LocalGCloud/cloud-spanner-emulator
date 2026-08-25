@@ -63,10 +63,12 @@ class FeatureCoverageTest(unittest.TestCase):
         first = fc.render_markdown(data, features)
         second = fc.render_markdown(data, features)
         self.assertEqual(first, second)
+        self.assertIn("- Last reviewed: 2026-08-25", first)
+        self.assertIn("- Documentation baseline: Spanner docs 2026-08-25", first)
         self.assertIn("## Status legend", first)
         self.assertIn("## Verification legend", first)
         self.assertIn("| `query.select` | SELECT queries | `supported`", first)
-        self.assertIn("[impl.cc](impl.cc)<br>[test.cc](test.cc)", first)
+        self.assertIn("[impl.cc](../impl.cc)<br>[test.cc](../test.cc)", first)
 
     def test_nested_category_features_are_supported(self):
         data = base_inventory()
