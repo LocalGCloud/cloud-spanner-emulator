@@ -1,0 +1,2913 @@
+{
+  "metadata": {
+    "schema_version": "1.0",
+    "inventory_review_date": "2026-08-25",
+    "official_documentation_baseline": "Google Cloud Spanner public documentation reviewed 2026-08-25",
+    "upstream_emulator_revision": "unknown",
+    "googlesql_dependency_version": "unknown",
+    "status_values": [
+      "supported",
+      "partial",
+      "accepted-no-op",
+      "unsupported",
+      "not-applicable",
+      "unknown"
+    ],
+    "verification_values": [
+      "tested",
+      "implemented",
+      "documented",
+      "unverified"
+    ],
+    "applicability_values": [
+      "local-development",
+      "compatibility-only",
+      "cloud-only"
+    ],
+    "notes": "JSON-compatible YAML canonical inventory. Classifications are conservative and evidence-linked."
+  },
+  "categories": [
+    {
+      "order": 1,
+      "name": "Data API and sessions"
+    },
+    {
+      "order": 2,
+      "name": "Instance administration"
+    },
+    {
+      "order": 3,
+      "name": "Database administration, operations, and backups"
+    },
+    {
+      "order": 4,
+      "name": "Schema and DDL"
+    },
+    {
+      "order": 5,
+      "name": "Types and values"
+    },
+    {
+      "order": 6,
+      "name": "GoogleSQL query language and functions"
+    },
+    {
+      "order": 7,
+      "name": "PostgreSQL dialect"
+    },
+    {
+      "order": 8,
+      "name": "DML, mutations, and batch operations"
+    },
+    {
+      "order": 9,
+      "name": "Transactions, timestamps, and concurrency"
+    },
+    {
+      "order": 10,
+      "name": "Indexes, generated values, and constraints"
+    },
+    {
+      "order": 11,
+      "name": "Change streams"
+    },
+    {
+      "order": 12,
+      "name": "Full-text search"
+    },
+    {
+      "order": 13,
+      "name": "Vector search"
+    },
+    {
+      "order": 14,
+      "name": "Spanner Graph and GQL"
+    },
+    {
+      "order": 15,
+      "name": "ML and external integrations"
+    },
+    {
+      "order": 16,
+      "name": "Metadata, information schema, and SPANNER_SYS"
+    },
+    {
+      "order": 17,
+      "name": "Security and governance"
+    },
+    {
+      "order": 18,
+      "name": "Operations, replication, availability, and observability"
+    },
+    {
+      "order": 19,
+      "name": "Clients, drivers, and tooling"
+    },
+    {
+      "order": 20,
+      "name": "Emulator-specific capabilities"
+    }
+  ],
+  "features": [
+    {
+      "id": "data.sessions.create",
+      "category": "Data API and sessions",
+      "feature": "CreateSession RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/sessions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/sessions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Session creation is handled by the frontend session handler."
+    },
+    {
+      "id": "data.sessions.get",
+      "category": "Data API and sessions",
+      "feature": "GetSession RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/sessions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/sessions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Session lookup is covered by handler tests."
+    },
+    {
+      "id": "data.sessions.list",
+      "category": "Data API and sessions",
+      "feature": "ListSessions RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/sessions.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/sessions.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Session listing has conformance and handler coverage."
+    },
+    {
+      "id": "data.sessions.delete",
+      "category": "Data API and sessions",
+      "feature": "DeleteSession RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/sessions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/sessions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Session deletion is implemented for local lifecycle management."
+    },
+    {
+      "id": "data.sessions.batch_create",
+      "category": "Data API and sessions",
+      "feature": "BatchCreateSessions RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/sessions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/sessions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Batch session creation is implemented for client compatibility."
+    },
+    {
+      "id": "data.sql.execute",
+      "category": "Data API and sessions",
+      "feature": "ExecuteSql RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/queries.cc"
+        ],
+        "tests": [
+          "frontend/handlers/queries_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "SQL execution is routed through query handlers and tested.",
+      "dialects": [
+        "googlesql",
+        "postgresql"
+      ]
+    },
+    {
+      "id": "data.sql.execute_streaming",
+      "category": "Data API and sessions",
+      "feature": "ExecuteStreamingSql RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/queries.cc"
+        ],
+        "tests": [
+          "frontend/handlers/queries_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Streaming SQL is implemented with emulator chunking semantics.",
+      "dialects": [
+        "googlesql",
+        "postgresql"
+      ]
+    },
+    {
+      "id": "data.read.read",
+      "category": "Data API and sessions",
+      "feature": "Read RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/reads.cc"
+        ],
+        "tests": [
+          "frontend/handlers/reads_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Key-based reads are implemented and tested."
+    },
+    {
+      "id": "data.read.streaming_read",
+      "category": "Data API and sessions",
+      "feature": "StreamingRead RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/reads.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/large_reads.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Streaming reads are covered for local result chunking."
+    },
+    {
+      "id": "data.sql.partition_query",
+      "category": "Data API and sessions",
+      "feature": "PartitionQuery RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/partitions.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/partition_query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Partition query exists for compatibility with partitioned clients.",
+      "dialects": [
+        "googlesql",
+        "postgresql"
+      ]
+    },
+    {
+      "id": "data.read.partition_read",
+      "category": "Data API and sessions",
+      "feature": "PartitionRead RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/partitions.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/partition_reads.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Partitioned reads are represented in conformance coverage."
+    },
+    {
+      "id": "data.batch.create_transaction",
+      "category": "Data API and sessions",
+      "feature": "BatchCreateSessions and transaction selectors",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/batch.cc"
+        ],
+        "tests": [
+          "frontend/handlers/batch_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Batch surfaces exist, but production distributed execution semantics are not fully emulated."
+    },
+    {
+      "id": "instance.create",
+      "category": "Instance administration",
+      "feature": "CreateInstance RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instances.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instances_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Local instance metadata creation is implemented."
+    },
+    {
+      "id": "instance.get",
+      "category": "Instance administration",
+      "feature": "GetInstance RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instances.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instances_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Instance lookup is implemented."
+    },
+    {
+      "id": "instance.list",
+      "category": "Instance administration",
+      "feature": "ListInstances RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instances.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instances_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Instance listing is implemented."
+    },
+    {
+      "id": "instance.update",
+      "category": "Instance administration",
+      "feature": "UpdateInstance RPC",
+      "status": "partial",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instances.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instances_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Metadata updates are local only and do not affect managed capacity."
+    },
+    {
+      "id": "instance.delete",
+      "category": "Instance administration",
+      "feature": "DeleteInstance RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instances.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instances_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Local instance deletion is covered."
+    },
+    {
+      "id": "instance.configs",
+      "category": "Instance administration",
+      "feature": "Instance configs RPCs",
+      "status": "partial",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instances.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instances_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Configuration resources are compatibility metadata rather than real regional capacity."
+    },
+    {
+      "id": "database.create",
+      "category": "Database administration, operations, and backups",
+      "feature": "CreateDatabase RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/databases.cc"
+        ],
+        "tests": [
+          "frontend/handlers/databases_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Database creation is implemented."
+    },
+    {
+      "id": "database.get",
+      "category": "Database administration, operations, and backups",
+      "feature": "GetDatabase RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/databases.cc"
+        ],
+        "tests": [
+          "frontend/handlers/databases_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Database metadata lookup is implemented."
+    },
+    {
+      "id": "database.list",
+      "category": "Database administration, operations, and backups",
+      "feature": "ListDatabases RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/databases.cc"
+        ],
+        "tests": [
+          "frontend/handlers/databases_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Database listing is implemented."
+    },
+    {
+      "id": "database.drop",
+      "category": "Database administration, operations, and backups",
+      "feature": "DropDatabase RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/databases.cc"
+        ],
+        "tests": [
+          "frontend/handlers/databases_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Database deletion is implemented."
+    },
+    {
+      "id": "database.update_ddl",
+      "category": "Database administration, operations, and backups",
+      "feature": "UpdateDatabaseDdl RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/databases.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/schema_changes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "DDL updates are a core emulator path."
+    },
+    {
+      "id": "operations.get",
+      "category": "Database administration, operations, and backups",
+      "feature": "GetOperation RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/operations.cc"
+        ],
+        "tests": [
+          "frontend/handlers/operations_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Operation lookup is locally implemented."
+    },
+    {
+      "id": "operations.list",
+      "category": "Database administration, operations, and backups",
+      "feature": "ListOperations RPC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/operations.cc"
+        ],
+        "tests": [
+          "frontend/handlers/operations_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Operation listing is locally implemented."
+    },
+    {
+      "id": "operations.cancel",
+      "category": "Database administration, operations, and backups",
+      "feature": "CancelOperation RPC",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/operations.cc"
+        ],
+        "tests": [
+          "frontend/handlers/operations_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Cancellation is local operation bookkeeping, not cloud job orchestration."
+    },
+    {
+      "id": "backups.create",
+      "category": "Database administration, operations, and backups",
+      "feature": "CreateBackup RPC",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/backups.cc"
+        ],
+        "tests": [
+          "frontend/handlers/backups_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Backup handlers exist, but cloud backup durability and scheduling semantics are not production-equivalent."
+    },
+    {
+      "id": "backups.restore",
+      "category": "Database administration, operations, and backups",
+      "feature": "RestoreDatabase RPC",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/backups.cc"
+        ],
+        "tests": [
+          "frontend/handlers/backups_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Restore paths exist with local emulator semantics."
+    },
+    {
+      "id": "schema.tables",
+      "category": "Schema and DDL",
+      "feature": "CREATE TABLE",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-definition-language"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/schema_changes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for CREATE TABLE; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "schema.alter_table",
+      "category": "Schema and DDL",
+      "feature": "ALTER TABLE",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-definition-language"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/schema_changes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for ALTER TABLE; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "schema.drop_table",
+      "category": "Schema and DDL",
+      "feature": "DROP TABLE",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-definition-language"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/schema_changes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for DROP TABLE; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "schema.views",
+      "category": "Schema and DDL",
+      "feature": "Views",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-definition-language"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/views.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Views; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "schema.named_schemas",
+      "category": "Schema and DDL",
+      "feature": "Named schemas",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-definition-language"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/named_schema.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Named schemas; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "schema.sequences",
+      "category": "Schema and DDL",
+      "feature": "Sequences",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-definition-language"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/sequence_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Sequences; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "schema.udfs",
+      "category": "Schema and DDL",
+      "feature": "User-defined functions",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-definition-language"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/udfs.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for User-defined functions; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "types.bool_int_float",
+      "category": "Types and values",
+      "feature": "BOOL, INT64, FLOAT64",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-types"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for BOOL, INT64, FLOAT64; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "types.numeric",
+      "category": "Types and values",
+      "feature": "NUMERIC",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-types"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for NUMERIC; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "types.json",
+      "category": "Types and values",
+      "feature": "JSON",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-types"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for JSON; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "types.arrays",
+      "category": "Types and values",
+      "feature": "ARRAY",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-types"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/arrays.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/arrays.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for ARRAY; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "types.structs",
+      "category": "Types and values",
+      "feature": "STRUCT",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-types"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for STRUCT; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "types.proto",
+      "category": "Types and values",
+      "feature": "PROTO and ENUM",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-types"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for PROTO and ENUM; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "types.interval",
+      "category": "Types and values",
+      "feature": "INTERVAL",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/data-types"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "tests/conformance/cases/values.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for INTERVAL; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "googlesql.select",
+      "category": "GoogleSQL query language and functions",
+      "feature": "SELECT queries",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for SELECT queries; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.joins",
+      "category": "GoogleSQL query language and functions",
+      "feature": "Joins",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Joins; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.subqueries",
+      "category": "GoogleSQL query language and functions",
+      "feature": "Subqueries",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Subqueries; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.parameters",
+      "category": "GoogleSQL query language and functions",
+      "feature": "Query parameters",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/parameters.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/parameters.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Query parameters; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.hints",
+      "category": "GoogleSQL query language and functions",
+      "feature": "Query hints",
+      "status": "accepted-no-op",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query_hints.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query_hints.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Query hints; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.query_modes",
+      "category": "GoogleSQL query language and functions",
+      "feature": "Query modes and plans",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query_modes.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query_modes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Query modes and plans; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.aggregate_functions",
+      "category": "GoogleSQL query language and functions",
+      "feature": "Aggregate functions",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Aggregate functions; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.string_functions",
+      "category": "GoogleSQL query language and functions",
+      "feature": "String functions",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for String functions; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.date_timestamp_functions",
+      "category": "GoogleSQL query language and functions",
+      "feature": "Date and timestamp functions",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Date and timestamp functions; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "googlesql.tablesample",
+      "category": "GoogleSQL query language and functions",
+      "feature": "TABLESAMPLE",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/google-sql-reference"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/tablesample.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/tablesample.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for TABLESAMPLE; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "postgresql.create_database",
+      "category": "PostgreSQL dialect",
+      "feature": "PostgreSQL dialect databases",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/postgresql-interface"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/pg_catalog_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/pg_catalog_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for PostgreSQL dialect databases; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "postgresql"
+      ]
+    },
+    {
+      "id": "postgresql.queries",
+      "category": "PostgreSQL dialect",
+      "feature": "PostgreSQL query translation",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/postgresql-interface"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/pg_functions_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/pg_functions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for PostgreSQL query translation; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "postgresql"
+      ]
+    },
+    {
+      "id": "postgresql.pg_catalog",
+      "category": "PostgreSQL dialect",
+      "feature": "pg_catalog views",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/postgresql-interface"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/pg_catalog_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/pg_catalog_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for pg_catalog views; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "postgresql"
+      ]
+    },
+    {
+      "id": "postgresql.synonyms",
+      "category": "PostgreSQL dialect",
+      "feature": "PostgreSQL synonyms",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/postgresql-interface"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/pg_synonyms.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/pg_synonyms.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for PostgreSQL synonyms; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "postgresql"
+      ]
+    },
+    {
+      "id": "postgresql.views",
+      "category": "PostgreSQL dialect",
+      "feature": "PostgreSQL views",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/postgresql-interface"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/pg_views_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/pg_views_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for PostgreSQL views; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "postgresql"
+      ]
+    },
+    {
+      "id": "postgresql.change_streams",
+      "category": "PostgreSQL dialect",
+      "feature": "PostgreSQL change streams",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/postgresql-interface"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/pg_change_streams_read_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/pg_change_streams_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for PostgreSQL change streams; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "postgresql"
+      ]
+    },
+    {
+      "id": "writes.mutations_insert",
+      "category": "DML, mutations, and batch operations",
+      "feature": "Insert mutations",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/dml-syntax"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/single_row_writes.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/single_row_writes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Insert mutations; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "writes.mutations_update",
+      "category": "DML, mutations, and batch operations",
+      "feature": "Update mutations",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/dml-syntax"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/multi_row_writes.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/multi_row_writes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Update mutations; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "writes.mutations_delete",
+      "category": "DML, mutations, and batch operations",
+      "feature": "Delete mutations",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/dml-syntax"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/range_delete.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/range_delete.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Delete mutations; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "writes.dml",
+      "category": "DML, mutations, and batch operations",
+      "feature": "DML statements",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/dml-syntax"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/dml.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/dml.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for DML statements; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "writes.batch_dml",
+      "category": "DML, mutations, and batch operations",
+      "feature": "Batch DML",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/dml-syntax"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/batch_dml.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/batch_dml.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Batch DML; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "writes.partitioned_dml",
+      "category": "DML, mutations, and batch operations",
+      "feature": "Partitioned DML",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/dml-syntax"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/partitioned_dml.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/partitioned_dml.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Partitioned DML; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "writes.batch_write",
+      "category": "DML, mutations, and batch operations",
+      "feature": "BatchWrite RPC",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/dml-syntax"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/batch_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/batch_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for BatchWrite RPC; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "transactions.read_write",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "Read-write transactions",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/transactions.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/transactions.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Read-write transactions; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "transactions.read_only",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "Read-only transactions",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/snapshot_reads.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/snapshot_reads.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Read-only transactions; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "transactions.commit_timestamps",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "Commit timestamps",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/commit_timestamps.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/commit_timestamps.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Commit timestamps; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "transactions.stale_reads",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "Stale reads",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/snapshot_reads.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/snapshot_reads.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Stale reads; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "transactions.read_your_writes",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "Read-your-writes",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/read_your_writes.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/read_your_writes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Read-your-writes; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "transactions.select_for_update",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "SELECT FOR UPDATE",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/select_for_update.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/select_for_update.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for SELECT FOR UPDATE; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "transactions.transaction_errors",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "Transaction error handling",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/transaction_errors.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/transaction_errors.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Transaction error handling; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.secondary_indexes",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Secondary indexes",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/index_read_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/index_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Secondary indexes; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.index_backfill",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Index backfill",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/index_backfill.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/index_backfill.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Index backfill; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.unique_indexes",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Unique indexes",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/actions/unique_index.cc"
+        ],
+        "tests": [
+          "backend/actions/unique_index_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Unique indexes; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.foreign_keys",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Foreign keys",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/actions/foreign_key.cc"
+        ],
+        "tests": [
+          "backend/actions/foreign_key_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Foreign keys; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.check_constraints",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Check constraints",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/check_constraint_read_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/check_constraint_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Check constraints; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.generated_columns",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Generated columns",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/generated_column_read_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/generated_column_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Generated columns; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.identity_columns",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Identity columns",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/identity_column.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/identity_column.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Identity columns; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.column_defaults",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "Column defaults",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/column_default_value_read_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/column_default_value_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Column defaults; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "indexes.on_update",
+      "category": "Indexes, generated values, and constraints",
+      "feature": "ON UPDATE columns",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/secondary-indexes"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/column_on_update_read_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/column_on_update_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for ON UPDATE columns; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "change_streams.create",
+      "category": "Change streams",
+      "feature": "Create change stream",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/change-streams"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/change_streams_read_write.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/change_streams_read_write.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Create change stream; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "change_streams.read",
+      "category": "Change streams",
+      "feature": "Read change stream",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/change-streams"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/change_streams.cc"
+        ],
+        "tests": [
+          "frontend/handlers/change_streams_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Read change stream; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "change_streams.exclusions",
+      "category": "Change streams",
+      "feature": "Change stream exclusions",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/change-streams"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/change_streams_exclusion.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/change_streams_exclusion.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Change stream exclusions; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "change_streams.key_ranges",
+      "category": "Change streams",
+      "feature": "Change stream key ranges",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/change-streams"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/change_streams_mutable_key_range.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/change_streams_mutable_key_range.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Change stream key ranges; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "change_streams.partition_churn",
+      "category": "Change streams",
+      "feature": "Partition churn",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/change-streams"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/database/change_stream/change_stream_partition_churner.cc"
+        ],
+        "tests": [
+          "backend/database/change_stream/change_stream_partition_churner_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Partition churn; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "search.search_indexes",
+      "category": "Full-text search",
+      "feature": "Search indexes",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/full-text-search"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/search_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/search_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Search indexes; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "search.search_functions",
+      "category": "Full-text search",
+      "feature": "SEARCH function",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/full-text-search"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/search_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/search_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for SEARCH function; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "search.tokenization",
+      "category": "Full-text search",
+      "feature": "Tokenization",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/full-text-search"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/search_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/search_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Tokenization; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "search.scoring",
+      "category": "Full-text search",
+      "feature": "Search scoring",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/full-text-search"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "tests/conformance/cases/search_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Search scoring; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "vector.vector_type",
+      "category": "Vector search",
+      "feature": "Vector type",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/find-k-nearest-neighbors"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Vector type; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "vector.distance_functions",
+      "category": "Vector search",
+      "feature": "Vector distance functions",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/find-k-nearest-neighbors"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Vector distance functions; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "vector.ann_indexes",
+      "category": "Vector search",
+      "feature": "Approximate nearest-neighbor indexes",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/find-k-nearest-neighbors"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Approximate nearest-neighbor indexes; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "vector.vector_query_options",
+      "category": "Vector search",
+      "feature": "Vector query options",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/find-k-nearest-neighbors"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Vector query options; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "graph.ddl",
+      "category": "Spanner Graph and GQL",
+      "feature": "Graph DDL",
+      "status": "accepted-no-op",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/graph/overview"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/common/graph_dependency_helper_test.cc"
+        ],
+        "tests": [
+          "backend/common/graph_dependency_helper_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Graph DDL; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "graph.gql_queries",
+      "category": "Spanner Graph and GQL",
+      "feature": "GQL queries",
+      "status": "unsupported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/graph/overview"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "backend/common/graph_dependency_helper_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for GQL queries; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "graph.graph_schema",
+      "category": "Spanner Graph and GQL",
+      "feature": "Graph schema metadata",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/graph/overview"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "backend/common/graph_dependency_helper_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Graph schema metadata; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "graph.algorithms",
+      "category": "Spanner Graph and GQL",
+      "feature": "Graph algorithms",
+      "status": "unsupported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/graph/overview"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "backend/common/graph_dependency_helper_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Graph algorithms; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "ml.models",
+      "category": "ML and external integrations",
+      "feature": "MODEL schema objects",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/ml"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "tests/conformance/cases/schema_changes.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for MODEL schema objects; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "ml.ml_predict",
+      "category": "ML and external integrations",
+      "feature": "ML.PREDICT",
+      "status": "unsupported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/ml"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "tests/conformance/cases/query.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for ML.PREDICT; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "ml.external_connections",
+      "category": "ML and external integrations",
+      "feature": "External connections",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/ml"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for External connections; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "ml.remote_models",
+      "category": "ML and external integrations",
+      "feature": "Remote model operations",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/ml"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Remote model operations; conservative where production semantics are broader than emulator evidence.",
+      "dialects": [
+        "googlesql"
+      ]
+    },
+    {
+      "id": "metadata.information_schema",
+      "category": "Metadata, information schema, and SPANNER_SYS",
+      "feature": "INFORMATION_SCHEMA",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/information-schema"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/information_schema.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/information_schema.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for INFORMATION_SCHEMA; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "metadata.spanner_sys",
+      "category": "Metadata, information schema, and SPANNER_SYS",
+      "feature": "SPANNER_SYS",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/information-schema"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/spanner_sys.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/spanner_sys.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for SPANNER_SYS; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "metadata.pg_catalog",
+      "category": "Metadata, information schema, and SPANNER_SYS",
+      "feature": "pg_catalog metadata",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/information-schema"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/pg_catalog_test.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/pg_catalog_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for pg_catalog metadata; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "metadata.database_roles_metadata",
+      "category": "Metadata, information schema, and SPANNER_SYS",
+      "feature": "Database role metadata",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/information-schema"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "frontend/handlers/database_extensions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Database role metadata; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "metadata.operation_metadata",
+      "category": "Metadata, information schema, and SPANNER_SYS",
+      "feature": "Operation metadata",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/information-schema"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/entities/operation.cc"
+        ],
+        "tests": [
+          "frontend/entities/operation_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Operation metadata; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "security.iam_policies",
+      "category": "Security and governance",
+      "feature": "IAM policy RPCs",
+      "status": "accepted-no-op",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/iam"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/policies.cc"
+        ],
+        "tests": [
+          "frontend/handlers/policies_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for IAM policy RPCs; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "security.database_roles",
+      "category": "Security and governance",
+      "feature": "Database roles",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/iam"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/database_extensions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/database_extensions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Database roles; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "security.fine_grained_access",
+      "category": "Security and governance",
+      "feature": "Fine-grained access control",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/iam"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [
+          "tests/conformance/cases/secure_context.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Fine-grained access control; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "security.encryption",
+      "category": "Security and governance",
+      "feature": "Customer-managed encryption",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/iam"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Customer-managed encryption; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "security.audit_logs",
+      "category": "Security and governance",
+      "feature": "Cloud audit logs",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/iam"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Cloud audit logs; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "ops.instance_partitions",
+      "category": "Operations, replication, availability, and observability",
+      "feature": "Instance partitions",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/instances"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instance_partitions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instance_partitions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Instance partitions; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "ops.replication",
+      "category": "Operations, replication, availability, and observability",
+      "feature": "Replication and multi-region serving",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/instances"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Replication and multi-region serving; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "ops.autoscaling",
+      "category": "Operations, replication, availability, and observability",
+      "feature": "Autoscaling",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/instances"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Autoscaling; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "ops.monitoring",
+      "category": "Operations, replication, availability, and observability",
+      "feature": "Cloud monitoring metrics",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/instances"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Cloud monitoring metrics; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "ops.quotas",
+      "category": "Operations, replication, availability, and observability",
+      "feature": "Cloud quotas and limits",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/instances"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/limits.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/limits.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Cloud quotas and limits; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "ops.leader_options",
+      "category": "Operations, replication, availability, and observability",
+      "feature": "Leader and placement options",
+      "status": "accepted-no-op",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/instances"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instance_extensions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instance_extensions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Leader and placement options; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "clients.grpc_endpoint",
+      "category": "Clients, drivers, and tooling",
+      "feature": "gRPC endpoint compatibility",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for gRPC endpoint compatibility; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "clients.rest_gateway",
+      "category": "Clients, drivers, and tooling",
+      "feature": "REST gateway compatibility",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for REST gateway compatibility; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "clients.client_libraries",
+      "category": "Clients, drivers, and tooling",
+      "feature": "Google client library compatibility",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "tests/conformance/cases/sessions.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/sessions.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Baseline classification for Google client library compatibility; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "clients.jdbc",
+      "category": "Clients, drivers, and tooling",
+      "feature": "JDBC compatibility",
+      "status": "unknown",
+      "applicability": "compatibility-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for JDBC compatibility; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "clients.cli",
+      "category": "Clients, drivers, and tooling",
+      "feature": "gcloud emulator usage",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for gcloud emulator usage; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "clients.docker",
+      "category": "Clients, drivers, and tooling",
+      "feature": "Docker image usage",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Docker image usage; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "emulator.in_memory",
+      "category": "Emulator-specific capabilities",
+      "feature": "In-memory operation",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for In-memory operation; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "emulator.persistence",
+      "category": "Emulator-specific capabilities",
+      "feature": "Local persistence",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "docs/persistent-storage-write-queue.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "docs/persistent-storage-write-queue.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Local persistence; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "emulator.startup",
+      "category": "Emulator-specific capabilities",
+      "feature": "Startup and ports",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Startup and ports; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "emulator.packaging",
+      "category": "Emulator-specific capabilities",
+      "feature": "Local binaries and Docker packaging",
+      "status": "supported",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Baseline classification for Local binaries and Docker packaging; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "emulator.limitations",
+      "category": "Emulator-specific capabilities",
+      "feature": "Documented emulator limitations",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "README.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "documented",
+      "notes": "Baseline classification for Documented emulator limitations; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "emulator.change_stream_docs",
+      "category": "Emulator-specific capabilities",
+      "feature": "Change stream emulator docs",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/emulator"
+      ],
+      "evidence": {
+        "implementation": [
+          "docs/change-streams.md"
+        ],
+        "tests": [],
+        "documentation": [
+          "docs/change-streams.md"
+        ]
+      },
+      "verification": "documented",
+      "notes": "Baseline classification for Change stream emulator docs; conservative where production semantics are broader than emulator evidence."
+    }
+  ]
+}
