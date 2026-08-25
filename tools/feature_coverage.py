@@ -28,6 +28,7 @@ APPLICABILITIES = {"local-development", "compatibility-only", "cloud-only"}
 DIALECTS = {"googlesql", "postgresql", "api", "emulator", "all"}
 ID_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 REQUIRED_FEATURE_FIELDS = {"id", "category", "feature", "status", "docs", "evidence", "verification", "notes"}
+RPC_SOURCE = Path("frontend/server/server.cc")
 
 class CoverageError(Exception): pass
 
@@ -65,6 +66,49 @@ def iter_features(data: dict[str, Any]) -> list[dict[str, Any]]:
             for feature in cat["features"]:
                 item = copy.deepcopy(feature); item.setdefault("category", cat.get("id")); features.append(item)
     return features
+
+def discover_registered_rpcs(root: Path = ROOT) -> list[str]:
+    path = root / RPC_SOURCE
+    try:
+        source = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CoverageError(f"cannot read registered RPC source {path}: {exc}") from exc
+    source = re.sub(r"//[^\n]*|/\*.*?\*/", "", source, flags=re.S)
+    rpcs = []
+    for match in re.finditer(r"class\s+(\w+Service)\b.*?(?=\n};)", source, re.S):
+        service = match.group(1)
+        methods = re.findall(
+            r"DEFINE_GRPC_METHOD\([^,]+,\s*([A-Za-z0-9_]+),", match.group()
+        )
+        rpcs.extend(f"{service}.{method}" for method in methods)
+    if not rpcs:
+        raise CoverageError(f"no registered RPC methods found in {path}")
+    return rpcs
+
+def validate_rpc_surface(data: dict[str, Any], features: list[dict[str, Any]], root: Path = ROOT) -> list[dict[str, str]]:
+    entries = data.get("rpc_surface")
+    if not isinstance(entries, list) or not entries:
+        raise CoverageError("rpc_surface must be a non-empty list")
+    feature_ids = {feature["id"] for feature in features}
+    mapped = {}
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise CoverageError(f"rpc_surface[{i}] must be an object")
+        rpc, feature_id = entry.get("rpc"), entry.get("feature_id")
+        if not isinstance(rpc, str) or "." not in rpc:
+            raise CoverageError(f"rpc_surface[{i}].rpc is missing or malformed")
+        if rpc in mapped:
+            raise CoverageError(f"duplicate RPC mapping: {rpc}")
+        if feature_id not in feature_ids:
+            raise CoverageError(f"{rpc}: unknown feature_id {feature_id!r}")
+        mapped[rpc] = entry
+    registered = set(discover_registered_rpcs(root))
+    missing, stale = sorted(registered - mapped.keys()), sorted(mapped.keys() - registered)
+    if missing:
+        raise CoverageError(f"registered RPCs missing from inventory: {', '.join(missing)}")
+    if stale:
+        raise CoverageError(f"inventory RPCs are not registered: {', '.join(stale)}")
+    return [mapped[rpc] for rpc in sorted(registered)]
 
 def _repo_path(raw: str) -> str:
     no_anchor = raw.split("#", 1)[0]
@@ -125,6 +169,7 @@ def validate(data: dict[str, Any], root: Path = ROOT) -> list[dict[str, Any]]:
             raise CoverageError(f"{fid}: tested records require test evidence")
         if not isinstance(f["notes"], str): raise CoverageError(f"{fid}: notes must be text")
         if f["status"] in {"unsupported", "not-applicable"} and not f["notes"].strip(): raise CoverageError(f"{fid}: {f['status']} records require explanatory notes")
+    validate_rpc_surface(data, features, root)
     return features
 
 def md_escape(text: Any) -> str: return str(text).replace("\n", " ").strip().replace("|", "\\|")
@@ -173,7 +218,12 @@ def render_markdown(data: dict[str, Any], features: list[dict[str, Any]] | None 
             for key in ("implementation", "tests", "documentation"): paths.extend(ev.get(key) or [])
             row = [f"`{md_escape(f['id'])}`", md_escape(f["feature"]), f"`{f['status']}`", f"`{f['applicability']}`" if f.get("applicability") else "—", ", ".join(f"`{d}`" for d in f.get("dialects", [])) or "—", link_list(f.get("docs", [])), link_list(paths, True), f"`{f['verification']}`", md_escape(f.get("notes", "")) or "—"]
             lines.append("| " + " | ".join(row) + " |")
-    lines += ["", "## Updating this file", "", "1. Edit `docs/feature-coverage.yaml`.", "2. Run `python3 tools/feature_coverage.py generate`.", "3. Run `python3 tools/feature_coverage.py check` and the unit tests.", ""]
+    feature_by_id = {feature["id"]: feature for feature in features}
+    lines += ["", "## Registered RPC coverage", "", "Every RPC registered by `frontend/server/server.cc` must map to exactly one feature record. The validator fails when a registered method is missing or a stale method remains in the inventory.", "", "| RPC | Feature ID | Status |", "| --- | --- | --- |"]
+    for entry in sorted(data["rpc_surface"], key=lambda item: item["rpc"]):
+        feature = feature_by_id[entry["feature_id"]]
+        lines.append(f"| `{entry['rpc']}` | `{entry['feature_id']}` | `{feature['status']}` |")
+    lines += ["", "## Updating this file", "", "1. Edit `docs/feature-coverage.yaml`.", "2. Run `python3 tools/feature_coverage.py audit-rpcs` to confirm every registered RPC is mapped.", "3. Run `python3 tools/feature_coverage.py generate`.", "4. Run `python3 tools/feature_coverage.py check` and the unit tests.", ""]
     return "\n".join(lines)
 
 def cmd_validate(args): print(f"Validated {len(validate(load_inventory(Path(args.inventory)), Path(args.root)))} feature records."); return 0
@@ -184,13 +234,20 @@ def cmd_check(args):
     if actual != expected: raise CoverageError(f"{out}: generated Markdown is stale; run tools/feature_coverage.py generate")
     print(f"{out} is up to date."); return 0
 def cmd_summary(args):
-    features = validate(load_inventory(Path(args.inventory)), Path(args.root)); counts = collections.Counter(f["status"] for f in features)
+    data = load_inventory(Path(args.inventory)); features = validate(data, Path(args.root)); counts = collections.Counter(f["status"] for f in features)
     for s in STATUSES: print(f"{s}: {counts.get(s, 0)}")
-    print(f"total: {len(features)}"); return 0
+    print(f"total: {len(features)}")
+    print(f"registered_rpcs: {len(validate_rpc_surface(data, features, Path(args.root)))}"); return 0
+
+def cmd_audit_rpcs(args):
+    data = load_inventory(Path(args.inventory)); features = validate(data, Path(args.root))
+    for entry in validate_rpc_surface(data, features, Path(args.root)):
+        print(f"{entry['rpc']}: {entry['feature_id']}")
+    return 0
 
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__); p.add_argument("--inventory", default=str(DEFAULT_INVENTORY)); p.add_argument("--output", default=str(DEFAULT_MARKDOWN)); p.add_argument("--root", default=str(ROOT)); sub = p.add_subparsers(dest="command", required=True)
-    for name, func in (("validate", cmd_validate), ("generate", cmd_generate), ("check", cmd_check), ("summary", cmd_summary)):
+    for name, func in (("validate", cmd_validate), ("generate", cmd_generate), ("check", cmd_check), ("summary", cmd_summary), ("audit-rpcs", cmd_audit_rpcs)):
         sp = sub.add_parser(name); sp.set_defaults(func=func)
     return p
 

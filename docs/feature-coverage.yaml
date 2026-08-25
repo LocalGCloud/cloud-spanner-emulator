@@ -2911,6 +2911,508 @@
       },
       "verification": "documented",
       "notes": "Baseline classification for Change stream emulator docs; conservative where production semantics are broader than emulator evidence."
+    },
+    {
+      "id": "data.cache_updates",
+      "category": "Data API and sessions",
+      "feature": "FetchCacheUpdate RPC",
+      "status": "accepted-no-op",
+      "applicability": "compatibility-only",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/cache_updates.cc"
+        ],
+        "tests": [
+          "frontend/handlers/cache_updates_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Validates the database resource but emits no cache updates because the emulator has no distributed query cache."
+    },
+    {
+      "id": "database.update",
+      "category": "Database administration, operations, and backups",
+      "feature": "UpdateDatabase RPC",
+      "status": "partial",
+      "applicability": "local-development",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/databases.cc"
+        ],
+        "tests": [
+          "frontend/handlers/databases_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Database metadata update behavior is implemented for locally meaningful fields."
+    },
+    {
+      "id": "backups.metadata",
+      "category": "Database administration, operations, and backups",
+      "feature": "Backup metadata lifecycle RPCs",
+      "status": "partial",
+      "applicability": "local-development",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/backups.cc",
+          "frontend/persistence/backup_catalog.cc"
+        ],
+        "tests": [
+          "frontend/handlers/backups_test.cc",
+          "frontend/persistence/backup_catalog_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Copy, get, list, update, and delete backup metadata are implemented without production distributed backup semantics."
+    },
+    {
+      "id": "backups.schedules",
+      "category": "Database administration, operations, and backups",
+      "feature": "Backup schedule RPCs",
+      "status": "partial",
+      "applicability": "local-development",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/backups.cc",
+          "frontend/persistence/backup_catalog.cc"
+        ],
+        "tests": [
+          "frontend/handlers/backups_test.cc",
+          "frontend/persistence/backup_catalog_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Backup schedule metadata and lifecycle are implemented locally without production scheduling infrastructure semantics."
+    },
+    {
+      "id": "database.split_points",
+      "category": "Database administration, operations, and backups",
+      "feature": "AddSplitPoints RPC",
+      "status": "accepted-no-op",
+      "applicability": "compatibility-only",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/database_extensions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/database_extensions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Validates requests for compatibility but cannot control physical distributed split placement."
+    },
+    {
+      "id": "database.internal_graph_operation",
+      "category": "Database administration, operations, and backups",
+      "feature": "InternalUpdateGraphOperation RPC",
+      "status": "partial",
+      "applicability": "compatibility-only",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/database_extensions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/database_extensions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Implements the registered internal graph administration compatibility surface with local-only semantics."
+    },
+    {
+      "id": "instance.move",
+      "category": "Instance administration",
+      "feature": "MoveInstance RPC",
+      "status": "partial",
+      "applicability": "local-development",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/instance_extensions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/instance_extensions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Updates locally meaningful instance metadata without moving distributed production resources."
+    },
+    {
+      "id": "operations.lifecycle",
+      "category": "Database administration, operations, and backups",
+      "feature": "DeleteOperation and WaitOperation RPCs",
+      "status": "supported",
+      "applicability": "local-development",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/rpc"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/operations.cc"
+        ],
+        "tests": [
+          "frontend/handlers/operations_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Operation deletion and waiting are implemented for emulator long-running operations."
+    },
+    {
+      "id": "transactions.lifecycle",
+      "category": "Transactions, timestamps, and concurrency",
+      "feature": "BeginTransaction, Commit, and Rollback RPCs",
+      "status": "supported",
+      "applicability": "local-development",
+      "dialects": [
+        "api"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/transactions"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/transactions.cc"
+        ],
+        "tests": [
+          "frontend/handlers/transactions_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Explicit transaction lifecycle RPCs are implemented and tested for emulator transactions."
+    }
+  ],
+  "rpc_surface": [
+    {
+      "rpc": "SpannerService.CreateSession",
+      "feature_id": "data.sessions.create"
+    },
+    {
+      "rpc": "SpannerService.GetSession",
+      "feature_id": "data.sessions.get"
+    },
+    {
+      "rpc": "SpannerService.ListSessions",
+      "feature_id": "data.sessions.list"
+    },
+    {
+      "rpc": "SpannerService.DeleteSession",
+      "feature_id": "data.sessions.delete"
+    },
+    {
+      "rpc": "SpannerService.BatchCreateSessions",
+      "feature_id": "data.sessions.batch_create"
+    },
+    {
+      "rpc": "SpannerService.Read",
+      "feature_id": "data.read.read"
+    },
+    {
+      "rpc": "SpannerService.StreamingRead",
+      "feature_id": "data.read.streaming_read"
+    },
+    {
+      "rpc": "SpannerService.ExecuteSql",
+      "feature_id": "data.sql.execute"
+    },
+    {
+      "rpc": "SpannerService.ExecuteStreamingSql",
+      "feature_id": "data.sql.execute_streaming"
+    },
+    {
+      "rpc": "SpannerService.ExecuteBatchDml",
+      "feature_id": "writes.batch_dml"
+    },
+    {
+      "rpc": "SpannerService.BatchWrite",
+      "feature_id": "writes.batch_write"
+    },
+    {
+      "rpc": "SpannerService.FetchCacheUpdate",
+      "feature_id": "data.cache_updates"
+    },
+    {
+      "rpc": "SpannerService.PartitionRead",
+      "feature_id": "data.read.partition_read"
+    },
+    {
+      "rpc": "SpannerService.PartitionQuery",
+      "feature_id": "data.sql.partition_query"
+    },
+    {
+      "rpc": "SpannerService.BeginTransaction",
+      "feature_id": "transactions.lifecycle"
+    },
+    {
+      "rpc": "SpannerService.Commit",
+      "feature_id": "transactions.lifecycle"
+    },
+    {
+      "rpc": "SpannerService.Rollback",
+      "feature_id": "transactions.lifecycle"
+    },
+    {
+      "rpc": "DatabaseAdminService.ListDatabases",
+      "feature_id": "database.list"
+    },
+    {
+      "rpc": "DatabaseAdminService.CreateDatabase",
+      "feature_id": "database.create"
+    },
+    {
+      "rpc": "DatabaseAdminService.GetDatabase",
+      "feature_id": "database.get"
+    },
+    {
+      "rpc": "DatabaseAdminService.UpdateDatabase",
+      "feature_id": "database.update"
+    },
+    {
+      "rpc": "DatabaseAdminService.DropDatabase",
+      "feature_id": "database.drop"
+    },
+    {
+      "rpc": "DatabaseAdminService.CreateBackup",
+      "feature_id": "backups.create"
+    },
+    {
+      "rpc": "DatabaseAdminService.CopyBackup",
+      "feature_id": "backups.metadata"
+    },
+    {
+      "rpc": "DatabaseAdminService.GetBackup",
+      "feature_id": "backups.metadata"
+    },
+    {
+      "rpc": "DatabaseAdminService.ListBackups",
+      "feature_id": "backups.metadata"
+    },
+    {
+      "rpc": "DatabaseAdminService.UpdateBackup",
+      "feature_id": "backups.metadata"
+    },
+    {
+      "rpc": "DatabaseAdminService.DeleteBackup",
+      "feature_id": "backups.metadata"
+    },
+    {
+      "rpc": "DatabaseAdminService.RestoreDatabase",
+      "feature_id": "backups.restore"
+    },
+    {
+      "rpc": "DatabaseAdminService.ListBackupOperations",
+      "feature_id": "operations.list"
+    },
+    {
+      "rpc": "DatabaseAdminService.CreateBackupSchedule",
+      "feature_id": "backups.schedules"
+    },
+    {
+      "rpc": "DatabaseAdminService.GetBackupSchedule",
+      "feature_id": "backups.schedules"
+    },
+    {
+      "rpc": "DatabaseAdminService.ListBackupSchedules",
+      "feature_id": "backups.schedules"
+    },
+    {
+      "rpc": "DatabaseAdminService.UpdateBackupSchedule",
+      "feature_id": "backups.schedules"
+    },
+    {
+      "rpc": "DatabaseAdminService.DeleteBackupSchedule",
+      "feature_id": "backups.schedules"
+    },
+    {
+      "rpc": "DatabaseAdminService.UpdateDatabaseDdl",
+      "feature_id": "database.update_ddl"
+    },
+    {
+      "rpc": "DatabaseAdminService.GetDatabaseDdl",
+      "feature_id": "database.update_ddl"
+    },
+    {
+      "rpc": "DatabaseAdminService.AddSplitPoints",
+      "feature_id": "database.split_points"
+    },
+    {
+      "rpc": "DatabaseAdminService.InternalUpdateGraphOperation",
+      "feature_id": "database.internal_graph_operation"
+    },
+    {
+      "rpc": "DatabaseAdminService.ListDatabaseOperations",
+      "feature_id": "operations.list"
+    },
+    {
+      "rpc": "DatabaseAdminService.ListDatabaseRoles",
+      "feature_id": "security.database_roles"
+    },
+    {
+      "rpc": "DatabaseAdminService.SetIamPolicy",
+      "feature_id": "security.iam_policies"
+    },
+    {
+      "rpc": "DatabaseAdminService.GetIamPolicy",
+      "feature_id": "security.iam_policies"
+    },
+    {
+      "rpc": "DatabaseAdminService.TestIamPermissions",
+      "feature_id": "security.iam_policies"
+    },
+    {
+      "rpc": "InstanceAdminService.ListInstanceConfigs",
+      "feature_id": "instance.configs"
+    },
+    {
+      "rpc": "InstanceAdminService.GetInstanceConfig",
+      "feature_id": "instance.configs"
+    },
+    {
+      "rpc": "InstanceAdminService.CreateInstanceConfig",
+      "feature_id": "instance.configs"
+    },
+    {
+      "rpc": "InstanceAdminService.UpdateInstanceConfig",
+      "feature_id": "instance.configs"
+    },
+    {
+      "rpc": "InstanceAdminService.DeleteInstanceConfig",
+      "feature_id": "instance.configs"
+    },
+    {
+      "rpc": "InstanceAdminService.ListInstanceConfigOperations",
+      "feature_id": "operations.list"
+    },
+    {
+      "rpc": "InstanceAdminService.ListInstances",
+      "feature_id": "instance.list"
+    },
+    {
+      "rpc": "InstanceAdminService.GetInstance",
+      "feature_id": "instance.get"
+    },
+    {
+      "rpc": "InstanceAdminService.CreateInstance",
+      "feature_id": "instance.create"
+    },
+    {
+      "rpc": "InstanceAdminService.UpdateInstance",
+      "feature_id": "instance.update"
+    },
+    {
+      "rpc": "InstanceAdminService.DeleteInstance",
+      "feature_id": "instance.delete"
+    },
+    {
+      "rpc": "InstanceAdminService.MoveInstance",
+      "feature_id": "instance.move"
+    },
+    {
+      "rpc": "InstanceAdminService.ListInstancePartitions",
+      "feature_id": "ops.instance_partitions"
+    },
+    {
+      "rpc": "InstanceAdminService.GetInstancePartition",
+      "feature_id": "ops.instance_partitions"
+    },
+    {
+      "rpc": "InstanceAdminService.CreateInstancePartition",
+      "feature_id": "ops.instance_partitions"
+    },
+    {
+      "rpc": "InstanceAdminService.UpdateInstancePartition",
+      "feature_id": "ops.instance_partitions"
+    },
+    {
+      "rpc": "InstanceAdminService.DeleteInstancePartition",
+      "feature_id": "ops.instance_partitions"
+    },
+    {
+      "rpc": "InstanceAdminService.ListInstancePartitionOperations",
+      "feature_id": "ops.instance_partitions"
+    },
+    {
+      "rpc": "InstanceAdminService.SetIamPolicy",
+      "feature_id": "security.iam_policies"
+    },
+    {
+      "rpc": "InstanceAdminService.GetIamPolicy",
+      "feature_id": "security.iam_policies"
+    },
+    {
+      "rpc": "InstanceAdminService.TestIamPermissions",
+      "feature_id": "security.iam_policies"
+    },
+    {
+      "rpc": "OperationsService.ListOperations",
+      "feature_id": "operations.list"
+    },
+    {
+      "rpc": "OperationsService.GetOperation",
+      "feature_id": "operations.get"
+    },
+    {
+      "rpc": "OperationsService.DeleteOperation",
+      "feature_id": "operations.lifecycle"
+    },
+    {
+      "rpc": "OperationsService.CancelOperation",
+      "feature_id": "operations.cancel"
+    },
+    {
+      "rpc": "OperationsService.WaitOperation",
+      "feature_id": "operations.lifecycle"
     }
   ]
 }

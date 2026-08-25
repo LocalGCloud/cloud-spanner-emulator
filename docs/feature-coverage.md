@@ -36,13 +36,13 @@ This inventory covers the major documented Spanner feature areas. It is an evolv
 
 | Status | Count |
 | --- | ---: |
-| `supported` | 60 |
-| `partial` | 47 |
-| `accepted-no-op` | 4 |
+| `supported` | 62 |
+| `partial` | 52 |
+| `accepted-no-op` | 6 |
 | `unsupported` | 3 |
 | `not-applicable` | 7 |
 | `unknown` | 9 |
-| **Total** | **130** |
+| **Total** | **139** |
 
 ## Feature matrix
 
@@ -51,6 +51,7 @@ This inventory covers the major documented Spanner feature areas. It is an evolv
 | ID | Feature | Status | Applicability | Dialects | Docs | Evidence | Verification | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `data.batch.create_transaction` | BatchCreateSessions and transaction selectors | `partial` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner) | [frontend/handlers/batch.cc](../frontend/handlers/batch.cc)<br>[frontend/handlers/batch_test.cc](../frontend/handlers/batch_test.cc) | `tested` | Batch surfaces exist, but production distributed execution semantics are not fully emulated. |
+| `data.cache_updates` | FetchCacheUpdate RPC | `accepted-no-op` | `compatibility-only` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc](https://cloud.google.com/spanner/docs/reference/rpc) | [frontend/handlers/cache_updates.cc](../frontend/handlers/cache_updates.cc)<br>[frontend/handlers/cache_updates_test.cc](../frontend/handlers/cache_updates_test.cc) | `tested` | Validates the database resource but emits no cache updates because the emulator has no distributed query cache. |
 | `data.read.partition_read` | PartitionRead RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner) | [frontend/handlers/partitions.cc](../frontend/handlers/partitions.cc)<br>[tests/conformance/cases/partition_reads.cc](../tests/conformance/cases/partition_reads.cc) | `tested` | Partitioned reads are represented in conformance coverage. |
 | `data.read.read` | Read RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner) | [frontend/handlers/reads.cc](../frontend/handlers/reads.cc)<br>[frontend/handlers/reads_test.cc](../frontend/handlers/reads_test.cc) | `tested` | Key-based reads are implemented and tested. |
 | `data.read.streaming_read` | StreamingRead RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.v1#spanner) | [frontend/handlers/reads.cc](../frontend/handlers/reads.cc)<br>[tests/conformance/cases/large_reads.cc](../tests/conformance/cases/large_reads.cc) | `tested` | Streaming reads are covered for local result chunking. |
@@ -72,6 +73,7 @@ This inventory covers the major documented Spanner feature areas. It is an evolv
 | `instance.delete` | DeleteInstance RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin) | [frontend/handlers/instances.cc](../frontend/handlers/instances.cc)<br>[frontend/handlers/instances_test.cc](../frontend/handlers/instances_test.cc) | `tested` | Local instance deletion is covered. |
 | `instance.get` | GetInstance RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin) | [frontend/handlers/instances.cc](../frontend/handlers/instances.cc)<br>[frontend/handlers/instances_test.cc](../frontend/handlers/instances_test.cc) | `tested` | Instance lookup is implemented. |
 | `instance.list` | ListInstances RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin) | [frontend/handlers/instances.cc](../frontend/handlers/instances.cc)<br>[frontend/handlers/instances_test.cc](../frontend/handlers/instances_test.cc) | `tested` | Instance listing is implemented. |
+| `instance.move` | MoveInstance RPC | `partial` | `local-development` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1) | [frontend/handlers/instance_extensions.cc](../frontend/handlers/instance_extensions.cc)<br>[frontend/handlers/instance_extensions_test.cc](../frontend/handlers/instance_extensions_test.cc) | `tested` | Updates locally meaningful instance metadata without moving distributed production resources. |
 | `instance.update` | UpdateInstance RPC | `partial` | `compatibility-only` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin) | [frontend/handlers/instances.cc](../frontend/handlers/instances.cc)<br>[frontend/handlers/instances_test.cc](../frontend/handlers/instances_test.cc) | `tested` | Metadata updates are local only and do not affect managed capacity. |
 
 ### Database administration, operations, and backups
@@ -79,14 +81,20 @@ This inventory covers the major documented Spanner feature areas. It is an evolv
 | ID | Feature | Status | Applicability | Dialects | Docs | Evidence | Verification | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `backups.create` | CreateBackup RPC | `partial` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/backups.cc](../frontend/handlers/backups.cc)<br>[frontend/handlers/backups_test.cc](../frontend/handlers/backups_test.cc) | `tested` | Backup handlers exist, but cloud backup durability and scheduling semantics are not production-equivalent. |
+| `backups.metadata` | Backup metadata lifecycle RPCs | `partial` | `local-development` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1) | [frontend/handlers/backups.cc](../frontend/handlers/backups.cc)<br>[frontend/persistence/backup_catalog.cc](../frontend/persistence/backup_catalog.cc)<br>[frontend/handlers/backups_test.cc](../frontend/handlers/backups_test.cc)<br>[frontend/persistence/backup_catalog_test.cc](../frontend/persistence/backup_catalog_test.cc) | `tested` | Copy, get, list, update, and delete backup metadata are implemented without production distributed backup semantics. |
 | `backups.restore` | RestoreDatabase RPC | `partial` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/backups.cc](../frontend/handlers/backups.cc)<br>[frontend/handlers/backups_test.cc](../frontend/handlers/backups_test.cc) | `tested` | Restore paths exist with local emulator semantics. |
+| `backups.schedules` | Backup schedule RPCs | `partial` | `local-development` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1) | [frontend/handlers/backups.cc](../frontend/handlers/backups.cc)<br>[frontend/persistence/backup_catalog.cc](../frontend/persistence/backup_catalog.cc)<br>[frontend/handlers/backups_test.cc](../frontend/handlers/backups_test.cc)<br>[frontend/persistence/backup_catalog_test.cc](../frontend/persistence/backup_catalog_test.cc) | `tested` | Backup schedule metadata and lifecycle are implemented locally without production scheduling infrastructure semantics. |
 | `database.create` | CreateDatabase RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/databases.cc](../frontend/handlers/databases.cc)<br>[frontend/handlers/databases_test.cc](../frontend/handlers/databases_test.cc) | `tested` | Database creation is implemented. |
 | `database.drop` | DropDatabase RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/databases.cc](../frontend/handlers/databases.cc)<br>[frontend/handlers/databases_test.cc](../frontend/handlers/databases_test.cc) | `tested` | Database deletion is implemented. |
 | `database.get` | GetDatabase RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/databases.cc](../frontend/handlers/databases.cc)<br>[frontend/handlers/databases_test.cc](../frontend/handlers/databases_test.cc) | `tested` | Database metadata lookup is implemented. |
+| `database.internal_graph_operation` | InternalUpdateGraphOperation RPC | `partial` | `compatibility-only` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1) | [frontend/handlers/database_extensions.cc](../frontend/handlers/database_extensions.cc)<br>[frontend/handlers/database_extensions_test.cc](../frontend/handlers/database_extensions_test.cc) | `tested` | Implements the registered internal graph administration compatibility surface with local-only semantics. |
 | `database.list` | ListDatabases RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/databases.cc](../frontend/handlers/databases.cc)<br>[frontend/handlers/databases_test.cc](../frontend/handlers/databases_test.cc) | `tested` | Database listing is implemented. |
+| `database.split_points` | AddSplitPoints RPC | `accepted-no-op` | `compatibility-only` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1) | [frontend/handlers/database_extensions.cc](../frontend/handlers/database_extensions.cc)<br>[frontend/handlers/database_extensions_test.cc](../frontend/handlers/database_extensions_test.cc) | `tested` | Validates requests for compatibility but cannot control physical distributed split placement. |
+| `database.update` | UpdateDatabase RPC | `partial` | `local-development` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1) | [frontend/handlers/databases.cc](../frontend/handlers/databases.cc)<br>[frontend/handlers/databases_test.cc](../frontend/handlers/databases_test.cc) | `tested` | Database metadata update behavior is implemented for locally meaningful fields. |
 | `database.update_ddl` | UpdateDatabaseDdl RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/databases.cc](../frontend/handlers/databases.cc)<br>[tests/conformance/cases/schema_changes.cc](../tests/conformance/cases/schema_changes.cc) | `tested` | DDL updates are a core emulator path. |
 | `operations.cancel` | CancelOperation RPC | `partial` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/operations.cc](../frontend/handlers/operations.cc)<br>[frontend/handlers/operations_test.cc](../frontend/handlers/operations_test.cc) | `tested` | Cancellation is local operation bookkeeping, not cloud job orchestration. |
 | `operations.get` | GetOperation RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/operations.cc](../frontend/handlers/operations.cc)<br>[frontend/handlers/operations_test.cc](../frontend/handlers/operations_test.cc) | `tested` | Operation lookup is locally implemented. |
+| `operations.lifecycle` | DeleteOperation and WaitOperation RPCs | `supported` | `local-development` | `api` | [https://cloud.google.com/spanner/docs/reference/rpc](https://cloud.google.com/spanner/docs/reference/rpc) | [frontend/handlers/operations.cc](../frontend/handlers/operations.cc)<br>[frontend/handlers/operations_test.cc](../frontend/handlers/operations_test.cc) | `tested` | Operation deletion and waiting are implemented for emulator long-running operations. |
 | `operations.list` | ListOperations RPC | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin](https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin) | [frontend/handlers/operations.cc](../frontend/handlers/operations.cc)<br>[frontend/handlers/operations_test.cc](../frontend/handlers/operations_test.cc) | `tested` | Operation listing is locally implemented. |
 
 ### Schema and DDL
@@ -156,6 +164,7 @@ This inventory covers the major documented Spanner feature areas. It is an evolv
 | ID | Feature | Status | Applicability | Dialects | Docs | Evidence | Verification | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `transactions.commit_timestamps` | Commit timestamps | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/transactions](https://cloud.google.com/spanner/docs/transactions) | [tests/conformance/cases/commit_timestamps.cc](../tests/conformance/cases/commit_timestamps.cc)<br>[tests/conformance/cases/commit_timestamps.cc](../tests/conformance/cases/commit_timestamps.cc) | `tested` | Baseline classification for Commit timestamps; conservative where production semantics are broader than emulator evidence. |
+| `transactions.lifecycle` | BeginTransaction, Commit, and Rollback RPCs | `supported` | `local-development` | `api` | [https://cloud.google.com/spanner/docs/transactions](https://cloud.google.com/spanner/docs/transactions) | [frontend/handlers/transactions.cc](../frontend/handlers/transactions.cc)<br>[frontend/handlers/transactions_test.cc](../frontend/handlers/transactions_test.cc) | `tested` | Explicit transaction lifecycle RPCs are implemented and tested for emulator transactions. |
 | `transactions.read_only` | Read-only transactions | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/transactions](https://cloud.google.com/spanner/docs/transactions) | [tests/conformance/cases/snapshot_reads.cc](../tests/conformance/cases/snapshot_reads.cc)<br>[tests/conformance/cases/snapshot_reads.cc](../tests/conformance/cases/snapshot_reads.cc) | `tested` | Baseline classification for Read-only transactions; conservative where production semantics are broader than emulator evidence. |
 | `transactions.read_write` | Read-write transactions | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/transactions](https://cloud.google.com/spanner/docs/transactions) | [tests/conformance/cases/transactions.cc](../tests/conformance/cases/transactions.cc)<br>[tests/conformance/cases/transactions.cc](../tests/conformance/cases/transactions.cc) | `tested` | Baseline classification for Read-write transactions; conservative where production semantics are broader than emulator evidence. |
 | `transactions.read_your_writes` | Read-your-writes | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/transactions](https://cloud.google.com/spanner/docs/transactions) | [tests/conformance/cases/read_your_writes.cc](../tests/conformance/cases/read_your_writes.cc)<br>[tests/conformance/cases/read_your_writes.cc](../tests/conformance/cases/read_your_writes.cc) | `tested` | Baseline classification for Read-your-writes; conservative where production semantics are broader than emulator evidence. |
@@ -276,8 +285,86 @@ This inventory covers the major documented Spanner feature areas. It is an evolv
 | `emulator.persistence` | Local persistence | `partial` | `local-development` | — | [https://cloud.google.com/spanner/docs/emulator](https://cloud.google.com/spanner/docs/emulator) | [docs/persistent-storage-write-queue.md](../docs/persistent-storage-write-queue.md)<br>[docs/persistent-storage-write-queue.md](../docs/persistent-storage-write-queue.md) | `unverified` | Baseline classification for Local persistence; conservative where production semantics are broader than emulator evidence. |
 | `emulator.startup` | Startup and ports | `supported` | `local-development` | — | [https://cloud.google.com/spanner/docs/emulator](https://cloud.google.com/spanner/docs/emulator) | [binaries/emulator_main.cc](../binaries/emulator_main.cc)<br>[README.md](../README.md) | `implemented` | Baseline classification for Startup and ports; conservative where production semantics are broader than emulator evidence. |
 
+## Registered RPC coverage
+
+Every RPC registered by `frontend/server/server.cc` must map to exactly one feature record. The validator fails when a registered method is missing or a stale method remains in the inventory.
+
+| RPC | Feature ID | Status |
+| --- | --- | --- |
+| `DatabaseAdminService.AddSplitPoints` | `database.split_points` | `accepted-no-op` |
+| `DatabaseAdminService.CopyBackup` | `backups.metadata` | `partial` |
+| `DatabaseAdminService.CreateBackup` | `backups.create` | `partial` |
+| `DatabaseAdminService.CreateBackupSchedule` | `backups.schedules` | `partial` |
+| `DatabaseAdminService.CreateDatabase` | `database.create` | `supported` |
+| `DatabaseAdminService.DeleteBackup` | `backups.metadata` | `partial` |
+| `DatabaseAdminService.DeleteBackupSchedule` | `backups.schedules` | `partial` |
+| `DatabaseAdminService.DropDatabase` | `database.drop` | `supported` |
+| `DatabaseAdminService.GetBackup` | `backups.metadata` | `partial` |
+| `DatabaseAdminService.GetBackupSchedule` | `backups.schedules` | `partial` |
+| `DatabaseAdminService.GetDatabase` | `database.get` | `supported` |
+| `DatabaseAdminService.GetDatabaseDdl` | `database.update_ddl` | `supported` |
+| `DatabaseAdminService.GetIamPolicy` | `security.iam_policies` | `accepted-no-op` |
+| `DatabaseAdminService.InternalUpdateGraphOperation` | `database.internal_graph_operation` | `partial` |
+| `DatabaseAdminService.ListBackupOperations` | `operations.list` | `supported` |
+| `DatabaseAdminService.ListBackupSchedules` | `backups.schedules` | `partial` |
+| `DatabaseAdminService.ListBackups` | `backups.metadata` | `partial` |
+| `DatabaseAdminService.ListDatabaseOperations` | `operations.list` | `supported` |
+| `DatabaseAdminService.ListDatabaseRoles` | `security.database_roles` | `partial` |
+| `DatabaseAdminService.ListDatabases` | `database.list` | `supported` |
+| `DatabaseAdminService.RestoreDatabase` | `backups.restore` | `partial` |
+| `DatabaseAdminService.SetIamPolicy` | `security.iam_policies` | `accepted-no-op` |
+| `DatabaseAdminService.TestIamPermissions` | `security.iam_policies` | `accepted-no-op` |
+| `DatabaseAdminService.UpdateBackup` | `backups.metadata` | `partial` |
+| `DatabaseAdminService.UpdateBackupSchedule` | `backups.schedules` | `partial` |
+| `DatabaseAdminService.UpdateDatabase` | `database.update` | `partial` |
+| `DatabaseAdminService.UpdateDatabaseDdl` | `database.update_ddl` | `supported` |
+| `InstanceAdminService.CreateInstance` | `instance.create` | `supported` |
+| `InstanceAdminService.CreateInstanceConfig` | `instance.configs` | `partial` |
+| `InstanceAdminService.CreateInstancePartition` | `ops.instance_partitions` | `partial` |
+| `InstanceAdminService.DeleteInstance` | `instance.delete` | `supported` |
+| `InstanceAdminService.DeleteInstanceConfig` | `instance.configs` | `partial` |
+| `InstanceAdminService.DeleteInstancePartition` | `ops.instance_partitions` | `partial` |
+| `InstanceAdminService.GetIamPolicy` | `security.iam_policies` | `accepted-no-op` |
+| `InstanceAdminService.GetInstance` | `instance.get` | `supported` |
+| `InstanceAdminService.GetInstanceConfig` | `instance.configs` | `partial` |
+| `InstanceAdminService.GetInstancePartition` | `ops.instance_partitions` | `partial` |
+| `InstanceAdminService.ListInstanceConfigOperations` | `operations.list` | `supported` |
+| `InstanceAdminService.ListInstanceConfigs` | `instance.configs` | `partial` |
+| `InstanceAdminService.ListInstancePartitionOperations` | `ops.instance_partitions` | `partial` |
+| `InstanceAdminService.ListInstancePartitions` | `ops.instance_partitions` | `partial` |
+| `InstanceAdminService.ListInstances` | `instance.list` | `supported` |
+| `InstanceAdminService.MoveInstance` | `instance.move` | `partial` |
+| `InstanceAdminService.SetIamPolicy` | `security.iam_policies` | `accepted-no-op` |
+| `InstanceAdminService.TestIamPermissions` | `security.iam_policies` | `accepted-no-op` |
+| `InstanceAdminService.UpdateInstance` | `instance.update` | `partial` |
+| `InstanceAdminService.UpdateInstanceConfig` | `instance.configs` | `partial` |
+| `InstanceAdminService.UpdateInstancePartition` | `ops.instance_partitions` | `partial` |
+| `OperationsService.CancelOperation` | `operations.cancel` | `partial` |
+| `OperationsService.DeleteOperation` | `operations.lifecycle` | `supported` |
+| `OperationsService.GetOperation` | `operations.get` | `supported` |
+| `OperationsService.ListOperations` | `operations.list` | `supported` |
+| `OperationsService.WaitOperation` | `operations.lifecycle` | `supported` |
+| `SpannerService.BatchCreateSessions` | `data.sessions.batch_create` | `supported` |
+| `SpannerService.BatchWrite` | `writes.batch_write` | `partial` |
+| `SpannerService.BeginTransaction` | `transactions.lifecycle` | `supported` |
+| `SpannerService.Commit` | `transactions.lifecycle` | `supported` |
+| `SpannerService.CreateSession` | `data.sessions.create` | `supported` |
+| `SpannerService.DeleteSession` | `data.sessions.delete` | `supported` |
+| `SpannerService.ExecuteBatchDml` | `writes.batch_dml` | `supported` |
+| `SpannerService.ExecuteSql` | `data.sql.execute` | `supported` |
+| `SpannerService.ExecuteStreamingSql` | `data.sql.execute_streaming` | `supported` |
+| `SpannerService.FetchCacheUpdate` | `data.cache_updates` | `accepted-no-op` |
+| `SpannerService.GetSession` | `data.sessions.get` | `supported` |
+| `SpannerService.ListSessions` | `data.sessions.list` | `supported` |
+| `SpannerService.PartitionQuery` | `data.sql.partition_query` | `supported` |
+| `SpannerService.PartitionRead` | `data.read.partition_read` | `supported` |
+| `SpannerService.Read` | `data.read.read` | `supported` |
+| `SpannerService.Rollback` | `transactions.lifecycle` | `supported` |
+| `SpannerService.StreamingRead` | `data.read.streaming_read` | `supported` |
+
 ## Updating this file
 
 1. Edit `docs/feature-coverage.yaml`.
-2. Run `python3 tools/feature_coverage.py generate`.
-3. Run `python3 tools/feature_coverage.py check` and the unit tests.
+2. Run `python3 tools/feature_coverage.py audit-rpcs` to confirm every registered RPC is mapped.
+3. Run `python3 tools/feature_coverage.py generate`.
+4. Run `python3 tools/feature_coverage.py check` and the unit tests.

@@ -7,6 +7,7 @@ on:
       - 'docs/feature-coverage.md'
       - 'tools/feature_coverage.py'
       - 'tools/feature_coverage_test.py'
+      - 'frontend/server/server.cc'
       - '.github/workflows/feature-coverage.yml'
   pull_request:
     paths:
@@ -14,6 +15,7 @@ on:
       - 'docs/feature-coverage.md'
       - 'tools/feature_coverage.py'
       - 'tools/feature_coverage_test.py'
+      - 'frontend/server/server.cc'
       - '.github/workflows/feature-coverage.yml'
 
 jobs:

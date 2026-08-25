@@ -34,6 +34,9 @@ def base_inventory():
                 "notes": "Covered by tests.",
             }
         ],
+        "rpc_surface": [
+            {"rpc": "SpannerService.ExecuteSql", "feature_id": "query.select"}
+        ],
     }
 
 
@@ -43,6 +46,15 @@ class FeatureCoverageTest(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / "impl.cc").write_text("implementation", encoding="utf-8")
         (self.root / "test.cc").write_text("test", encoding="utf-8")
+        server = self.root / "frontend" / "server" / "server.cc"
+        server.parent.mkdir(parents=True)
+        server.write_text(
+            "class SpannerService {\n"
+            "  // DEFINE_GRPC_METHOD(Spanner, CommentedOut, Request, Response);\n"
+            "  DEFINE_GRPC_METHOD(Spanner, ExecuteSql, Request, Response);\n"
+            "\n};\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -150,6 +162,37 @@ class FeatureCoverageTest(unittest.TestCase):
         data = base_inventory()
         data["features"][0]["docs"] = ["https://example.com/spanner/docs/query"]
         self.assert_invalid(data, "official Spanner documentation domain")
+
+    def test_registered_rpc_must_be_mapped(self):
+        data = base_inventory()
+        data["rpc_surface"] = []
+        self.assert_invalid(data, "rpc_surface must be a non-empty list")
+        data["rpc_surface"] = [
+            {"rpc": "SpannerService.Other", "feature_id": "query.select"}
+        ]
+        self.assert_invalid(data, "registered RPCs missing from inventory")
+
+    def test_stale_rpc_mapping_is_rejected(self):
+        data = base_inventory()
+        data["rpc_surface"].append(
+            {"rpc": "SpannerService.Other", "feature_id": "query.select"}
+        )
+        self.assert_invalid(data, "inventory RPCs are not registered")
+
+    def test_duplicate_rpc_mapping_is_rejected(self):
+        data = base_inventory()
+        data["rpc_surface"].append(dict(data["rpc_surface"][0]))
+        self.assert_invalid(data, "duplicate RPC mapping")
+
+    def test_rpc_mapping_must_reference_a_feature(self):
+        data = base_inventory()
+        data["rpc_surface"][0]["feature_id"] = "missing.feature"
+        self.assert_invalid(data, "unknown feature_id")
+
+    def test_rpc_discovery(self):
+        self.assertEqual(
+            ["SpannerService.ExecuteSql"], fc.discover_registered_rpcs(self.root)
+        )
 
     def test_unsupported_and_not_applicable_require_notes(self):
         data = base_inventory(); data["features"][0].update(status="unsupported", notes="", evidence={}, verification="unverified")
