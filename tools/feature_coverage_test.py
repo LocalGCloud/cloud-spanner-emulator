@@ -65,6 +65,7 @@ class FeatureCoverageTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertIn("- Last reviewed: 2026-08-25", first)
         self.assertIn("- Documentation baseline: Spanner docs 2026-08-25", first)
+        self.assertIn("It is an evolving baseline", first)
         self.assertIn("## Status legend", first)
         self.assertIn("## Verification legend", first)
         self.assertIn("| `query.select` | SELECT queries | `supported`", first)

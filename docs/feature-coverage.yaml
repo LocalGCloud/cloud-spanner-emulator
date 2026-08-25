@@ -3,8 +3,8 @@
     "schema_version": "1.0",
     "inventory_review_date": "2026-08-25",
     "official_documentation_baseline": "Google Cloud Spanner public documentation reviewed 2026-08-25",
-    "upstream_emulator_revision": "unknown",
-    "googlesql_dependency_version": "unknown",
+    "upstream_emulator_revision": "2abe04c1 (upstream/master at audit time)",
+    "googlesql_dependency_version": "2026.7.2",
     "status_values": [
       "supported",
       "partial",

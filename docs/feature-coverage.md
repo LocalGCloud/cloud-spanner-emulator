@@ -7,8 +7,10 @@
 - Schema version: 1.0
 - Last reviewed: 2026-08-25
 - Documentation baseline: Google Cloud Spanner public documentation reviewed 2026-08-25
-- Upstream Emulator Revision: unknown
-- Googlesql Dependency Version: unknown
+- Upstream Emulator Revision: 2abe04c1 (upstream/master at audit time)
+- Googlesql Dependency Version: 2026.7.2
+
+This inventory covers the major documented Spanner feature areas. It is an evolving baseline, not a claim that every individual RPC, SQL function, option, quota, or production semantic has already been independently verified. Missing detail should be added as `unknown` until evidence supports a stronger classification.
 
 ## Status legend
 
