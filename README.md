@@ -153,6 +153,11 @@ this codebase.
 
 ## Features and Limitations
 
+The authoritative, evidence-linked parity inventory is the
+[Spanner emulator feature coverage matrix](docs/feature-coverage.md). It tracks
+the major documented Spanner feature areas, including partial, accepted-no-op,
+unsupported, unknown, and cloud-only capabilities.
+
 Notable supported features:
 
 - DDL schema changes
@@ -302,8 +307,10 @@ Notable limitations:
 
 - gRPC request deadlines and cancellations are ignored by the emulator.
 
-- IAM apis (SetIamPolicy, GetIamPolicy, SetIamPermissions) and Backup APIs
-  are not supported.
+- IAM policy RPCs are accepted for client compatibility, but IAM authorization
+  and enforcement are not emulated. Backup API coverage varies by method; see
+  the [feature coverage matrix](docs/feature-coverage.md) for audited status and
+  evidence.
 
 - The emulator only allows one read-write transaction or schema change at a
   time. Any concurrent transaction will be aborted. Transactions should always
@@ -311,8 +318,9 @@ Notable limitations:
   https://cloud.google.com/spanner/docs/transactions) applies to the Cloud
   Spanner service as well.
 
-- The emulator does not support persistence - all data is kept in memory and
-  discarded when the emulator terminates.
+- Persistence is disabled by default for upstream-compatible in-memory
+  behavior. This fork supports LevelDB-backed persistence when `--data_dir` is
+  configured; see [Data Persistence](#data-persistence---data_dir).
 
 - Error messages may not be consistent between the emulator and the Cloud
   Spanner service. Error messages are not part of Cloud Spanner's API contract
