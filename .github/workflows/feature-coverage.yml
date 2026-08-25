@@ -1,0 +1,30 @@
+name: Feature coverage
+
+on:
+  push:
+    paths:
+      - 'docs/feature-coverage.yaml'
+      - 'docs/feature-coverage.md'
+      - 'tools/feature_coverage.py'
+      - 'tools/feature_coverage_test.py'
+      - '.github/workflows/feature-coverage.yml'
+  pull_request:
+    paths:
+      - 'docs/feature-coverage.yaml'
+      - 'docs/feature-coverage.md'
+      - 'tools/feature_coverage.py'
+      - 'tools/feature_coverage_test.py'
+      - '.github/workflows/feature-coverage.yml'
+
+jobs:
+  feature-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Run unit tests
+        run: python3 -m unittest tools.feature_coverage_test
+      - name: Check generated feature coverage
+        run: python3 tools/feature_coverage.py check
