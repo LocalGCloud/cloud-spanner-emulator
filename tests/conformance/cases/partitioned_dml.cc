@@ -15,6 +15,7 @@
 //
 
 #include <string>
+#include <utility>
 
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "gmock/gmock.h"
@@ -88,7 +89,6 @@ class PartitionedDmlTest
     return response.id();
   }
 
-  // Note: Does not work with parameterized statements.
   absl::StatusOr<spanner_api::ResultSet> ExecutePartitionedDmlInTransaction(
       std::string transaction_id, int seqno, const SqlStatement& statement) {
     grpc::ClientContext context;
@@ -96,7 +96,11 @@ class PartitionedDmlTest
     spanner_api::ExecuteSqlRequest request;
     request.set_session(session_name_);
     request.mutable_transaction()->set_id(transaction_id);
-    request.set_sql(statement.sql());
+    auto statement_proto = ::google::cloud::spanner_internal::ToProto(statement);
+    request.set_sql(std::move(*statement_proto.mutable_sql()));
+    *request.mutable_params() = std::move(*statement_proto.mutable_params());
+    *request.mutable_param_types() =
+        std::move(*statement_proto.mutable_param_types());
     request.set_seqno(seqno);
 
     GOOGLESQL_RETURN_IF_ERROR(raw_client()->ExecuteSql(&context, request, &response));
@@ -126,6 +130,29 @@ TEST_P(PartitionedDmlTest, UpdateRowsSucceed) {
   EXPECT_EQ(result.row_count_lower_bound, 2);
   EXPECT_THAT(Query("SELECT ID, Name, Age FROM Users WHERE Name IS NOT NULL"),
               IsOkAndHoldsRows({{1, "Levin", 27}}));
+}
+
+TEST_P(PartitionedDmlTest, UpdateRowsWithParameterizedRawRequestSucceed) {
+  PopulateDatabase();
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string transaction_id,
+                         CreatePartitionedDmlTransaction());
+  SqlStatement statement;
+  if (dialect_ == database_api::DatabaseDialect::GOOGLE_STANDARD_SQL) {
+    statement = SqlStatement("UPDATE Users SET Name = @name WHERE ID > @id",
+                             {{"name", Value("Updated")}, {"id", Value(1)}});
+  } else {
+    statement = SqlStatement("UPDATE Users SET Name = $1 WHERE ID > $2",
+                             {{"p1", Value("Updated")}, {"p2", Value(1)}});
+  }
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      spanner_api::ResultSet result,
+      ExecutePartitionedDmlInTransaction(transaction_id, 1, statement));
+  EXPECT_EQ(result.stats().row_count_lower_bound(), 2);
+  EXPECT_THAT(Query("SELECT ID, Name, Age FROM Users ORDER BY ID"),
+              IsOkAndHoldsRows(
+                  {{1, "Levin", 27}, {2, "Updated", 32}, {10, "Updated", 31}}));
 }
 
 TEST_P(PartitionedDmlTest, UpdateRowsUsingSequenceSucceed) {

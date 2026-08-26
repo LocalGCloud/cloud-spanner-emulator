@@ -45,7 +45,7 @@ constexpr char kProjectName[] = "test-project";
 constexpr char kInstanceName[] = "test-instance";
 
 // Instance config name used for creating the instance above.
-constexpr char kInstanceConfigName[] = "test-config";
+constexpr char kInstanceConfigName[] = "emulator-config";
 
 }  // namespace
 

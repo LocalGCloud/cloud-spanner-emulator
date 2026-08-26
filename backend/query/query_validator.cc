@@ -789,10 +789,6 @@ absl::Status QueryValidator::VisitResolvedCast(
 
 absl::Status QueryValidator::VisitResolvedSampleScan(
     const googlesql::ResolvedSampleScan* node) {
-  if (node->repeatable_argument()) {
-    return error::UnsupportedTablesampleRepeatable();
-  }
-
   if (absl::EqualsIgnoreCase(node->method(), "system")) {
     return error::UnsupportedTablesampleSystem();
   }

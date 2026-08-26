@@ -1202,6 +1202,7 @@
       ],
       "evidence": {
         "implementation": [
+          "backend/query/feature_filter/sql_features_view.h",
           "tests/conformance/cases/query.cc"
         ],
         "tests": [
@@ -1210,7 +1211,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Baseline classification for Date and timestamp functions; conservative where production semantics are broader than emulator evidence.",
+      "notes": "Core date and timestamp operations are tested, including ISOYEAR and ISOWEEK support in DATE_TRUNC, TIMESTAMP_TRUNC, and DATE_DIFF. The category remains partial because the complete production function surface is not exhaustively covered.",
       "dialects": [
         "googlesql"
       ]
@@ -1226,6 +1227,7 @@
       ],
       "evidence": {
         "implementation": [
+          "backend/query/query_validator.cc",
           "tests/conformance/cases/tablesample.cc"
         ],
         "tests": [
@@ -1234,7 +1236,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Baseline classification for TABLESAMPLE; conservative where production semantics are broader than emulator evidence.",
+      "notes": "BERNOULLI percentage sampling and RESERVOIR row sampling are tested, including deterministic REPEATABLE seeds. SYSTEM sampling remains unsupported.",
       "dialects": [
         "googlesql"
       ]
@@ -1499,6 +1501,8 @@
       ],
       "evidence": {
         "implementation": [
+          "backend/query/query_engine.cc",
+          "frontend/handlers/queries.cc",
           "tests/conformance/cases/partitioned_dml.cc"
         ],
         "tests": [
@@ -1507,7 +1511,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Baseline classification for Partitioned DML; conservative where production semantics are broader than emulator evidence."
+      "notes": "Parameterized DML statements are supported and tested for both dialects. The category remains partial because local execution does not model Cloud Spanner's distributed partitioning, retries, or throughput semantics."
     },
     {
       "id": "writes.batch_write",

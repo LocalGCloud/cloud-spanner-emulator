@@ -14,6 +14,8 @@
 // limitations under the License.
 //
 
+#include <string>
+
 #include "gmock/gmock.h"
 #include "absl/status/status.h"
 #include "tests/conformance/common/database_test_base.h"
@@ -52,13 +54,38 @@ TEST_F(TablesampleTest, SampleSomeRows) {
               IsOkAndHoldsRows({{true}}));
 }
 
-TEST_F(TablesampleTest, RepeatableIsNotSupported) {
-  EXPECT_THAT(Query(R"(SELECT * FROM Entries
-                       TABLESAMPLE BERNOULLI(50 PERCENT) REPEATABLE(5))"),
-              StatusIs(absl::StatusCode::kInvalidArgument));
-  EXPECT_THAT(Query(R"(SELECT * FROM Entries
-                       TABLESAMPLE RESERVOIR(10 ROWS) REPEATABLE(6))"),
-              StatusIs(absl::StatusCode::kInvalidArgument));
+TEST_F(TablesampleTest, BernoulliRepeatableUsesSameSeedDeterministically) {
+  const std::string query = R"(SELECT Id FROM Entries
+                              TABLESAMPLE BERNOULLI(50 PERCENT) REPEATABLE(5)
+                              ORDER BY Id)";
+  const std::string different_seed_query = R"(SELECT Id FROM Entries
+                              TABLESAMPLE BERNOULLI(50 PERCENT) REPEATABLE(6)
+                              ORDER BY Id)";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto first_sample, Query(query));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto second_sample, Query(query));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto different_seed_sample,
+                         Query(different_seed_query));
+  EXPECT_THAT(second_sample, testing::Eq(first_sample));
+  EXPECT_THAT(different_seed_sample, testing::Ne(first_sample));
+}
+
+TEST_F(TablesampleTest, ReservoirRepeatableUsesSameSeedDeterministically) {
+  const std::string query = R"(SELECT Id FROM Entries
+                              TABLESAMPLE RESERVOIR(3 ROWS) REPEATABLE(6)
+                              ORDER BY Id)";
+  const std::string different_seed_query = R"(SELECT Id FROM Entries
+                              TABLESAMPLE RESERVOIR(3 ROWS) REPEATABLE(12345)
+                              ORDER BY Id)";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto first_sample, Query(query));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto second_sample, Query(query));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto different_seed_sample,
+                         Query(different_seed_query));
+  EXPECT_THAT(first_sample, testing::SizeIs(3));
+  EXPECT_THAT(second_sample, testing::Eq(first_sample));
+  EXPECT_THAT(different_seed_sample, testing::Ne(first_sample));
+}
+
+TEST_F(TablesampleTest, SystemRepeatableIsNotSupported) {
   EXPECT_THAT(Query(R"(SELECT * FROM Entries
                        TABLESAMPLE SYSTEM(20 PERCENT) REPEATABLE(7))"),
               StatusIs(absl::StatusCode::kInvalidArgument));
@@ -67,7 +94,7 @@ TEST_F(TablesampleTest, RepeatableIsNotSupported) {
               StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
-TEST_F(TablesampleTest, SystemSampingIsNotSupported) {
+TEST_F(TablesampleTest, SystemSamplingIsNotSupported) {
   EXPECT_THAT(Query(R"(SELECT * FROM Entries
                        TABLESAMPLE SYSTEM(50 PERCENT))"),
               StatusIs(absl::StatusCode::kInvalidArgument));

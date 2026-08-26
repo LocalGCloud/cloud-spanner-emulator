@@ -478,6 +478,20 @@ TEST_P(QueryTest, DateTimestampArithmeticFunctions) {
   EXPECT_THAT(Query(R"(SELECT DATE_TRUNC(DATE '2020-12-25', MONTH))"),
               IsOkAndHoldsRow({Value(absl::CivilDay(2020, 12, 1))}));
 
+  EXPECT_THAT(Query(R"(SELECT DATE_TRUNC(DATE '2015-06-15', ISOYEAR))"),
+              IsOkAndHoldsRow({Value(absl::CivilDay(2014, 12, 29))}));
+
+  EXPECT_THAT(Query(R"(SELECT DATE_TRUNC(DATE '2020-01-01', ISOWEEK))"),
+              IsOkAndHoldsRow({Value(absl::CivilDay(2019, 12, 30))}));
+
+  EXPECT_THAT(
+      Query(R"(SELECT DATE_DIFF(DATE '2016-01-04', DATE '2016-01-03', ISOYEAR))"),
+      IsOkAndHoldsRow({Value(1)}));
+
+  EXPECT_THAT(
+      Query(R"(SELECT DATE_DIFF(DATE '2020-01-06', DATE '2020-01-05', ISOWEEK))"),
+      IsOkAndHoldsRow({Value(1)}));
+
   EXPECT_THAT(Query(R"(SELECT EXTRACT(WEEK FROM DATE '2020-12-25'))"),
               IsOkAndHoldsRow({Value(51)}));
 
@@ -512,6 +526,18 @@ TEST_P(QueryTest, DateTimestampArithmeticFunctions) {
   ))"),
               IsOkAndHoldsRow({MakeTimestamp(absl::ToChronoTime(
                   absl::FromCivil(absl::CivilDay(2020, 12, 25), time_zone)))}));
+
+  EXPECT_THAT(Query(R"(SELECT TIMESTAMP_TRUNC(
+    TIMESTAMP "2020-01-01 12:34:56+00", ISOWEEK, "UTC"
+  ))"),
+              IsOkAndHoldsRow({MakeTimestamp(absl::ToChronoTime(
+                  absl::FromCivil(absl::CivilDay(2019, 12, 30), time_zone)))}));
+
+  EXPECT_THAT(Query(R"(SELECT TIMESTAMP_TRUNC(
+    TIMESTAMP "2015-06-15 12:34:56+00", ISOYEAR, "UTC"
+  ))"),
+              IsOkAndHoldsRow({MakeTimestamp(absl::ToChronoTime(
+                  absl::FromCivil(absl::CivilDay(2014, 12, 29), time_zone)))}));
 
   EXPECT_THAT(Query(R"(SELECT EXTRACT(
      HOUR FROM TIMESTAMP "2020-12-25 15:30:00+00"
