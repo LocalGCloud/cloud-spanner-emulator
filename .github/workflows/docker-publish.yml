@@ -11,29 +11,11 @@ on:
     # week keeps every entry well inside the 7-day window with margin.
     - cron: '0 6 * * 1,4'
   push:
-    tags: ['v*']
-    # Tag pushes ignore path filters. Default-branch runs seed caches that later
-    # tag refs may restore without rebuilding unchanged dependencies.
-    branches: [master]
-    paths:
-      - '.bazelrc'
-      - '.bazelversion'
-      - '.dockerignore'
-      - '.github/workflows/docker-publish.yml'
-      - 'BUILD'
-      - 'BUILD.bazel'
-      - 'MODULE.bazel'
-      - 'MODULE.bazel.lock'
-      - 'WORKSPACE'
-      - 'WORKSPACE.bazel'
-      - 'requirements.txt'
-      - 'go.mod'
-      - 'go.sum'
-      - '**/BUILD'
-      - '**/BUILD.bazel'
-      - '**/*.bzl'
-      - 'build/bazel/**'
-      - 'build/docker/**'
+    # Plain semver tags only (no "v" prefix -- see the Docker tag
+    # simplification this pairs with). Publishing is otherwise entirely
+    # manual (workflow_dispatch): no branch/path-filtered auto-trigger, so a
+    # routine commit to any branch never publishes anything on its own.
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
       target:
@@ -88,11 +70,11 @@ jobs:
           fi
           echo "Building ${{ matrix.platform }} natively on $actual_arch"
 
-      - name: Require Docker Hub credentials for release tags
-        if: startsWith(github.ref, 'refs/tags/v') && env.DOCKERHUB_AUTHENTICATED != 'true'
+      - name: Require Docker Hub credentials for publishing
+        if: ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')) && env.DOCKERHUB_AUTHENTICATED != 'true'
         shell: bash
         run: |
-          echo "::error::Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets before publishing a release tag."
+          echo "::error::Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets before publishing (release tag, or manual dispatch on jay-33-persistence)."
           exit 1
 
       - name: Set up Docker Buildx
@@ -270,7 +252,7 @@ jobs:
             }
           skip-extraction: true
 
-      - name: Build cache or push tag digest
+      - name: Build cache or push digest
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -279,7 +261,11 @@ jobs:
           platforms: ${{ matrix.platform }}
           provenance: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: ${{ startsWith(github.ref, 'refs/tags/v') && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE_NAME) || '' }}
+          # Publish (push-by-digest, merged into a tagged multi-arch manifest
+          # by the merge job below) on a release tag, or a manual dispatch
+          # against jay-33-persistence specifically -- not on dispatches from
+          # other branches, and not automatically from any push.
+          outputs: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')) && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE_NAME) || '' }}
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
           cache-to: ${{ env.DOCKERHUB_AUTHENTICATED == 'true' && format('type=registry,ref={0}:buildcache-{1},mode=max', env.IMAGE_NAME, matrix.arch) || '' }}
           build-args: |
@@ -371,14 +357,14 @@ jobs:
           key: bazel-disk-v2-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ github.sha }}
 
       - name: Export digest
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: digests-${{ matrix.arch }}
@@ -390,7 +376,7 @@ jobs:
     name: Build native macOS ARM64 artifacts
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.target != 'docker') ||
-      startsWith(github.ref, 'refs/tags/v')
+      startsWith(github.ref, 'refs/tags/')
     runs-on: macos-15
     timeout-minutes: 360
 
@@ -526,7 +512,9 @@ jobs:
   merge:
     runs-on: ubuntu-24.04
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Same publish condition as the build job's digest push above -- a
+    # release tag, or a manual dispatch against jay-33-persistence.
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 10
 
     steps:
@@ -584,7 +572,10 @@ jobs:
 
       - name: Verify multi-platform manifest
         env:
-          IMAGE_TAG: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          # `latest` is always among the published tags regardless of
+          # trigger (release tag or jay-33-persistence dispatch), unlike
+          # steps.meta.outputs.version, whose resolution differs by event.
+          IMAGE_TAG: ${{ env.IMAGE_NAME }}:latest
         run: |
           set -euo pipefail
           raw_manifest="$(docker buildx imagetools inspect --raw "$IMAGE_TAG")"

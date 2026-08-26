@@ -452,32 +452,42 @@ or using the existing Cloud Spanner [support channels](https://cloud.google.com/
 
 ## Release
 
-### Triggering the GitHub workflow
+Publishing to Docker Hub is entirely manual: an ordinary commit to any
+branch never triggers a build or publish on its own.
 
-Version tags build and publish Linux images for both `linux/amd64` and
-`linux/arm64`, and upload a native macOS ARM64 archive:
+| Event | Docker tags published |
+|-------|------------------------|
+| `workflow_dispatch` against `jay-33-persistence` | `<7-char-sha>`, `latest` |
+| Plain version tag `x.y.z` (no `v` prefix) | `<7-char-sha>`, `latest`, `x.y.z` |
+| `workflow_dispatch` against any other branch | none (builds/warms cache only) |
+
+Both publishing paths build Linux images for `linux/amd64` and
+`linux/arm64` and merge them into one multi-platform manifest.
+
+### Release: push a version tag
 
 ```bash
-git tag -a v<version> -m "Release v<version>"
-git push origin v<version>
+git tag -a x.y.z -m "Release x.y.z"
+git push origin x.y.z
 ```
 
-git tag push will trigger the `docker-publish.yml` workflow. 
-A `v*` tag publishes:
+Tag pushes also build and upload a native macOS ARM64 archive
+(`spanner-emulator-macos-arm64.tar.gz` + checksum, as a workflow artifact).
 
-- `jaysen2apache/spanner-emulator-extended:latest`
-- `jaysen2apache/spanner-emulator-extended:<version>`
-- A commit-SHA image tag
-- A `spanner-emulator-macos-arm64.tar.gz` workflow artifact and checksum
-
-### manually triggering the GitHub workflow
-For Manual runs can build Docker caches, the macOS archive, or both:
+### Manual dispatch
 
 ```bash
 gh workflow run docker-publish.yml \
   --ref jay-33-persistence \
   -f target=all
 ```
+
+`target=docker` (the default) builds/publishes Linux only, skipping the
+macOS archive; `target=macos-arm64` builds only the macOS archive;
+`target=all` does both. Only publishes when `--ref` is `jay-33-persistence`
+-- dispatching against any other branch builds without publishing, so
+experimenting on a feature branch can never overwrite the public `latest`
+tag.
 
 ## Security
 
