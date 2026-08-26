@@ -19,6 +19,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <utility>
@@ -28,6 +29,7 @@
 #include "absl/flags/flag.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "backend/database/database.h"
 #include "backend/schema/updater/schema_updater.h"
@@ -177,6 +179,28 @@ class DatabaseManager {
   absl::StatusOr<std::vector<std::shared_ptr<Database>>> ListDatabases(
       const std::string& instance_uri) const ABSL_LOCKS_EXCLUDED(mu_);
 
+  // Records that `database_uri` failed to restore from persisted metadata,
+  // with `reason` explaining why. The database becomes visible via
+  // ListDatabases/GetDatabase (as a non-serving placeholder -- Cloud
+  // Spanner's Database.State enum has no dedicated "failed" value, so
+  // callers surface this as CREATING, whose own doc comment already says
+  // operations against it may fail with FAILED_PRECONDITION) instead of
+  // silently vanishing from the catalog, while GetDatabase() and every
+  // data-plane/DDL path that resolves through it keep rejecting it.
+  // See openspec change fix-unique-index-restore-isolation, section 3.
+  void MarkDatabaseUnavailable(const std::string& database_uri,
+                                absl::string_view reason)
+      ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Returns the reason `database_uri` is unavailable, if it is.
+  std::optional<std::string> UnavailableReason(
+      const std::string& database_uri) const ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Returns (database_uri, reason) pairs for unavailable databases under
+  // `instance_uri`, sorted by URI to match ListDatabases()'s ordering.
+  std::vector<std::pair<std::string, std::string>> ListUnavailableDatabases(
+      const std::string& instance_uri) const ABSL_LOCKS_EXCLUDED(mu_);
+
  private:
   // System-wide clock.
   Clock* clock_;
@@ -193,6 +217,11 @@ class DatabaseManager {
       ABSL_GUARDED_BY(mu_);
   // Database URIs reserved by in-flight create/restore operations.
   absl::flat_hash_map<std::string, std::string> database_reservations_
+      ABSL_GUARDED_BY(mu_);
+
+  // Database URIs that failed to restore from persisted metadata, mapped to
+  // a human-readable reason. See MarkDatabaseUnavailable().
+  std::map<std::string, std::string> unavailable_databases_
       ABSL_GUARDED_BY(mu_);
 
 

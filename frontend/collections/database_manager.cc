@@ -70,6 +70,22 @@ std::vector<std::shared_ptr<Database>> GetDatabasesByInstance(
   return databases;
 }
 
+std::vector<std::pair<std::string, std::string>> GetUnavailableByInstance(
+    const std::map<std::string, std::string>& unavailable_databases,
+    const std::string& instance_uri) {
+  std::string database_uri_prefix = absl::StrCat(instance_uri, "/");
+  std::vector<std::pair<std::string, std::string>> result;
+  auto itr = unavailable_databases.upper_bound(database_uri_prefix);
+  while (itr != unavailable_databases.end()) {
+    if (!absl::StartsWith(itr->first, database_uri_prefix)) {
+      break;
+    }
+    result.emplace_back(itr->first, itr->second);
+    ++itr;
+  }
+  return result;
+}
+
 absl::StatusOr<std::vector<std::filesystem::path>> ChildDirectories(
     const std::filesystem::path& parent) {
   std::error_code error;
@@ -1018,6 +1034,16 @@ absl::StatusOr<std::shared_ptr<Database>> DatabaseManager::CreateDatabase(
 
 absl::StatusOr<std::shared_ptr<Database>> DatabaseManager::GetDatabase(
     const std::string& database_uri) const {
+  if (std::optional<std::string> reason = UnavailableReason(database_uri);
+      reason.has_value()) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Database ", database_uri,
+        " is unavailable: it failed to restore from persisted metadata "
+        "(reason: ",
+        *reason,
+        "). Restart the emulator with --repair_corrupted_databases to "
+        "quarantine it, or restore its on-disk data from a backup."));
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::shared_ptr<Database> database,
       GetDatabaseIncludingRecoveryRequired(database_uri));
@@ -1026,6 +1052,29 @@ absl::StatusOr<std::shared_ptr<Database>> DatabaseManager::GetDatabase(
         "Database recovery is required before serving ", database_uri));
   }
   return database;
+}
+
+void DatabaseManager::MarkDatabaseUnavailable(const std::string& database_uri,
+                                              absl::string_view reason) {
+  absl::MutexLock lock(mu_);
+  unavailable_databases_[database_uri] = std::string(reason);
+}
+
+std::optional<std::string> DatabaseManager::UnavailableReason(
+    const std::string& database_uri) const {
+  absl::ReaderMutexLock lock(mu_);
+  auto itr = unavailable_databases_.find(database_uri);
+  if (itr == unavailable_databases_.end()) {
+    return std::nullopt;
+  }
+  return itr->second;
+}
+
+std::vector<std::pair<std::string, std::string>>
+DatabaseManager::ListUnavailableDatabases(
+    const std::string& instance_uri) const {
+  absl::ReaderMutexLock lock(mu_);
+  return GetUnavailableByInstance(unavailable_databases_, instance_uri);
 }
 
 absl::StatusOr<std::shared_ptr<Database>>

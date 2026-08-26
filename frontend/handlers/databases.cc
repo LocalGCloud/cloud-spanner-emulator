@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -78,6 +79,14 @@ absl::Status ListDatabases(RequestContext* ctx,
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::vector<std::shared_ptr<Database>> databases,
       ctx->env()->database_manager()->ListDatabases(request->parent()));
+  // Databases that failed to restore from persisted metadata must still be
+  // listed (see openspec change fix-unique-index-restore-isolation, section
+  // 3) instead of silently vanishing from the catalog. Both `databases` and
+  // this list are already URI-sorted (DatabaseManager keeps both underlying
+  // maps as std::map), so they can be merged in URI order below.
+  std::vector<std::pair<std::string, std::string>> unavailable_databases =
+      ctx->env()->database_manager()->ListUnavailableDatabases(
+          request->parent());
 
   int32_t page_size = request->page_size();
   static const int32_t kMaxPageSize = 1000;
@@ -85,15 +94,40 @@ absl::Status ListDatabases(RequestContext* ctx,
     page_size = kMaxPageSize;
   }
 
-  // Databases returned from database manager are sorted by database_uri and
-  // thus we use database uri of first database in next page as next_page_token.
-  for (const auto& database : databases) {
+  // Merge-walk the two URI-sorted sources so the combined output stays
+  // sorted by database_uri, matching the pagination contract described
+  // below.
+  size_t next_available = 0;
+  size_t next_unavailable = 0;
+  while (next_available < databases.size() ||
+         next_unavailable < unavailable_databases.size()) {
+    const bool take_available =
+        next_unavailable >= unavailable_databases.size() ||
+        (next_available < databases.size() &&
+         databases[next_available]->database_uri() <
+             unavailable_databases[next_unavailable].first);
+    const std::string& database_uri =
+        take_available ? databases[next_available]->database_uri()
+                       : unavailable_databases[next_unavailable].first;
+
+    if (database_uri < request->page_token()) {
+      take_available ? ++next_available : ++next_unavailable;
+      continue;
+    }
     if (response->databases_size() >= page_size) {
-      response->set_next_page_token(database->database_uri());
+      response->set_next_page_token(database_uri);
       break;
     }
-    if (database->database_uri() >= request->page_token()) {
-      GOOGLESQL_RETURN_IF_ERROR(database->ToProto(response->add_databases()));
+    if (take_available) {
+      GOOGLESQL_RETURN_IF_ERROR(
+          databases[next_available]->ToProto(response->add_databases()));
+      ++next_available;
+    } else {
+      // See GetDatabase() above for why CREATING is used here.
+      database_api::Database* proto = response->add_databases();
+      proto->set_name(database_uri);
+      proto->set_state(database_api::Database::CREATING);
+      ++next_unavailable;
     }
   }
   return absl::OkStatus();
@@ -261,9 +295,30 @@ REGISTER_GRPC_HANDLER(DatabaseAdmin, CreateDatabase);
 absl::Status GetDatabase(RequestContext* ctx,
                          const database_api::GetDatabaseRequest* request,
                          database_api::Database* response) {
-  GOOGLESQL_ASSIGN_OR_RETURN(std::shared_ptr<Database> database,
-                             GetDatabase(ctx, request->name()));
-  return database->ToProto(response);
+  absl::StatusOr<std::shared_ptr<Database>> database =
+      GetDatabase(ctx, request->name());
+  if (!database.ok()) {
+    // A database that failed to restore from persisted metadata is still a
+    // real resource an operator needs to see -- DatabaseAdmin.GetDatabase
+    // must describe it, not error out on it (see openspec change
+    // fix-unique-index-restore-isolation, section 3). Cloud Spanner's
+    // Database.State enum has no dedicated "failed" value, so CREATING is
+    // the closest documented fit: its own comment already says operations
+    // against it may fail with FAILED_PRECONDITION, which is exactly what
+    // every data-plane/DDL path does for this database via
+    // DatabaseManager::GetDatabase(). The actual failure reason is logged
+    // at restore time; it isn't part of the wire proto.
+    if (std::optional<std::string> reason =
+            ctx->env()->database_manager()->UnavailableReason(
+                request->name());
+        reason.has_value()) {
+      response->set_name(request->name());
+      response->set_state(database_api::Database::CREATING);
+      return absl::OkStatus();
+    }
+    return database.status();
+  }
+  return (*database)->ToProto(response);
 }
 REGISTER_GRPC_HANDLER(DatabaseAdmin, GetDatabase);
 

@@ -236,6 +236,28 @@ What persists:
 When `--data_dir` is empty (default), emulator runs in-memory mode identical
 to upstream.
 
+**Per-database restore fault isolation**: if a single database's persisted
+data fails to restore on startup (for example, a corrupted unique index),
+that failure no longer crashes the whole emulator process. Every other
+instance and database in `--data_dir` restores and starts normally. The
+failed database itself becomes `UNAVAILABLE`:
+- It still appears in `ListDatabases`/`GetDatabase` (reported as `CREATING`
+  — Cloud Spanner's `Database.State` has no dedicated "failed" value, and
+  `CREATING`'s own contract already allows `FAILED_PRECONDITION` on
+  operations against it).
+- Reads, writes, and DDL against it are rejected with a `FAILED_PRECONDITION`
+  error naming the database and the restore failure reason.
+- The actual reason is also logged at startup (`ERROR` level) for operator
+  diagnosis.
+
+Restart with `--repair_corrupted_databases` to clear a failed database
+instead of leaving it `UNAVAILABLE`: its on-disk LevelDB directory is moved
+aside under `<data_dir>/.quarantine/` and its `metadata.json` entry is
+removed, so it stops blocking future startups and no longer appears at all
+(a quarantined database is not `UNAVAILABLE` — it's gone). Without the flag,
+a failed database is left in place so an operator can inspect it before
+deciding whether to discard it.
+
 ### OPTIMIZER_VERSION Statement Hint
 
 **Upstream gap**: Production queries using `@{OPTIMIZER_VERSION=latest}` fail

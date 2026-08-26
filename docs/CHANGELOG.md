@@ -1,5 +1,56 @@
 # Changelog
 
+## [2026-08-26] UNAVAILABLE Database State for Restore Failures
+
+Closes the "Known gaps" item from the 2026-08-18 entry below: a database
+that fails to restore was previously left entirely absent from the catalog
+for that run, indistinguishable from a database that never existed.
+Implements the remaining scope of `openspec/changes/fix-unique-index-restore-isolation/`
+section 3.
+
+### Added
+- **`DatabaseManager::MarkDatabaseUnavailable()` / `UnavailableReason()` /
+  `ListUnavailableDatabases()`**: a new URI-sorted registry (separate from
+  `database_map_`, since a database that failed to restore has no working
+  `backend::Database` to construct) tracking failed-to-restore databases and
+  their reason. See `frontend/collections/database_manager.{h,cc}`.
+- **`RestoreFromMetadata()` marks failures `UNAVAILABLE`**: the per-database
+  restore-failure branch in `binaries/emulator_main.cc` now calls
+  `MarkDatabaseUnavailable()` with the restore error's message, unless the
+  database was successfully quarantined (`--repair_corrupted_databases`), in
+  which case it is removed entirely rather than left `UNAVAILABLE`.
+- **`DatabaseManager::GetDatabase()` rejects unavailable databases**: returns
+  `FAILED_PRECONDITION` naming the database and the restore failure reason.
+  Since this is the single chokepoint used by session creation
+  (`frontend::GetSession`) and `UpdateDatabaseDdl`, this uniformly blocks
+  reads, writes, and DDL against an unavailable database without a
+  per-handler change.
+- **`ListDatabases`/`GetDatabase` (admin RPCs) surface `UNAVAILABLE`
+  databases**: reported as `State::CREATING` — Cloud Spanner's
+  `Database.State` enum has no dedicated failure value, and `CREATING`'s own
+  documented contract already permits `FAILED_PRECONDITION` on operations
+  against it, so this stays wire-compatible with the real API instead of
+  inventing a new enum value. `ListDatabases` merge-walks the two
+  URI-sorted sources (restored databases, unavailable databases) to keep
+  pagination ordering intact. See `frontend/handlers/databases.cc`.
+- **Tests**: `frontend/collections/database_manager_test.cc` covers
+  marking/querying unavailable databases, `GetDatabase()` rejection with the
+  reason in the error, isolation from unrelated databases, and
+  instance-scoped listing.
+- **`README.md`**: documents the `UNAVAILABLE` state and
+  `--repair_corrupted_databases` under Data Persistence.
+
+### Known gaps (not implemented in this pass)
+- No regression test reproducing the original unique-index TOCTOU (tasks
+  1.1–1.3 of the openspec change) and no stress test for concurrent
+  colliding inserts + restart (task 2.2) — both require a running emulator
+  binary and were out of scope for a build-free pass.
+- No end-to-end verification (Docker build, localcloud's "Add Row"
+  generator against a corrupted database) — task 6.2/6.3.
+- Verification for the separate LevelDB write-queue race fix
+  (`openspec/changes/fix-spanner-leveldb-race/tasks.md` sections 4.7, 5) is
+  still outstanding and unrelated to this entry.
+
 ## [2026-08-18] Unique Index Restore-Time Corruption and Restore Fault Isolation
 
 Implements `openspec/changes/fix-unique-index-restore-isolation/`. Fixes the

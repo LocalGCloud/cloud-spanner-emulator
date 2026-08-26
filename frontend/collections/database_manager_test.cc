@@ -20,7 +20,9 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/flags/declare.h"
@@ -510,6 +512,77 @@ TEST_F(DatabaseManagerTest, ListDatabaseWithSimilarInstanceUri) {
                            "projects/test-p/instances/test-instance"));
   EXPECT_EQ(databases.size(), 1);
   EXPECT_EQ(databases[0]->database_uri(), database_uri_);
+}
+
+// Covers openspec change fix-unique-index-restore-isolation, section 3: a
+// database that failed to restore from persisted metadata must be visible
+// (not silently absent) but must reject data-plane/DDL access.
+TEST_F(DatabaseManagerTest, UnavailableDatabaseHasNoReasonWhenNeverMarked) {
+  EXPECT_EQ(database_manager_.UnavailableReason(database_uri_), std::nullopt);
+}
+
+TEST_F(DatabaseManagerTest, MarkDatabaseUnavailableRecordsReason) {
+  database_manager_.MarkDatabaseUnavailable(
+      database_uri_, "UNIQUE violation on index EmployeesByEmail");
+
+  EXPECT_THAT(database_manager_.UnavailableReason(database_uri_),
+              testing::Optional(testing::HasSubstr(
+                  "UNIQUE violation on index EmployeesByEmail")));
+}
+
+TEST_F(DatabaseManagerTest, GetDatabaseRejectsUnavailableDatabaseWithReason) {
+  database_manager_.MarkDatabaseUnavailable(database_uri_,
+                                            "persisted data is corrupted");
+
+  EXPECT_THAT(
+      database_manager_.GetDatabase(database_uri_),
+      googlesql_base::testing::StatusIs(
+          absl::StatusCode::kFailedPrecondition,
+          testing::AllOf(testing::HasSubstr(database_uri_),
+                         testing::HasSubstr("persisted data is corrupted"),
+                         testing::HasSubstr("repair_corrupted_databases"))));
+}
+
+TEST_F(DatabaseManagerTest, UnavailableDatabaseDoesNotAffectOtherDatabases) {
+  const std::string other_uri =
+      "projects/test-p/instances/test-instance/databases/other-database";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<Database> other,
+      database_manager_.CreateDatabase(other_uri, empty_schema_operation_));
+  database_manager_.MarkDatabaseUnavailable(database_uri_,
+                                            "corrupted unique index");
+
+  EXPECT_THAT(database_manager_.GetDatabase(database_uri_),
+              googlesql_base::testing::StatusIs(
+                  absl::StatusCode::kFailedPrecondition));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::shared_ptr<Database> fetched_other,
+                       database_manager_.GetDatabase(other_uri));
+  EXPECT_EQ(fetched_other, other);
+}
+
+TEST_F(DatabaseManagerTest, ListUnavailableDatabasesScopedToInstance) {
+  const std::string instance_uri = "projects/test-p/instances/test-instance";
+  const std::string other_instance_uri =
+      "projects/test-p/instances/other-instance";
+  const std::string in_instance =
+      absl::StrCat(instance_uri, "/databases/broken-a");
+  const std::string also_in_instance =
+      absl::StrCat(instance_uri, "/databases/broken-b");
+  const std::string other_instance_db =
+      absl::StrCat(other_instance_uri, "/databases/broken-c");
+
+  database_manager_.MarkDatabaseUnavailable(also_in_instance, "reason-b");
+  database_manager_.MarkDatabaseUnavailable(in_instance, "reason-a");
+  database_manager_.MarkDatabaseUnavailable(other_instance_db, "reason-c");
+
+  std::vector<std::pair<std::string, std::string>> unavailable =
+      database_manager_.ListUnavailableDatabases(instance_uri);
+  ASSERT_EQ(unavailable.size(), 2);
+  // Sorted by URI, matching ListDatabases()'s ordering.
+  EXPECT_EQ(unavailable[0].first, in_instance);
+  EXPECT_EQ(unavailable[0].second, "reason-a");
+  EXPECT_EQ(unavailable[1].first, also_in_instance);
+  EXPECT_EQ(unavailable[1].second, "reason-b");
 }
 
 TEST_F(DatabaseManagerTest, DatabaseQuotaIsEnforced) {

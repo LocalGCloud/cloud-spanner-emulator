@@ -567,6 +567,7 @@ static absl::Status RestoreFromMetadata(Server* server) {
             << "; it will be unavailable for this run, but every other "
                "instance and database is unaffected. Reason: "
             << database_restore_status;
+        bool quarantined = false;
         if (config::repair_corrupted_databases()) {
           absl::Status quarantine_status = QuarantineCorruptedDatabase(
               config::data_dir(), inst_name, db_name, database_uri, ms,
@@ -582,6 +583,7 @@ static absl::Status RestoreFromMetadata(Server* server) {
                 << config::data_dir()
                 << "/.quarantine and its metadata.json entry was removed. "
                    "It will no longer appear on future restarts.";
+            quarantined = true;
           }
         } else {
           ABSL_LOG(WARNING)
@@ -590,6 +592,15 @@ static absl::Status RestoreFromMetadata(Server* server) {
               << database_uri
               << " (move its on-disk data aside and remove it from "
                  "metadata.json) so it stops blocking clean restores.";
+        }
+        // A quarantined database is gone (its metadata.json entry was
+        // removed), so it should not appear anywhere. Otherwise, surface it
+        // as UNAVAILABLE instead of leaving it silently absent from
+        // ListDatabases/GetDatabase -- see openspec change
+        // fix-unique-index-restore-isolation, section 3.
+        if (!quarantined) {
+          env->database_manager()->MarkDatabaseUnavailable(
+              database_uri, database_restore_status.message());
         }
         continue;
       }
