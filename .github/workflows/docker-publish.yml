@@ -551,10 +551,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          # No type=ref,event=tag: it duplicated type=semver's output with a
+          # redundant "v" prefix (v0.1.1 alongside 0.1.1) -- the bare
+          # version number is sufficient.
           tags: |
             type=raw,value=latest
             type=sha,prefix=
-            type=ref,event=tag
             type=semver,pattern={{version}}
       - name: Create multi-platform manifest
         working-directory: /tmp/digests
