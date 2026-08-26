@@ -440,6 +440,7 @@ git tag -a v<version> -m "Release v<version>"
 git push origin v<version>
 ```
 
+git tag push will trigger the `docker-publish.yml` workflow. 
 A `v*` tag publishes:
 
 - `jaysen2apache/spanner-emulator-extended:latest`
@@ -447,7 +448,8 @@ A `v*` tag publishes:
 - A commit-SHA image tag
 - A `spanner-emulator-macos-arm64.tar.gz` workflow artifact and checksum
 
-Manual runs can build Docker caches, the macOS archive, or both:
+### manually triggering the GitHub workflow
+For Manual runs can build Docker caches, the macOS archive, or both:
 
 ```bash
 gh workflow run docker-publish.yml \
