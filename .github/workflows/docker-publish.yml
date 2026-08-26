@@ -1,6 +1,15 @@
 name: Build and Push Docker Image
 
 on:
+  schedule:
+    # Keep the Bazel repo/disk caches warm. GitHub evicts any cache entry
+    # unused for 7 days, and this repo can go quieter than that between real
+    # pushes. `schedule` always runs against the default branch (master),
+    # but that's sufficient: GitHub's cache access rules make caches created
+    # on the default branch visible to every branch, so this also keeps
+    # feature branches (e.g. jay-33-persistence) from starting cold. Twice a
+    # week keeps every entry well inside the 7-day window with margin.
+    - cron: '0 6 * * 1,4'
   push:
     tags: ['v*']
     # Tag pushes ignore path filters. Default-branch runs seed caches that later
@@ -183,9 +192,18 @@ jobs:
           CACHE_ARCHIVE_DIR: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}
           REPO_CACHE_PATH: ${{ runner.temp }}/bazel-repo-cache-${{ matrix.arch }}
           DISK_CACHE_PATH: ${{ runner.temp }}/bazel-disk-cache-${{ matrix.arch }}
-          MAX_ARCHIVE_BYTES: 3221225472
-          MAX_MOUNT_KIB: 2097152
-          MAX_COMBINED_KIB: 4194304
+          # The original 3/2/4 GiB budget was undersized for this repo: the
+          # Bazel repository cache alone (external deps -- ZetaSQL, gRPC,
+          # abseil, the PostgreSQL port, etc.) measures 3.6+ GiB expanded
+          # from a partial build, before the disk cache (compiled objects)
+          # is even counted. That meant the budget was silently discarding
+          # the expensive disk cache on every run, defeating the point of
+          # this whole pipeline. Retune these against the actual sizes
+          # logged by "Injecting N KiB of Bazel caches" below once this has
+          # run a few times with real (non-cold) caches.
+          MAX_ARCHIVE_BYTES: 5368709120
+          MAX_MOUNT_KIB: 5242880
+          MAX_COMBINED_KIB: 8388608
         run: |
           set -euo pipefail
           rm -rf "$REPO_CACHE_PATH" "$DISK_CACHE_PATH"
@@ -298,7 +316,8 @@ jobs:
         shell: bash
         env:
           CACHE_ARCHIVE_DIR: ${{ runner.temp }}/bazel-cache-archives-${{ matrix.arch }}
-          MAX_COMBINED_BYTES: 3221225472
+          # Keep in sync with the restore-side budget above.
+          MAX_COMBINED_BYTES: 5368709120
         run: |
           set -euo pipefail
           repo_archive="$CACHE_ARCHIVE_DIR/repo.tar.gz"
