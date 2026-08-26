@@ -21,12 +21,15 @@ on:
       target:
         description: Build target
         required: true
-        default: docker
+        default: arm
         type: choice
         options:
-          - docker
-          - macos-arm64
-          - all
+          # linux: Docker images only (linux/amd64 + linux/arm64).
+          # arm: the same Docker images, plus the native macOS arm64 archive.
+          # The Docker/Linux build always runs either way -- this only
+          # decides whether the macOS archive also gets built alongside it.
+          - linux
+          - arm
 
 env:
   IMAGE_NAME: jaysen2apache/spanner-emulator-extended
@@ -35,7 +38,6 @@ env:
 
 jobs:
   build:
-    if: github.event_name != 'workflow_dispatch' || inputs.target != 'macos-arm64'
     strategy:
       fail-fast: false
       matrix:
@@ -375,7 +377,7 @@ jobs:
   macos-arm64:
     name: Build native macOS ARM64 artifacts
     if: >-
-      (github.event_name == 'workflow_dispatch' && inputs.target != 'docker') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'arm') ||
       startsWith(github.ref, 'refs/tags/')
     runs-on: macos-15
     timeout-minutes: 360

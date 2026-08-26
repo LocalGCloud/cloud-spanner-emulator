@@ -477,17 +477,15 @@ Tag pushes also build and upload a native macOS ARM64 archive
 ### Manual dispatch
 
 ```bash
-gh workflow run docker-publish.yml \
-  --ref jay-33-persistence \
-  -f target=all
+gh workflow run docker-publish.yml --ref jay-33-persistence
 ```
 
-`target=docker` (the default) builds/publishes Linux only, skipping the
-macOS archive; `target=macos-arm64` builds only the macOS archive;
-`target=all` does both. Only publishes when `--ref` is `jay-33-persistence`
--- dispatching against any other branch builds without publishing, so
-experimenting on a feature branch can never overwrite the public `latest`
-tag.
+The Docker/Linux build always runs on any dispatch. `target` (default:
+`arm`) only decides whether the native macOS arm64 archive is *also*
+built: `target=arm` builds it alongside the Docker images, `target=linux`
+skips it. Only publishes when `--ref` is `jay-33-persistence` -- dispatching
+against any other branch builds without publishing, so experimenting on a
+feature branch can never overwrite the public `latest` tag.
 
 ## Security
 
