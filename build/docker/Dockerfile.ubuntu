@@ -182,13 +182,14 @@ RUN --mount=type=cache,id=${BAZEL_CACHE_NAMESPACE}-output,target=/bazel-output,s
     fi && \
     CC=/usr/bin/gcc CXX=/usr/bin/g++ \
     bazel --host_jvm_args=-Djdk.lang.Process.launchMechanism=posix_spawn \
-      --output_base=/bazel-output build -c opt --strip=always \
+      --output_base=/bazel-output test -c opt --strip=always --test_output=errors \
       --jobs=${BAZEL_JOBS} --local_resources=memory=${BAZEL_RAM} \
       --disk_cache=/bazel-disk-cache \
       --experimental_disk_cache_gc_max_size=${BAZEL_DISK_CACHE_MAX_BYTES} \
       --experimental_disk_cache_gc_idle_delay=0s \
       ${REPO_CACHE_FLAG} \
-      //binaries:emulator_main //binaries:gateway_main && \
+      //binaries:emulator_main //binaries:gateway_main \
+      //frontend/collections:database_manager_test && \
     mkdir -p /build/output && \
     cp -L bazel-bin/binaries/emulator_main /build/output/ && \
     cp -L bazel-bin/binaries/gateway_main_/gateway_main /build/output/ && \

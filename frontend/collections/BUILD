@@ -54,6 +54,8 @@ cc_test(
     ],
     deps = [
         ":database_manager",
+        "//backend/schema/catalog:schema",
+        "//backend/transaction:read_only_transaction",
         "//frontend/entities:database",
         "//tests/common:proto_matchers",
         "@com_github_google_benchmark//:benchmark",

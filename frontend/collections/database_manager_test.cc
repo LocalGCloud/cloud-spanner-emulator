@@ -21,6 +21,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +29,9 @@
 #include "absl/flags/declare.h"
 #include "absl/flags/flag.h"
 #include "absl/strings/match.h"
+#include "backend/schema/catalog/change_stream.h"
+#include "backend/schema/catalog/schema.h"
+#include "backend/transaction/read_only_transaction.h"
 #include "frontend/entities/database.h"
 #include "gmock/gmock.h"
 #include "googlesql/base/testing/status_matchers.h"
@@ -421,6 +425,64 @@ TEST_F(DatabaseManagerTest, AbandonedReservationCanBeRetried) {
   }
   GOOGLESQL_ASSERT_OK(database_manager_.CreateDatabase(
       database_uri_, empty_schema_operation_));
+}
+
+TEST_F(DatabaseManagerTest, InitialSchemaUsesPersistedCreationTimestamp) {
+  const absl::Time create_time = clock_.Now() - absl::Seconds(1);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto database, database_manager_.CreateDatabase(
+          database_uri_, backend::SchemaChangeOperation{
+                             .statements = {"CREATE TABLE T (K INT64 NOT NULL) PRIMARY KEY (K)",
+                                            "CREATE CHANGE STREAM C FOR ALL"}},
+          backend::Database::IdCounterValues{}, create_time));
+  EXPECT_EQ(database->backend()->GetLatestSchema()->FindChangeStream("C")
+                ->creation_time(), create_time);
+}
+
+TEST_F(DatabaseManagerTest, LegacyInitialTimestampDoesNotDuplicatePartitionsOnReplay) {
+  TempDirectory temp;
+  ScopedDataDir data_dir(temp.path().string());
+  const absl::Time create_time = clock_.Now() - absl::Seconds(1);
+  const std::vector<std::string> statements = {
+      "CREATE TABLE T (K INT64 NOT NULL) PRIMARY KEY (K)",
+      "CREATE CHANGE STREAM C FOR ALL"};
+  backend::SchemaChangeOperation schema{.statements = statements};
+  // Reproduce an older journal: resource creation was recorded before the
+  // backend chose the timestamp used to write its initial partition rows.
+  schema.schema_change_timestamp = clock_.Now();
+  auto tokens = [](const std::shared_ptr<Database>& database) {
+    std::set<std::string> result;
+    auto txn = database->backend()->CreateReadOnlyTransaction(backend::ReadOnlyOptions());
+    EXPECT_TRUE(txn.ok()) << txn.status();
+    if (!txn.ok()) return result;
+    backend::ReadArg read;
+    read.change_stream_for_partition_table = "C";
+    read.columns = {"partition_token"};
+    read.key_set = backend::KeySet::All();
+    std::unique_ptr<backend::RowCursor> cursor;
+    auto status = (*txn)->Read(read, &cursor);
+    EXPECT_TRUE(status.ok()) << status;
+    if (!status.ok()) return result;
+    while (cursor->Next()) result.insert(cursor->ColumnValue(0).string_value());
+    return result;
+  };
+  std::set<std::string> original;
+  backend::Database::IdCounterValues counters;
+  {
+    DatabaseManager manager(&clock_);
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto database, manager.CreateDatabase(
+        database_uri_, schema, backend::Database::IdCounterValues{}, create_time));
+    original = tokens(database);
+    ASSERT_EQ(original.size(), 2);
+    counters = database->backend()->GetIdCounterValues();
+  }
+  schema.schema_change_timestamp = create_time;
+  for (int restart = 0; restart < 2; ++restart) {
+    DatabaseManager manager(&clock_);
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto database, manager.CreateDatabase(
+        database_uri_, schema, counters, create_time));
+    EXPECT_EQ(tokens(database), original);
+  }
 }
 
 TEST_F(DatabaseManagerTest, CreateNewDatabase) {

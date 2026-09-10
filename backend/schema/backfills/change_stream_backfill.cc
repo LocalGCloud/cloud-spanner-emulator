@@ -141,7 +141,9 @@ absl::Status BackfillChangeStream(const ChangeStream* change_stream,
             ->id();
     std::unique_ptr<StorageIterator> itr;
     GOOGLESQL_RETURN_IF_ERROR(context->storage()->Read(
-        context->pending_commit_timestamp(), change_stream_partition_table->id(),
+        // Older creation journals can precede the actual initial backfill.
+        // Any persisted partition proves this one-time backfill already ran.
+        absl::InfiniteFuture(), change_stream_partition_table->id(),
         KeyRange::All(), {partition_token_column_id}, &itr));
     if (itr != nullptr && itr->Next()) {
       return absl::OkStatus();

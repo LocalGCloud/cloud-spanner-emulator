@@ -909,10 +909,16 @@ DatabaseManager::Creation::Build(
       database_uri_, &project_id, &instance_id, &database_id));
   GOOGLESQL_RETURN_IF_ERROR(
       RejectDeletionMarkedRoot(manager_->data_dir_, database_uri_));
+  auto initial_schema = schema_change_operation;
+  if (initial_schema.schema_change_timestamp == absl::InfinitePast()) {
+    // The metadata journal uses create_time for the initial DDL batch. Replay
+    // must see exactly the same backfill timestamp as the original creation.
+    initial_schema.schema_change_timestamp = create_time;
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::unique_ptr<backend::Database> backend_database,
       backend::Database::Create(manager_->clock_, database_id,
-                                schema_change_operation, id_counters,
+                                initial_schema, id_counters,
                                 database_uri_));
   database_ = std::make_shared<Database>(
       database_uri_, std::move(backend_database), create_time);
