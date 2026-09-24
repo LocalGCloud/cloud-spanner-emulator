@@ -24,6 +24,12 @@
   Change streams take their creation time from it, and it defaulted to 1970.
   Tests only; the database create and update paths already set it.
 
+### Changed
+- **Branch renamed**: `jay-33-persistence` is now `jay-spanner-extended`.
+  `docker-publish.yml` publishes on a manual dispatch against
+  `refs/heads/jay-spanner-extended` (or a release tag). A dispatch against the
+  old name no longer publishes. README references were updated too.
+
 ### Documentation
 - `README.md`: new "REST Gateway: Accurate Error Responses" and "PostgreSQL
   JSONB: Large Numbers on Every Platform" sections. Change stream creation

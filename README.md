@@ -101,8 +101,9 @@ Works on x86 and arm64 architectures.
 
 ### Via Docker Hub (multi-arch)
 
-A multi-architecture Docker image (amd64 + arm64) is automatically built and
-pushed to Docker Hub on every push to `jay-33-persistence`:
+A multi-architecture Docker image (amd64 + arm64) is published to Docker Hub
+from the `jay-spanner-extended` branch, by manual dispatch or a release tag
+(see [Release](#release)):
 
 ```shell
 docker pull jaysen2apache/spanner-emulator-extended:latest
@@ -206,7 +207,7 @@ Notable supported features:
 
 ## Extended Features (this fork)
 
-This fork (`jay-33-persistence` branch) adds features beyond the upstream
+This fork (`jay-spanner-extended` branch) adds features beyond the upstream
 Google emulator. Below is the gap analysis — what upstream lacks and this
 fork provides.
 
@@ -546,7 +547,7 @@ branch never triggers a build or publish on its own.
 
 | Event | Docker tags published |
 |-------|------------------------|
-| `workflow_dispatch` against `jay-33-persistence` | `<7-char-sha>`, `latest` |
+| `workflow_dispatch` against `jay-spanner-extended` | `<7-char-sha>`, `latest` |
 | Plain version tag `x.y.z` (no `v` prefix) | `<7-char-sha>`, `latest`, `x.y.z` |
 | `workflow_dispatch` against any other branch | none (builds/warms cache only) |
 
@@ -566,13 +567,13 @@ Tag pushes also build and upload a native macOS ARM64 archive
 ### Manual dispatch
 
 ```bash
-gh workflow run docker-publish.yml --ref jay-33-persistence
+gh workflow run docker-publish.yml --ref jay-spanner-extended
 ```
 
 The Docker/Linux build always runs on any dispatch. `target` (default:
 `arm`) only decides whether the native macOS arm64 archive is *also*
 built: `target=arm` builds it alongside the Docker images, `target=linux`
-skips it. Only publishes when `--ref` is `jay-33-persistence` -- dispatching
+skips it. Only publishes when `--ref` is `jay-spanner-extended` -- dispatching
 against any other branch builds without publishing, so experimenting on a
 feature branch can never overwrite the public `latest` tag.
 

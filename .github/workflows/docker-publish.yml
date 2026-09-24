@@ -7,7 +7,7 @@ on:
     # pushes. `schedule` always runs against the default branch (master),
     # but that's sufficient: GitHub's cache access rules make caches created
     # on the default branch visible to every branch, so this also keeps
-    # feature branches (e.g. jay-33-persistence) from starting cold. Twice a
+    # feature branches (e.g. jay-spanner-extended) from starting cold. Twice a
     # week keeps every entry well inside the 7-day window with margin.
     - cron: '0 6 * * 1,4'
   push:
@@ -77,10 +77,10 @@ jobs:
           echo "Building ${{ matrix.platform }} natively on $actual_arch"
 
       - name: Require Docker Hub credentials for publishing
-        if: ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')) && env.DOCKERHUB_AUTHENTICATED != 'true'
+        if: ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-spanner-extended') || startsWith(github.ref, 'refs/tags/')) && env.DOCKERHUB_AUTHENTICATED != 'true'
         shell: bash
         run: |
-          echo "::error::Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets before publishing (release tag, or manual dispatch on jay-33-persistence)."
+          echo "::error::Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets before publishing (release tag, or manual dispatch on jay-spanner-extended)."
           exit 1
 
       - name: Set up Docker Buildx
@@ -269,9 +269,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Publish (push-by-digest, merged into a tagged multi-arch manifest
           # by the merge job below) on a release tag, or a manual dispatch
-          # against jay-33-persistence specifically -- not on dispatches from
+          # against jay-spanner-extended specifically -- not on dispatches from
           # other branches, and not automatically from any push.
-          outputs: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')) && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE_NAME) || '' }}
+          outputs: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-spanner-extended') || startsWith(github.ref, 'refs/tags/')) && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE_NAME) || '' }}
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
           cache-to: ${{ env.DOCKERHUB_AUTHENTICATED == 'true' && format('type=registry,ref={0}:buildcache-{1},mode=max', env.IMAGE_NAME, matrix.arch) || '' }}
           build-args: |
@@ -364,14 +364,14 @@ jobs:
           key: bazel-disk-v2-${{ runner.os }}-${{ matrix.arch }}-${{ steps.toolchain-fingerprint.outputs.value }}-${{ github.sha }}
 
       - name: Export digest
-        if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')
+        if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-spanner-extended') || startsWith(github.ref, 'refs/tags/')
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')
+        if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-spanner-extended') || startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: digests-${{ matrix.arch }}
@@ -520,8 +520,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build
     # Same publish condition as the build job's digest push above -- a
-    # release tag, or a manual dispatch against jay-33-persistence.
-    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-33-persistence') || startsWith(github.ref, 'refs/tags/')
+    # release tag, or a manual dispatch against jay-spanner-extended.
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/jay-spanner-extended') || startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 10
 
     steps:
