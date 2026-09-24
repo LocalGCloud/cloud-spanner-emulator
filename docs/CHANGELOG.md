@@ -4,6 +4,36 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] Commits Are Atomic on Disk
+
+### Fixed
+- With `--data_dir`, a commit's rows, index entries and change stream records
+  were written to LevelDB one row at a time, so a crash or a write error
+  partway through a commit could leave part of the transaction on disk, for
+  example an index entry without its row, which could then fail the
+  database's restore checks. A commit is now one LevelDB write batch, and
+  LevelDB applies a batch all or nothing, also across a crash.
+- New `Storage::ApplyRowOps` applies a group of row writes and point deletes
+  at one timestamp. `PersistentStorage` builds one `WriteBatch` for the group
+  with the same encoding as `Write()` and `Delete()`, submits it through the
+  write queue, then prunes expired versions as before. `InMemoryStorage`
+  keeps applying the ops one by one. `FlushWriteOpsToStorage` makes one
+  `ApplyRowOps` call per commit, which resolves upstream's TODO in
+  `backend/transaction/flush.h`.
+- Writes still use `sync = false`: an OS crash or power loss can lose the
+  most recent commits, but never part of one. The design is in
+  [internals/persistent-storage.md](internals/persistent-storage.md#atomic-commits).
+- Tests: `PersistentFlushTest.PersistentCommitIsAllOrNothing` in
+  `backend/transaction:flush_test` (a commit across two tables where storage
+  refuses one table's rows; before the fix the other table's first row was
+  on disk) and three `PersistentStorageTest.ApplyRowOps_*` cases. Checked
+  end to end by killing `emulator_main` with `SIGKILL` while a client
+  committed 50-row transactions to an indexed table, then restarting: with
+  the previous build 5 of 12 crashes left a partial commit (for example
+  4,834 rows); with this build 0 of 20 did, and the table and index counts
+  always matched. The same load also completed about three times as many
+  commits, since a commit is now one LevelDB write instead of one per row.
+
 ## [2026-09-24] Storage Writes Get Their Own Results
 
 ### Fixed

@@ -90,6 +90,12 @@ class PersistentStorage : public Storage {
   absl::Status Delete(absl::Time timestamp, const TableID& table_id,
                       const KeyRange& key_range) override;
 
+  // Writes all the ops with one LevelDB write, so a crash leaves all or none
+  // of them on disk. Falls back to applying them one by one if a row appears
+  // twice.
+  absl::Status ApplyRowOps(absl::Time timestamp,
+                           const std::vector<StorageRowOp>& ops) override;
+
   // Creates an immutable, point-in-time LevelDB copy at output_dir. The
   // destination must not exist.
   absl::Status CreateCheckpoint(const std::string& output_dir) const;
@@ -193,6 +199,25 @@ class PersistentStorage : public Storage {
   std::vector<std::string> CollectKeysInRange(
       const TableID& table_id, const std::string& start_encoded,
       const std::string& limit_encoded) const;
+
+  // Appends a row write to batch, and the prefixes of the cells it touches
+  // to gc_cell_prefixes. Reads LevelDB, so it doesn't see earlier puts in
+  // the same batch.
+  void AppendWrite(absl::Time timestamp, const TableID& table_id,
+                   const Key& key, const std::vector<ColumnID>& column_ids,
+                   const std::vector<googlesql::Value>& values,
+                   leveldb::WriteBatch* batch,
+                   std::vector<std::string>* gc_cell_prefixes) const;
+
+  // Appends a range delete to batch, like AppendWrite.
+  absl::Status AppendDelete(absl::Time timestamp, const TableID& table_id,
+                            const KeyRange& key_range,
+                            leveldb::WriteBatch* batch,
+                            std::vector<std::string>* gc_cell_prefixes) const;
+
+  // Removes expired versions of the given cells, best effort.
+  void PruneExpiredVersions(absl::Time timestamp,
+                            const std::vector<std::string>& cell_prefixes);
 
   // Removes old versions of a cell that are past the retention period.
   // Mirrors InMemoryStorage::RemoveExpiredVersions behavior: keeps the most

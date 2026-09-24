@@ -24,12 +24,10 @@ namespace spanner {
 namespace emulator {
 namespace backend {
 
-// TODO : Add support to write multiple ops to base storage
-// atomically.
-
-// Flushes each of the write ops to base storage at the given timestamp. Note
-// that calling this function isn't thread safe and appropriate database locks
-// should be acquired.
+// Flushes the write ops to base storage at the given timestamp as one unit
+// (Storage::ApplyRowOps): persistent storage writes all of them or none of
+// them. Note that calling this function isn't thread safe and appropriate
+// database locks should be acquired.
 absl::Status FlushWriteOpsToStorage(const std::vector<WriteOp>& write_ops,
                                     Storage* base_storage,
                                     absl::Time commit_timestamp);

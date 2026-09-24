@@ -709,6 +709,84 @@ TEST_F(PersistentStorageTest, WriteQueue_EachWriterGetsItsOwnResult) {
   EXPECT_EQ(writes_not_visible_on_return.load(), 0);
 }
 
+TEST_F(PersistentStorageTest, ApplyRowOps_WritesAndDeletesTogether) {
+  const absl::Time t0 = absl::Now();
+  GOOGLESQL_ASSERT_OK(storage_->Write(t0, kTableId0, Key({Int64(1)}),
+                                      {kColumnID}, {String("old")}));
+
+  const absl::Time t1 = t0 + absl::Seconds(1);
+  GOOGLESQL_ASSERT_OK(storage_->ApplyRowOps(
+      t1, {StorageRowOp{.table_id = kTableId0, .key = Key({Int64(1)}),
+                        .is_delete = true},
+           StorageRowOp{.table_id = kTableId0,
+                        .key = Key({Int64(2)}),
+                        .column_ids = {kColumnID},
+                        .values = {String("two")}},
+           StorageRowOp{.table_id = kTableId1,
+                        .key = Key({Int64(3)}),
+                        .column_ids = {kColumnID},
+                        .values = {String("three")}}}));
+
+  std::vector<googlesql::Value> values;
+  EXPECT_THAT(storage_->Lookup(t1, kTableId0, Key({Int64(1)}), {kColumnID},
+                               &values),
+              googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+  GOOGLESQL_ASSERT_OK(
+      storage_->Lookup(t1, kTableId0, Key({Int64(2)}), {kColumnID}, &values));
+  EXPECT_THAT(values, testing::ElementsAre(String("two")));
+  GOOGLESQL_ASSERT_OK(
+      storage_->Lookup(t1, kTableId1, Key({Int64(3)}), {kColumnID}, &values));
+  EXPECT_THAT(values, testing::ElementsAre(String("three")));
+  // Earlier versions are still readable.
+  GOOGLESQL_ASSERT_OK(
+      storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID}, &values));
+  EXPECT_THAT(values, testing::ElementsAre(String("old")));
+}
+
+TEST_F(PersistentStorageTest, ApplyRowOps_FailedWriteLeavesNothing) {
+  storage_->SetWriteHookForTesting(
+      [&](const std::vector<std::string>& keys) -> absl::Status {
+        for (const std::string& key : keys) {
+          if (absl::StrContains(key, kTableId1)) {
+            return absl::UnavailableError("injected write failure");
+          }
+        }
+        return absl::OkStatus();
+      });
+  const absl::Time t0 = absl::Now();
+  EXPECT_FALSE(storage_
+                   ->ApplyRowOps(t0, {StorageRowOp{.table_id = kTableId0,
+                                                   .key = Key({Int64(1)}),
+                                                   .column_ids = {kColumnID},
+                                                   .values = {String("a")}},
+                                      StorageRowOp{.table_id = kTableId1,
+                                                   .key = Key({Int64(2)}),
+                                                   .column_ids = {kColumnID},
+                                                   .values = {String("b")}}})
+                   .ok());
+  std::vector<googlesql::Value> values;
+  EXPECT_THAT(storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+                               &values),
+              googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(PersistentStorageTest, ApplyRowOps_RepeatedRowAppliesInOrder) {
+  // A delete after a write of the same row must see that write, so this
+  // group is applied one op at a time.
+  const absl::Time t0 = absl::Now();
+  GOOGLESQL_ASSERT_OK(storage_->ApplyRowOps(
+      t0, {StorageRowOp{.table_id = kTableId0,
+                        .key = Key({Int64(1)}),
+                        .column_ids = {kColumnID},
+                        .values = {String("gone")}},
+           StorageRowOp{.table_id = kTableId0, .key = Key({Int64(1)}),
+                        .is_delete = true}}));
+  std::vector<googlesql::Value> values;
+  EXPECT_THAT(storage_->Lookup(t0, kTableId0, Key({Int64(1)}), {kColumnID},
+                               &values),
+              googlesql_base::testing::StatusIs(absl::StatusCode::kNotFound));
+}
+
 TEST_F(PersistentStorageTest, WriteQueue_Shutdown) {
   absl::Time t0 = absl::Now();
 

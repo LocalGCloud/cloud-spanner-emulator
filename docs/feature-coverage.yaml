@@ -3438,7 +3438,8 @@
           "frontend/collections/database_manager_test.cc",
           "backend/database/database_test.cc",
           "frontend/handlers/policies_test.cc",
-          "frontend/handlers/instance_extensions_test.cc"
+          "frontend/handlers/instance_extensions_test.cc",
+          "backend/transaction/flush_test.cc"
         ],
         "documentation": [
           "docs/persistence.md",
@@ -3446,7 +3447,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "With --data_dir (accepted by emulator_main and gateway_main), row data (LevelDB, multi-version), schema history, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change stream creation times survive restarts, and metadata writes are atomic and journaled. Not persisted: sessions and in-flight transactions and queries; old row versions are dropped after the version retention period (default 1 hour). The startup restore path in emulator_main is covered only by component tests."
+      "notes": "With --data_dir (accepted by emulator_main and gateway_main), row data (LevelDB, multi-version), schema history, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change stream creation times survive restarts, metadata writes are atomic and journaled, and each commit (rows, index entries, and change stream records) is a single atomic LevelDB write. Not persisted: sessions and in-flight transactions and queries; old row versions are dropped after the version retention period (default 1 hour). The startup restore path in emulator_main is covered only by component tests."
     },
     {
       "id": "emulator.startup",

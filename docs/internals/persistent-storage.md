@@ -530,10 +530,75 @@ Delete(timestamp, table, key_range):
   3. Submit the batch, then a GC batch as in Write().
 ```
 
-Each `Write()` or `Delete()` call is one row or range. A commit calls them once
-per buffered write operation (`backend/transaction/flush.cc`), index rows
-included. A multi-row commit is therefore several LevelDB writes and isn't
-atomic across a process crash.
+Each `Write()` or `Delete()` call is one row or range, and one LevelDB write.
+Schema backfills and `SequenceStateStore` use them directly.
+
+## Atomic commits
+
+A read-write transaction commits all its rows, index rows and change stream
+records with one LevelDB write, so a crash leaves either the whole commit on
+disk or none of it.
+
+### Interface
+
+`Storage` (`backend/storage/storage.h`) has a group write:
+
+```cpp
+struct StorageRowOp {            // one row write or point delete
+  TableID table_id;
+  Key key;
+  std::vector<ColumnID> column_ids;       // empty for a delete
+  std::vector<googlesql::Value> values;
+  bool is_delete = false;
+};
+
+// Applies the ops at one timestamp, all or nothing on persistent storage.
+virtual absl::Status ApplyRowOps(absl::Time timestamp,
+                                 const std::vector<StorageRowOp>& ops);
+```
+
+The default implementation calls `Write()` or `Delete(KeyRange::Point(key))`
+for each op in order, which is what `InMemoryStorage` uses: it has no crash
+to survive. `FlushWriteOpsToStorage` (`backend/transaction/flush.cc`) turns a
+commit's buffered insert, update and delete ops into `StorageRowOp`s and
+makes one `ApplyRowOps` call.
+
+### Persistent storage
+
+```text
+ApplyRowOps(timestamp, ops):
+  1. If a (table, key) appears twice, fall back to the default (see below).
+  2. For each op, append its puts to one WriteBatch, exactly as Write() or a
+     point Delete() would, and note the cells it touched.
+  3. write_queue_.Submit(batch). Return any error; nothing was written.
+  4. Build one GC batch for the touched cells and submit it (best effort).
+```
+
+`Write()` and `Delete()` share the same batch-building helpers
+(`AppendWrite`, `AppendDelete`), so a row is encoded the same way whether it
+goes alone or in a group.
+
+Why a single batch built from the pre-commit state is correct: each op
+decides what to put by reading LevelDB (does the row exist, which columns does
+it have), and in a group those reads can't see earlier ops in the same batch.
+That only matters when two ops touch the same row, and a commit never has two:
+`TransactionStore` keeps one buffered op per `(table, key)`, folding an insert
+after a delete into a single insert that sets every column. Index and change
+stream rows are rows of their own tables. If two ops ever do share a row,
+`ApplyRowOps` applies them one by one, which is correct but not atomic.
+
+Atomicity comes from LevelDB: a `WriteBatch` is one record in LevelDB's log,
+and recovery drops a torn record. Writes still use `sync = false`, so a
+commit is atomic across a process crash, and an OS crash or power loss can
+still lose the most recent commits (see [Durability](../persistence.md#durability)).
+MVCC is unchanged: every op in the batch is written at the commit timestamp,
+and the write queue still serializes batches.
+
+Tests: `PersistentFlushTest.PersistentCommitIsAllOrNothing`
+(`backend/transaction/flush_test.cc`) fails one table's rows with
+`SetWriteHookForTesting` and checks that no row of the commit reached disk;
+`PersistentStorageTest.ApplyRowOps*` (`backend/storage/persistent_storage_test.cc`)
+cover the group write itself.
 
 ## Edge cases
 

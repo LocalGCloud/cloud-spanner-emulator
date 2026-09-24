@@ -442,6 +442,7 @@ cc_library(
         ":commit_timestamp",
         "//backend/actions:ops",
         "//backend/common:variant",
+        "//backend/storage",
     ],
 )
 
@@ -452,11 +453,13 @@ cc_test(
         ":flush",
         "//backend/actions:ops",
         "//backend/storage:in_memory_storage",
+        "//backend/storage:persistent_storage",
         "//tests/common:proto_matchers",
         "//tests/common:test_schema_constructor",
         "@com_github_google_benchmark//:benchmark",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
         "@com_google_googletest//:gtest_main",

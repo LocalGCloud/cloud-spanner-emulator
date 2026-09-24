@@ -825,19 +825,19 @@ absl::Status PersistentStorage::Read(
   return absl::OkStatus();
 }
 
-absl::Status PersistentStorage::Write(
+void PersistentStorage::AppendWrite(
     absl::Time timestamp, const TableID& table_id, const Key& key,
     const std::vector<ColumnID>& column_ids,
-    const std::vector<googlesql::Value>& values) {
+    const std::vector<googlesql::Value>& values, leveldb::WriteBatch* batch,
+    std::vector<std::string>* gc_cell_prefixes) const {
   std::string encoded_key = EncodeKey(key);
-  leveldb::WriteBatch batch;
 
   // Write _exists column if the row doesn't exist yet.
   if (!Exists(table_id, encoded_key, timestamp)) {
     std::string exists_ldb_key =
         MakeLevelDBKey(table_id, encoded_key, kExistsColumn, timestamp);
     std::string exists_value = EncodeValue(googlesql::values::Bool(true));
-    batch.Put(exists_ldb_key, exists_value);
+    batch->Put(exists_ldb_key, exists_value);
   }
 
   // Write the key metadata for reconstruction during Read().
@@ -872,7 +872,7 @@ absl::Status PersistentStorage::Write(
         MakeLevelDBKey(table_id, encoded_key, "__key_data__", timestamp);
     std::string key_meta_value =
         EncodeValue(googlesql::values::Bytes(key_data));
-    batch.Put(key_meta_ldb_key, key_meta_value);
+    batch->Put(key_meta_ldb_key, key_meta_value);
   }
 
   // Write the column values.
@@ -880,41 +880,47 @@ absl::Status PersistentStorage::Write(
     std::string ldb_key =
         MakeLevelDBKey(table_id, encoded_key, column_ids[i], timestamp);
     std::string encoded_value = EncodeValue(values[i]);
-    batch.Put(ldb_key, encoded_value);
-  }
-
-  leveldb::Status status = write_queue_.Submit(std::move(batch));
-  if (!status.ok()) {
-    return LevelDBStatusToAbsl(status);
+    batch->Put(ldb_key, encoded_value);
   }
 
   // Remove expired versions for each cell that was written.
-  leveldb::WriteBatch gc_batch;
-  std::string row_prefix;
-  AppendLengthPrefixed(&row_prefix, table_id);
-  AppendLengthPrefixed(&row_prefix, encoded_key);
+  const std::string row_prefix = MakeRowPrefix(table_id, encoded_key);
 
   std::string exists_prefix = row_prefix;
   AppendLengthPrefixed(&exists_prefix, std::string(kExistsColumn));
-  RemoveExpiredVersions(exists_prefix, timestamp, &gc_batch);
+  gc_cell_prefixes->push_back(std::move(exists_prefix));
 
   std::string key_data_prefix = row_prefix;
   AppendLengthPrefixed(&key_data_prefix, std::string("__key_data__"));
-  RemoveExpiredVersions(key_data_prefix, timestamp, &gc_batch);
+  gc_cell_prefixes->push_back(std::move(key_data_prefix));
 
   for (const ColumnID& column_id : column_ids) {
     std::string cell_prefix = row_prefix;
     AppendLengthPrefixed(&cell_prefix, column_id);
-    RemoveExpiredVersions(cell_prefix, timestamp, &gc_batch);
+    gc_cell_prefixes->push_back(std::move(cell_prefix));
   }
-  write_queue_.Submit(std::move(gc_batch));  // Best-effort GC.
+}
 
+absl::Status PersistentStorage::Write(
+    absl::Time timestamp, const TableID& table_id, const Key& key,
+    const std::vector<ColumnID>& column_ids,
+    const std::vector<googlesql::Value>& values) {
+  leveldb::WriteBatch batch;
+  std::vector<std::string> gc_cell_prefixes;
+  AppendWrite(timestamp, table_id, key, column_ids, values, &batch,
+              &gc_cell_prefixes);
+  leveldb::Status status = write_queue_.Submit(std::move(batch));
+  if (!status.ok()) {
+    return LevelDBStatusToAbsl(status);
+  }
+  PruneExpiredVersions(timestamp, gc_cell_prefixes);
   return absl::OkStatus();
 }
 
-absl::Status PersistentStorage::Delete(absl::Time timestamp,
-                                       const TableID& table_id,
-                                       const KeyRange& key_range) {
+absl::Status PersistentStorage::AppendDelete(
+    absl::Time timestamp, const TableID& table_id, const KeyRange& key_range,
+    leveldb::WriteBatch* batch,
+    std::vector<std::string>* gc_cell_prefixes) const {
   if (!key_range.IsClosedOpen()) {
     return error::Internal(
         absl::StrCat("PersistentStorage::Delete should be called "
@@ -942,8 +948,6 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
   std::vector<std::string> encoded_keys =
       CollectKeysInRange(table_id, start_encoded, limit_encoded);
 
-  leveldb::WriteBatch batch;
-
   // Track seen columns per key for GC pass.
   std::map<std::string, std::set<std::string>> per_key_columns;
 
@@ -956,7 +960,7 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
     std::string exists_ldb_key =
         MakeLevelDBKey(table_id, encoded_key, kExistsColumn, timestamp);
     std::string exists_value = EncodeValue(googlesql::values::Bool(false));
-    batch.Put(exists_ldb_key, exists_value);
+    batch->Put(exists_ldb_key, exists_value);
 
     // Scan all columns for this row and mark them as invalid.
     std::string row_prefix = MakeRowPrefix(table_id, encoded_key);
@@ -978,39 +982,89 @@ absl::Status PersistentStorage::Delete(absl::Time timestamp,
         std::string del_ldb_key =
             MakeLevelDBKey(table_id, encoded_key, col_id, timestamp);
         std::string invalid_value = EncodeValue(googlesql::Value());
-        batch.Put(del_ldb_key, invalid_value);
+        batch->Put(del_ldb_key, invalid_value);
       }
     }
     GOOGLESQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
   }
 
-  leveldb::Status status = write_queue_.Submit(std::move(batch));
-  if (!status.ok()) {
-    return LevelDBStatusToAbsl(status);
-  }
-
   // Remove expired versions for all cells in deleted rows.
-  leveldb::WriteBatch gc_batch;
   for (const auto& [encoded_key, columns] : per_key_columns) {
     std::string row_prefix = MakeRowPrefix(table_id, encoded_key);
 
     std::string exists_prefix = row_prefix;
     AppendLengthPrefixed(&exists_prefix, std::string(kExistsColumn));
-    RemoveExpiredVersions(exists_prefix, timestamp, &gc_batch);
+    gc_cell_prefixes->push_back(std::move(exists_prefix));
 
     std::string key_data_prefix = row_prefix;
     AppendLengthPrefixed(&key_data_prefix, std::string("__key_data__"));
-    RemoveExpiredVersions(key_data_prefix, timestamp, &gc_batch);
+    gc_cell_prefixes->push_back(std::move(key_data_prefix));
 
     for (const std::string& col_id : columns) {
       std::string cell_prefix = row_prefix;
       AppendLengthPrefixed(&cell_prefix, col_id);
-      RemoveExpiredVersions(cell_prefix, timestamp, &gc_batch);
+      gc_cell_prefixes->push_back(std::move(cell_prefix));
     }
   }
-  write_queue_.Submit(std::move(gc_batch));  // Best-effort GC.
-
   return absl::OkStatus();
+}
+
+absl::Status PersistentStorage::Delete(absl::Time timestamp,
+                                       const TableID& table_id,
+                                       const KeyRange& key_range) {
+  leveldb::WriteBatch batch;
+  std::vector<std::string> gc_cell_prefixes;
+  GOOGLESQL_RETURN_IF_ERROR(
+      AppendDelete(timestamp, table_id, key_range, &batch, &gc_cell_prefixes));
+  leveldb::Status status = write_queue_.Submit(std::move(batch));
+  if (!status.ok()) {
+    return LevelDBStatusToAbsl(status);
+  }
+  PruneExpiredVersions(timestamp, gc_cell_prefixes);
+  return absl::OkStatus();
+}
+
+absl::Status PersistentStorage::ApplyRowOps(
+    absl::Time timestamp, const std::vector<StorageRowOp>& ops) {
+  // Each op decides what to put by reading LevelDB, so it can't see earlier
+  // ops in the same batch. That matches applying them one by one only when no
+  // row appears twice, which holds for a commit: TransactionStore keeps one
+  // buffered op per row.
+  std::set<std::pair<TableID, std::string>> rows;
+  for (const StorageRowOp& op : ops) {
+    if (!rows.emplace(op.table_id, EncodeKey(op.key)).second) {
+      return Storage::ApplyRowOps(timestamp, ops);
+    }
+  }
+
+  leveldb::WriteBatch batch;
+  std::vector<std::string> gc_cell_prefixes;
+  for (const StorageRowOp& op : ops) {
+    if (op.is_delete) {
+      GOOGLESQL_RETURN_IF_ERROR(AppendDelete(timestamp, op.table_id,
+                                             KeyRange::Point(op.key), &batch,
+                                             &gc_cell_prefixes));
+    } else {
+      AppendWrite(timestamp, op.table_id, op.key, op.column_ids, op.values,
+                  &batch, &gc_cell_prefixes);
+    }
+  }
+  // One LevelDB write: all of the ops reach disk, or none do.
+  leveldb::Status status = write_queue_.Submit(std::move(batch));
+  if (!status.ok()) {
+    return LevelDBStatusToAbsl(status);
+  }
+  PruneExpiredVersions(timestamp, gc_cell_prefixes);
+  return absl::OkStatus();
+}
+
+void PersistentStorage::PruneExpiredVersions(
+    absl::Time timestamp, const std::vector<std::string>& cell_prefixes) {
+  leveldb::WriteBatch gc_batch;
+  for (const std::string& cell_prefix : cell_prefixes) {
+    RemoveExpiredVersions(cell_prefix, timestamp, &gc_batch);
+  }
+  write_queue_.Submit(std::move(gc_batch));  // Best-effort GC.
 }
 
 void PersistentStorage::RemoveExpiredVersions(const std::string& cell_prefix,

@@ -17,6 +17,8 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_STORAGE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_STORAGE_H_
 
+#include <vector>
+
 #include "googlesql/public/value.h"
 #include "absl/status/status.h"
 #include "absl/time/time.h"
@@ -30,6 +32,16 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
+
+// One row write, or a point delete, for Storage::ApplyRowOps.
+struct StorageRowOp {
+  TableID table_id;
+  Key key;
+  // The columns to write and their values. Unused for a delete.
+  std::vector<ColumnID> column_ids;
+  std::vector<googlesql::Value> values;
+  bool is_delete = false;
+};
 
 // Storage defines the interface for a multi-version data store.
 //
@@ -73,6 +85,22 @@ class Storage {
   // ranges will result in INVALID_ARGUMENT.
   virtual absl::Status Delete(absl::Time timestamp, const TableID& table_id,
                               const KeyRange& key_range) = 0;
+
+  // Applies row writes and point deletes at the specified timestamp as a
+  // unit: persistent storage writes all of them or none of them. The default
+  // applies them in order with Write() and Delete().
+  virtual absl::Status ApplyRowOps(absl::Time timestamp,
+                                   const std::vector<StorageRowOp>& ops) {
+    for (const StorageRowOp& op : ops) {
+      absl::Status status =
+          op.is_delete
+              ? Delete(timestamp, op.table_id, KeyRange::Point(op.key))
+              : Write(timestamp, op.table_id, op.key, op.column_ids,
+                      op.values);
+      if (!status.ok()) return status;
+    }
+    return absl::OkStatus();
+  }
 
   // Sets the version retention period from the database options.
   // This is used to determine when to delete expired data from storage.

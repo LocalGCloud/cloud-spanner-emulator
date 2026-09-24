@@ -16,7 +16,6 @@ confirmed against a running emulator; the others come from reading the code.
 
 | Area | Bug | Impact | Status |
 |------|-----|--------|--------|
-| Persistence (fork) | A commit's rows and index entries are separate LevelDB writes. | A process crash in the middle of a commit can leave part of a transaction, or an inconsistent index, on disk. | From code |
 
 ## Transactions and concurrency
 
@@ -82,7 +81,8 @@ Details and workarounds are in [Persistence](persistence.md#known-limitations).
 
 
 - Row writes aren't synced to disk. Data survives a process crash but not an
-  OS crash or power loss.
+  OS crash or power loss, which can lose the most recent commits (each commit
+  is still all or nothing).
 - There's no lock on the data directory. Never point two emulator processes at
   the same directory.
 - Sessions, open transactions and in-flight change stream queries don't

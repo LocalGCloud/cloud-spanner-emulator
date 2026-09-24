@@ -142,10 +142,10 @@ Rules:
   killed process, such as `docker stop` or `SIGKILL`. The most recent writes
   can be lost if the operating system crashes or the machine loses power.
 - Backups and DDL rollback copies are written with a sync.
-- Each row write of a commit, index entries included, is a separate LevelDB
-  write. If the process dies partway through a commit, only part of the
-  transaction may be on disk. (From reading the code in
-  `backend/transaction/flush.cc`, not reproduced.)
+- Each commit is written with one LevelDB write: its rows, index entries and
+  change stream records reach disk together or not at all, so a crash never
+  leaves part of a transaction behind. (Before 2026-09-24 each row was a
+  separate write.)
 
 ## Backups
 
@@ -352,9 +352,8 @@ whole emulator:
   have no saved counter; their sequences start over once, as before.
 - **No directory lock.** Two processes on one directory can corrupt
   `metadata.json` and make databases unavailable.
-- **No sync on row writes, and commits span several LevelDB writes.** An OS
-  crash can lose recent commits, and a crash mid-commit can leave a partial
-  transaction. See [Durability](#durability).
+- **No sync on row writes.** An OS crash or power loss can lose the most
+  recent commits, though never part of one. See [Durability](#durability).
 - **Backups are full copies,** `version_time` isn't supported, expired backups
   are kept, and backup schedules never run.
 - **Downgrades aren't supported** once a newer build has saved the directory.
