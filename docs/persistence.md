@@ -51,12 +51,7 @@ emulator_main --host_port=localhost:9010 --data_dir=/path/to/data
 | Flag | `emulator_main` | `gateway_main` and Docker | Effect |
 |------|-----------------|---------------------------|--------|
 | `--data_dir` | Yes | Yes, passed to `emulator_main` | Directory for persistent state. Empty (the default) means in-memory mode. |
-| `--repair_corrupted_databases` | Yes | No | Quarantines databases that fail to restore. See [Quarantine](#quarantine). |
-
-`gateway_main` doesn't define `--repair_corrupted_databases` and doesn't pass it
-on. If you give it that flag, it exits with a `flag provided but not defined`
-error. To use the flag in Docker, run `emulator_main` directly (see
-[Quarantine](#quarantine)).
+| `--repair_corrupted_databases` | Yes | Yes, passed to `emulator_main` | Quarantines databases that fail to restore. See [Quarantine](#quarantine). |
 
 ## What persists
 
@@ -233,34 +228,29 @@ failed schema replay or data check (`Failed to restore database <database>:
 
 ### Quarantine
 
-`emulator_main --repair_corrupted_databases` removes each database that fails
-to restore:
+`--repair_corrupted_databases` removes each database that fails to restore:
 
-1. Its `storage/` directory is moved to
-   `<data_dir>/.quarantine/<database URI with / replaced by _>-<unix micros>`.
+1. Its whole folder (`storage/` and its marker files) is moved to
+   `<data_dir>/.quarantine/<database URI with / replaced by _>-<unix micros>`
+   in one rename.
 2. Its `metadata.json` entry and its IAM policies are removed.
-3. It doesn't appear in the API for that run.
+3. It doesn't appear in the API for that run or later ones.
 
 The emulator logs `Quarantined corrupted database <database>` at `WARNING`
-level. Quarantined data is never deleted automatically.
-
-The gateway doesn't accept this flag, so run `emulator_main` directly once,
-stop it after the log line appears, then start normally:
+level. Quarantined data is never deleted automatically. Both `gateway_main`
+and `emulator_main` accept the flag. It only needs to be set for one start;
+later starts don't need it:
 
 ```shell
-docker run --rm -p 9010:9010 -v /path/to/data:/data \
+docker run --rm -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
   jaysen2apache/spanner-emulator-extended \
-  ./emulator_main --host_port=0.0.0.0:9010 --data_dir=/data \
+  ./gateway_main --hostname 0.0.0.0 --data_dir=/data \
   --repair_corrupted_databases
 ```
 
-Quarantine moves only `storage/`. The database's folder under
-`projects/.../databases/` stays behind with its `.metadata-committed` marker.
-From reading the code, the next startup then fails with `Persistent database
-root has committed data but no metadata` (not reproduced). After a repair run,
-delete `<data_dir>/projects/<project>/instances/<instance>/databases/<database>/`
-for each quarantined database before you start again. That folder no longer
-holds the database's data.
+If the emulator stops after moving the folder but before saving
+`metadata.json`, the next start lists the database as unavailable (its storage
+is missing), and another start with the flag removes it.
 
 ### Startup errors that stop the emulator
 
@@ -337,9 +327,6 @@ whole emulator:
   check, so a database-level policy on it turns an isolated failure into
   `Persisted IAM policy references an invalid or missing resource`, and the
   emulator exits. (From reading the code, not reproduced.)
-- **A restart after quarantine fails** until you delete the leftover database
-  folder. See [Quarantine](#quarantine). (From reading the code, not
-  reproduced.)
 - **`DropDatabase` on an unavailable database.** It deletes the database's
   data and metadata permanently, with no quarantine copy. The database stays
   listed as `CREATING` until the next restart. A database created with the
@@ -350,8 +337,6 @@ whole emulator:
 - **No sync on row writes, and commits span several LevelDB writes.** An OS
   crash can lose recent commits, and a crash mid-commit can leave a partial
   transaction. See [Durability](#durability).
-- **`--repair_corrupted_databases` is `emulator_main` only.** It can't be
-  passed through `gateway_main` or the Docker image's default command.
 - **Backups are full copies,** `version_time` isn't supported, expired backups
   are kept, and backup schedules never run.
 - **Downgrades aren't supported** once a newer build has saved the directory.

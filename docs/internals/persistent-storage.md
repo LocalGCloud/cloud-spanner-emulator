@@ -206,7 +206,8 @@ server starts. Any error it returns exits the process with `EXIT_FAILURE`.
     Re-apply any pending DDL intent. `Publish`, then restore drop protection and
     remove `.restore-in-progress`.
     - On failure, log the error. If `--repair_corrupted_databases` is set,
-      `QuarantineCorruptedDatabase` renames `storage/` into `.quarantine/` and
+      `QuarantineCorruptedDatabase` renames the database root into
+      `.quarantine/` (`DatabaseManager::QuarantineDatabaseDirectory`) and
       removes the metadata entry and IAM policies. Otherwise
       `DatabaseManager::MarkDatabaseUnavailable` records the reason.
 14. Restore instance partitions.
@@ -220,9 +221,6 @@ Known interactions, found by reading the code and not reproduced:
 - Step 15 calls `DatabaseManager::GetDatabase`, which returns
   `FAILED_PRECONDITION` for a database marked unavailable in step 13. An IAM
   policy on such a database therefore fails the whole startup.
-- Quarantine moves only `storage/`. The database root keeps the
-  `.metadata-committed` marker written in step 6, so step 7 of the next startup
-  fails with `Persistent database root has committed data but no metadata`.
 - `DatabaseManager` never clears `unavailable_databases_`. `DropDatabase` on an
   unavailable database removes its metadata and root, but the name stays in
   that map, and `GetDatabase` keeps rejecting it until a restart.

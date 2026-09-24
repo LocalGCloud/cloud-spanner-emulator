@@ -3389,7 +3389,7 @@
         ]
       },
       "verification": "implemented",
-      "notes": "The image runs `./gateway_main --hostname 0.0.0.0` and exposes 9010 (gRPC) and 9020 (REST). It has no ENTRYPOINT, so extra flags such as --data_dir must be passed with the full command (for example `./gateway_main --hostname 0.0.0.0 --data_dir=/data`); emulator_main-only flags such as --repair_corrupted_databases cannot be passed through gateway_main. Not covered by an automated test."
+      "notes": "The image runs `./gateway_main --hostname 0.0.0.0` and exposes 9010 (gRPC) and 9020 (REST). It has no ENTRYPOINT, so extra flags such as --data_dir must be passed with the full command (for example `./gateway_main --hostname 0.0.0.0 --data_dir=/data`); emulator_main-only flags such as --abort_current_transaction_probability need `./emulator_main ...` instead, which serves gRPC only. Not covered by an automated test."
     },
     {
       "id": "emulator.in_memory",
@@ -3464,14 +3464,15 @@
           "common/config.cc"
         ],
         "tests": [
-          "tests/gcloud/emulator.py"
+          "tests/gcloud/emulator.py",
+          "gateway/gateway_test.go"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "gateway_main starts emulator_main and the REST proxy (defaults: --hostname localhost, --grpc_port 9010, --http_port 9020) and forwards --data_dir, --log_requests, --enable_fault_injection, --disable_query_null_filtered_index_check, --enforce_placement_dml_restrictions, --override_max_databases_per_instance, and --override_change_stream_partition_token_alive_seconds. --repair_corrupted_databases and --abort_current_transaction_probability exist only on emulator_main."
+      "notes": "gateway_main starts emulator_main and the REST proxy (defaults: --hostname localhost, --grpc_port 9010, --http_port 9020) and forwards --data_dir, --repair_corrupted_databases, --log_requests, --enable_fault_injection, --disable_query_null_filtered_index_check, --enforce_placement_dml_restrictions, --override_max_databases_per_instance, and --override_change_stream_partition_token_alive_seconds. --abort_current_transaction_probability and the change stream tuning flags exist only on emulator_main."
     },
     {
       "id": "emulator.packaging",
@@ -3898,7 +3899,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "If one database in --data_dir fails to restore at startup, the rest of the emulator still starts. The failed database is listed as CREATING and its reads, writes, and DDL return FAILED_PRECONDITION with the reason. --repair_corrupted_databases moves it to <data_dir>/.quarantine, but it is an emulator_main-only flag that gateway_main and the Docker image cannot pass."
+      "notes": "If one database in --data_dir fails to restore at startup, the rest of the emulator still starts. The failed database is listed as CREATING and its reads, writes, and DDL return FAILED_PRECONDITION with the reason. --repair_corrupted_databases (accepted by gateway_main and emulator_main) moves its whole folder to <data_dir>/.quarantine and removes it from metadata, so later starts succeed without it."
     },
     {
       "id": "types.string_bytes_date_timestamp",

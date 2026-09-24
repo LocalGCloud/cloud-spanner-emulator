@@ -144,6 +144,15 @@ class DatabaseManager {
       const std::string& data_dir,
       const std::vector<std::string>& database_uris);
 
+  // Moves a database's whole on-disk folder (storage and markers) aside to
+  // <data_dir>/.quarantine/<database uri with '/' as '_'>-<unix micros>, so an
+  // operator can inspect it. Returns the new path, or nullopt when the
+  // database has no folder on disk. The caller removes the database from
+  // metadata afterwards.
+  static absl::StatusOr<std::optional<std::string>>
+  QuarantineDatabaseDirectory(const std::string& data_dir,
+                              const std::string& database_uri, absl::Time now);
+
   // Clears restore markers for persisted databases after pending terminal
   // operations have been promoted to the durable operation catalog.
   static absl::Status CompleteRecoveredRestoreDirectories(

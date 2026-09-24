@@ -71,18 +71,15 @@ absl::StatusOr<absl::Time> ParsePersistedTime(
   return parsed;
 }
 
-// Moves a corrupted database's on-disk LevelDB directory aside and removes
-// its metadata.json entry, so a subsequent startup no longer attempts (and
-// fails) to restore it. The directory rename happens first, since it is
-// cheap and reversible; the metadata rewrite is already atomic via
-// MetadataStore::Save()'s temp-file-plus-rename (metadata_store.cc). If the
-// process crashes between the two steps, the next startup will find an
-// on-disk root that no longer exists while metadata.json still references
-// it -- that mismatch is diagnosed explicitly (see
-// DatabaseManager::Creation::Publish()'s metadata-commit path) rather than
-// crashing, and re-running with --repair_corrupted_databases completes the
-// metadata removal (the rename below is a no-op the second time, since the
-// source directory is already gone).
+// Moves a corrupted database's whole on-disk folder aside and removes its
+// metadata.json entry, so a subsequent startup no longer attempts (and fails)
+// to restore it. The folder rename happens first; the metadata rewrite is
+// already atomic via MetadataStore::Save()'s temp-file-plus-rename
+// (metadata_store.cc). If the process crashes between the two steps, the next
+// startup finds metadata.json naming a database with no storage, marks it
+// unavailable, and re-running with --repair_corrupted_databases completes the
+// metadata removal (the rename is skipped the second time, since the folder is
+// already gone).
 //
 // See openspec change fix-unique-index-restore-isolation, design.md
 // Decision 3.
@@ -91,39 +88,9 @@ static absl::Status QuarantineCorruptedDatabase(
     const std::string& db_name, const std::string& database_uri,
     ::google::spanner::emulator::frontend::MetadataStore* ms,
     ::google::spanner::emulator::Clock* clock) {
-  auto storage_directory_or =
-      google::spanner::emulator::backend::Database::
-          PersistentStorageDirectory(data_dir, database_uri);
-  if (!storage_directory_or.ok()) {
-    return storage_directory_or.status();
-  }
-  const std::filesystem::path storage_directory = *storage_directory_or;
-  std::error_code exists_error;
-  if (std::filesystem::exists(storage_directory, exists_error)) {
-    const std::filesystem::path quarantine_root =
-        std::filesystem::path(data_dir) / ".quarantine";
-    std::error_code mkdir_error;
-    std::filesystem::create_directories(quarantine_root, mkdir_error);
-    if (mkdir_error) {
-      return absl::DataLossError(absl::StrCat(
-          "Failed to create quarantine directory ", quarantine_root.string(),
-          " for ", database_uri, ": ", mkdir_error.message()));
-    }
-    // Sanitize the URI into a filesystem-safe, still-recognizable name.
-    std::string sanitized_uri = database_uri;
-    std::replace(sanitized_uri.begin(), sanitized_uri.end(), '/', '_');
-    const std::filesystem::path quarantine_path =
-        quarantine_root / absl::StrCat(sanitized_uri, "-",
-                                       absl::ToUnixMicros(clock->Now()));
-    std::error_code rename_error;
-    std::filesystem::rename(storage_directory, quarantine_path, rename_error);
-    if (rename_error) {
-      return absl::DataLossError(absl::StrCat(
-          "Failed to quarantine on-disk data for ", database_uri, " (",
-          storage_directory.string(), " -> ", quarantine_path.string(),
-          "): ", rename_error.message()));
-    }
-  }
+  GOOGLESQL_RETURN_IF_ERROR(DatabaseManager::QuarantineDatabaseDirectory(
+                                data_dir, database_uri, clock->Now())
+                                .status());
   ms->RemoveDatabase(instance_name, db_name);
   return ms->Save();
 }

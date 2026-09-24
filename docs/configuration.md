@@ -22,10 +22,15 @@ docker run -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
   jaysen2apache/spanner-emulator-extended \
   ./gateway_main --hostname 0.0.0.0 --data_dir=/data
 
-# gRPC only, with an emulator_main-only flag
-docker run -p 9010:9010 -v /path/to/data:/data \
+# Quarantine databases that fail to restore
+docker run -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
   jaysen2apache/spanner-emulator-extended \
-  ./emulator_main --host_port=0.0.0.0:9010 --data_dir=/data --repair_corrupted_databases
+  ./gateway_main --hostname 0.0.0.0 --data_dir=/data --repair_corrupted_databases
+
+# gRPC only, with an emulator_main-only flag
+docker run -p 9010:9010 \
+  jaysen2apache/spanner-emulator-extended \
+  ./emulator_main --host_port=0.0.0.0:9010 --abort_current_transaction_probability=0
 ```
 
 Appending only flags, such as `... spanner-emulator-extended --data_dir=/data`,
@@ -40,6 +45,7 @@ fails with `exec: "--data_dir=/data": no such file or directory`.
 | `--http_port` | `9020` | REST port | — |
 | `--grpc_binary` | `emulator_main` | Path to the `emulator_main` binary | — |
 | `--data_dir` | empty (in-memory) | Persistent storage directory. See [Persistence](persistence.md). | yes |
+| `--repair_corrupted_databases` | `false` | Move a database that fails to restore under `<data_dir>/.quarantine/` instead of leaving it unavailable. See [Persistence](persistence.md#quarantine). | yes |
 | `--enforce_placement_dml_restrictions` | `true` | Production's placement DML limits. See [Placements](placements.md). | yes |
 | `--override_max_databases_per_instance` | `100` | Raises the per-instance database limit; values at or below 100 are ignored | yes |
 | `--override_change_stream_partition_token_alive_seconds` | `-1` (20–40 s) | Change stream partition tokens live X–2X seconds | yes |
@@ -68,7 +74,6 @@ them; see the Docker example above.
 | Flag | Default | Effect |
 |------|---------|--------|
 | `--host_port` | `localhost:10007` | gRPC listen address |
-| `--repair_corrupted_databases` | `false` | Move a database that fails to restore under `<data_dir>/.quarantine/` instead of leaving it unavailable. See [Persistence](persistence.md). |
 | `--abort_current_transaction_probability` | `20` | Chance (0–100) that a new read-write transaction aborts the one in progress. `0` never aborts it. |
 | `--remote_functions_host_port` | empty | Backend address for remote functions |
 | `--enable_change_stream_churning` | `true` | Rotate change stream partitions |

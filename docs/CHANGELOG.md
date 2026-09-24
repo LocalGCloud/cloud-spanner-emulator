@@ -4,6 +4,30 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] Quarantine No Longer Blocks the Next Start
+
+### Fixed
+- After `--repair_corrupted_databases` quarantined a database, the next start
+  failed with `Persistent database root has committed data but no metadata`.
+  Quarantine moved only the database's `storage/` directory and left its
+  folder, with the `.metadata-committed` marker, behind, while the
+  `metadata.json` entry was removed. Quarantine now moves the whole database
+  folder into `<data_dir>/.quarantine/` in one rename
+  (`DatabaseManager::QuarantineDatabaseDirectory`), so nothing is left behind.
+  If the emulator stops between the rename and the metadata save, the next
+  start lists the database as unavailable and another repair run removes it.
+
+### Added
+- `gateway_main` accepts `--repair_corrupted_databases` and passes it to
+  `emulator_main`, so it works with the Docker image's usual
+  `./gateway_main ...` command. Before, only `emulator_main` accepted it.
+- Tests: `DatabaseManagerTest.QuarantinedDatabaseDoesNotBlockNextStartup`
+  (fails before the fix with the `DATA_LOSS` above) and a new Go test,
+  `//gateway:gateway_test`, for the flags the gateway forwards. Checked end to
+  end over REST: a corrupted database quarantined through `gateway_main`,
+  then a restart without the flag succeeds and the other database keeps
+  serving; the previous build failed that restart.
+
 ## [2026-09-24] Database Create Times Are Recorded
 
 ### Fixed

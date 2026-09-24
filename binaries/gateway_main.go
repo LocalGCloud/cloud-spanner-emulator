@@ -72,6 +72,12 @@ var (
 		"If true, the emulator will print all third-party notices to stdout.")
 	dataDir = flag.String("data_dir", "",
 		"Directory for persistent storage. When set, data survives restarts.")
+	repairCorruptedDatabases = flag.Bool("repair_corrupted_databases", false,
+		"If true, a database that fails to restore from --data_dir at startup is "+
+			"quarantined: its folder is moved under --data_dir/.quarantine and its "+
+			"metadata.json entry is removed, so it no longer appears. Otherwise it "+
+			"stays in place and is reported as unavailable. Other databases start "+
+			"either way.")
 )
 
 // resolveGRPCBinary figures out the full path to the grpc binary from the --grpc_binary flag.
@@ -166,6 +172,7 @@ func main() {
 		EnableFaultInjection:               *enableFaultInjection,
 		DisableQueryNullFilteredIndexCheck: *disableQueryNullFilteredIndexCheck,
 		EnforcePlacementDmlRestrictions:    *enforcePlacementDmlRestrictions,
+		RepairCorruptedDatabases:           *repairCorruptedDatabases,
 		OverrideMaxDatabasesPerInstance:    instanceDbs,
 		OverrideChangeStreamPartitionTokenAliveSeconds: overrideChangeStreamPartitionTokenAliveSeconds,
 		DataDir:                                        *dataDir,

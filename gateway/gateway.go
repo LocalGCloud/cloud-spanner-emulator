@@ -51,6 +51,7 @@ type Options struct {
 	EnableFaultInjection                           bool
 	DisableQueryNullFilteredIndexCheck             bool
 	EnforcePlacementDmlRestrictions                bool
+	RepairCorruptedDatabases                       bool
 	OverrideMaxDatabasesPerInstance                int
 	OverrideChangeStreamPartitionTokenAliveSeconds int
 	DataDir                                        string
@@ -66,35 +67,43 @@ func New(opts Options) *Gateway {
 	return &Gateway{opts}
 }
 
+// emulatorArgs returns the flags that the gateway passes to the emulator grpc
+// server.
+func emulatorArgs(opts Options) []string {
+	args := []string{
+		"--host_port", opts.FrontendAddress,
+	}
+	if opts.DataDir != "" {
+		args = append(args, "--data_dir", opts.DataDir)
+	}
+	if opts.RepairCorruptedDatabases {
+		args = append(args, "--repair_corrupted_databases")
+	}
+	if opts.LogRequests {
+		args = append(args, "--log_requests")
+	}
+	if opts.EnableFaultInjection {
+		args = append(args, "--enable_fault_injection")
+	}
+	if opts.DisableQueryNullFilteredIndexCheck {
+		args = append(args, "--disable_query_null_filtered_index_check")
+	}
+	args = append(args,
+		fmt.Sprintf("--enforce_placement_dml_restrictions=%t",
+			opts.EnforcePlacementDmlRestrictions))
+	args = append(args,
+		fmt.Sprintf("--override_max_databases_per_instance=%d",
+			opts.OverrideMaxDatabasesPerInstance))
+	args = append(args,
+		fmt.Sprintf("--override_change_stream_partition_token_alive_seconds=%d",
+			opts.OverrideChangeStreamPartitionTokenAliveSeconds))
+	return args
+}
+
 // Run starts the emulator gateway server.
 func (gw *Gateway) Run() {
 	// Start the emulator grpc server and redirect its output.
-	emulatorArgs := []string{
-		"--host_port", gw.opts.FrontendAddress,
-	}
-	if gw.opts.DataDir != "" {
-		emulatorArgs = append(emulatorArgs, "--data_dir", gw.opts.DataDir)
-	}
-	if gw.opts.LogRequests {
-		emulatorArgs = append(emulatorArgs, "--log_requests")
-	}
-	if gw.opts.EnableFaultInjection {
-		emulatorArgs = append(emulatorArgs, "--enable_fault_injection")
-	}
-	if gw.opts.DisableQueryNullFilteredIndexCheck {
-		emulatorArgs = append(emulatorArgs, "--disable_query_null_filtered_index_check")
-	}
-	emulatorArgs = append(emulatorArgs,
-		fmt.Sprintf("--enforce_placement_dml_restrictions=%t",
-			gw.opts.EnforcePlacementDmlRestrictions))
-	emulatorArgs = append(emulatorArgs,
-		fmt.Sprintf("--override_max_databases_per_instance=%d",
-			gw.opts.OverrideMaxDatabasesPerInstance))
-	emulatorArgs = append(emulatorArgs,
-		fmt.Sprintf("--override_change_stream_partition_token_alive_seconds=%d",
-			gw.opts.OverrideChangeStreamPartitionTokenAliveSeconds))
-
-	cmd := exec.Command(gw.opts.FrontendBinary, emulatorArgs...)
+	cmd := exec.Command(gw.opts.FrontendBinary, emulatorArgs(gw.opts)...)
 
 	// Proxy emulator log to gateway log.
 	if gw.opts.CopyEmulatorStdout {

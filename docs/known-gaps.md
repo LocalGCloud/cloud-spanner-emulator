@@ -16,7 +16,6 @@ confirmed against a running emulator; the others come from reading the code.
 
 | Area | Bug | Impact | Status |
 |------|-----|--------|--------|
-| Persistence (fork) | A database quarantined by `--repair_corrupted_databases` leaves a `.metadata-committed` marker behind, so the next start fails with "committed data but no metadata". | Delete the leftover database folder by hand before restarting. | From code |
 | Persistence (fork) | If a database that fails to restore has an IAM policy, restoring the policy fails and stops startup. | Defeats per-database fault isolation for that database. | From code |
 | Persistence (fork) | `DropDatabase` on an unavailable database deletes its data without a quarantine copy, and the database stays listed as `CREATING` until restart. Recreating the same name in that run gives an unusable database. | Restart before recreating the database. | From code |
 | Persistence (fork) | A commit's rows and index entries are separate LevelDB writes. | A process crash in the middle of a commit can leave part of a transaction, or an inconsistent index, on disk. | From code |
@@ -220,8 +219,8 @@ Details are in [Change streams](change-streams.md).
 - The Docker image has no `ENTRYPOINT`: to pass flags, repeat the full command
   (`./gateway_main --hostname 0.0.0.0 ...`). See
   [Configuration](configuration.md#docker).
-- `--repair_corrupted_databases`, `--abort_current_transaction_probability`,
-  `--remote_functions_host_port` and the change stream tuning flags (such as
+- `--abort_current_transaction_probability`, `--remote_functions_host_port`
+  and the change stream tuning flags (such as
   `--enable_change_stream_churning`) are `emulator_main`-only; `gateway_main`
   doesn't accept or forward them. Running `emulator_main` directly serves gRPC
   only.

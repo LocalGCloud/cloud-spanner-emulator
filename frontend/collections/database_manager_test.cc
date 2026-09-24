@@ -251,6 +251,48 @@ TEST_F(DatabaseManagerTest, RejectsCommittedDatabaseRootMissingMetadata) {
   EXPECT_TRUE(std::filesystem::exists(database_root));
 }
 
+TEST_F(DatabaseManagerTest, QuarantinedDatabaseDoesNotBlockNextStartup) {
+  TempDirectory temp;
+  const std::string database_uri =
+      "projects/p/instances/i/databases/corrupted";
+  const std::filesystem::path database_root = temp.path() / database_uri;
+  std::filesystem::create_directories(database_root / "storage");
+  std::ofstream(database_root / "storage" / "CURRENT") << "garbage";
+  GOOGLESQL_ASSERT_OK(DatabaseManager::MarkDatabaseMetadataCommitted(
+      temp.path().string(), database_uri));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::optional<std::string> quarantine_path,
+      DatabaseManager::QuarantineDatabaseDirectory(
+          temp.path().string(), database_uri, absl::FromUnixMicros(42)));
+  ASSERT_TRUE(quarantine_path.has_value());
+  EXPECT_EQ(
+      *quarantine_path,
+      (temp.path() / ".quarantine" / "projects_p_instances_i_databases_corrupted-42")
+          .string());
+
+  // The whole database folder moves, markers included, so nothing is left
+  // behind for the next startup to trip over.
+  EXPECT_FALSE(std::filesystem::exists(database_root));
+  EXPECT_TRUE(std::filesystem::exists(
+      std::filesystem::path(*quarantine_path) / "storage" / "CURRENT"));
+  EXPECT_TRUE(std::filesystem::exists(
+      std::filesystem::path(*quarantine_path) / ".metadata-committed"));
+
+  // The next startup runs with the database gone from metadata.
+  GOOGLESQL_EXPECT_OK(DatabaseManager::ReconcileDeletedDatabaseDirectories(
+      temp.path().string(), {}));
+  GOOGLESQL_EXPECT_OK(DatabaseManager::CleanupOrphanedRestoreDirectories(
+      temp.path().string(), {}));
+
+  // A second quarantine of the same database finds nothing to move.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      quarantine_path,
+      DatabaseManager::QuarantineDatabaseDirectory(
+          temp.path().string(), database_uri, absl::FromUnixMicros(43)));
+  EXPECT_FALSE(quarantine_path.has_value());
+}
+
 TEST_F(DatabaseManagerTest, ReconcilesDatabaseDeletionCrashWindows) {
   TempDirectory temp;
   const std::string retained =

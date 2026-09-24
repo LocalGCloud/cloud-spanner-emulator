@@ -676,6 +676,50 @@ absl::Status DatabaseManager::CleanupOrphanedRestoreDirectories(
   return absl::OkStatus();
 }
 
+absl::StatusOr<std::optional<std::string>>
+DatabaseManager::QuarantineDatabaseDirectory(const std::string& data_dir,
+                                             const std::string& database_uri,
+                                             absl::Time now) {
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      const std::string storage_directory,
+      backend::Database::PersistentStorageDirectory(data_dir, database_uri));
+  // Move the database root, not just its storage: a root left behind with
+  // its .metadata-committed marker but no metadata entry stops the next
+  // startup. One rename moves everything or nothing. If the process stops
+  // before the caller saves metadata, the next startup finds the database
+  // with no storage and marks it unavailable (or quarantines it again).
+  const std::filesystem::path database_root =
+      std::filesystem::path(storage_directory).parent_path();
+  std::error_code exists_error;
+  if (!std::filesystem::exists(database_root, exists_error)) {
+    return std::nullopt;
+  }
+  const std::filesystem::path quarantine_root =
+      std::filesystem::path(data_dir) / ".quarantine";
+  std::error_code mkdir_error;
+  std::filesystem::create_directories(quarantine_root, mkdir_error);
+  if (mkdir_error) {
+    return absl::DataLossError(absl::StrCat(
+        "Failed to create quarantine directory ", quarantine_root.string(),
+        " for ", database_uri, ": ", mkdir_error.message()));
+  }
+  // Sanitize the URI into a filesystem-safe, still-recognizable name.
+  std::string sanitized_uri = database_uri;
+  std::replace(sanitized_uri.begin(), sanitized_uri.end(), '/', '_');
+  const std::filesystem::path quarantine_path =
+      quarantine_root /
+      absl::StrCat(sanitized_uri, "-", absl::ToUnixMicros(now));
+  std::error_code rename_error;
+  std::filesystem::rename(database_root, quarantine_path, rename_error);
+  if (rename_error) {
+    return absl::DataLossError(absl::StrCat(
+        "Failed to quarantine on-disk data for ", database_uri, " (",
+        database_root.string(), " -> ", quarantine_path.string(),
+        "): ", rename_error.message()));
+  }
+  return quarantine_path.string();
+}
+
 absl::Status DatabaseManager::CompleteRecoveredRestoreDirectories(
     const std::string& data_dir,
     const std::vector<std::string>& database_uris) {
