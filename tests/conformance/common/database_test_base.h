@@ -17,7 +17,9 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_TESTS_CONFORMANCE_COMMON_DATABASE_TEST_BASE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_TESTS_CONFORMANCE_COMMON_DATABASE_TEST_BASE_H_
 
+#include <cstdint>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -247,7 +249,7 @@ class DatabaseTest : public ::testing::Test {
     // Creates a vector of Value objects from an argument list.
     template <typename... Ts>
     ValueRow(Ts... values)  // NOLINT
-        : row_({cloud::spanner::Value(std::forward<Ts>(values))...}) {}
+        : row_({MakeValue(std::forward<Ts>(values))...}) {}
 
     // Creates a vector of Value objects from a typed client library Row object.
     ValueRow(const cloud::spanner::Row& row) {  // NOLINT
@@ -272,6 +274,18 @@ class DatabaseTest : public ::testing::Test {
     void add(const Value& value) { row_.push_back(value); }
 
    private:
+    // `long` and std::int64_t are distinct types on some platforms (e.g. macOS,
+    // where std::int64_t is `long long`), which makes Value(long) ambiguous.
+    template <typename T>
+    static cloud::spanner::Value MakeValue(T&& value) {
+      if constexpr (std::is_same_v<std::decay_t<T>, long> &&
+                    !std::is_same_v<long, std::int64_t>) {
+        return cloud::spanner::Value(static_cast<std::int64_t>(value));
+      } else {
+        return cloud::spanner::Value(std::forward<T>(value));
+      }
+    }
+
     // Underlying vector of Value objects.
     std::vector<Value> row_;
   };
