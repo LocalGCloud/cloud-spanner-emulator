@@ -18,11 +18,13 @@
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_PERSISTENT_STORAGE_H_
 
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -108,31 +110,53 @@ class PersistentStorage : public Storage {
                          ColumnID dropped_column_id) override
       ABSL_LOCKS_EXCLUDED(mu_);
 
+  // Installs a callback that the write worker calls with the LevelDB keys of
+  // each batch before writing it. A non-OK status is returned for that batch
+  // instead of writing it. Intended only for tests.
+  void SetWriteHookForTesting(
+      std::function<absl::Status(const std::vector<std::string>& keys)> hook);
+
  private:
   // WriteQueue serializes all LevelDB writes through a single worker thread.
   // This eliminates interleaving of concurrent WriteBatch submissions.
+  // Batches are written in submission order.
   class WriteQueue {
    public:
     explicit WriteQueue(leveldb::DB* db);
     ~WriteQueue();
 
-    // Submits a batch to the worker thread. Blocks until committed.
-    // Returns the LevelDB Status from db_->Write().
+    // Submits a batch to the worker thread and blocks until that batch has
+    // been written. Returns the LevelDB Status of writing that batch.
     leveldb::Status Submit(leveldb::WriteBatch batch);
 
     // Stops accepting submissions, processes remaining batches, joins worker.
     void Shutdown();
 
+    void SetWriteHook(
+        std::function<absl::Status(const std::vector<std::string>&)> hook);
+
    private:
+    // A submitted batch and its result. It lives on the submitting thread's
+    // stack until the worker marks it done, so each caller gets the result
+    // of its own batch.
+    struct PendingWrite {
+      leveldb::WriteBatch batch;
+      leveldb::Status status;
+      bool done = false;
+    };
+
     void WorkerLoop();
 
     std::thread worker_;
     std::mutex mu_;
-    std::condition_variable cv_;
-    std::queue<leveldb::WriteBatch> queue_;
-    std::queue<leveldb::Status> results_;
+    // Wakes the worker when a batch is queued or on shutdown.
+    std::condition_variable work_cv_;
+    // Wakes submitters when a batch is done.
+    std::condition_variable done_cv_;
+    std::queue<PendingWrite*> queue_;
     leveldb::DB* db_;
     bool shutdown_ = false;
+    std::function<absl::Status(const std::vector<std::string>&)> write_hook_;
   };
 
   explicit PersistentStorage(std::unique_ptr<leveldb::DB> db);

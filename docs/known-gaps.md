@@ -17,7 +17,6 @@ confirmed against a running emulator; the others come from reading the code.
 | Area | Bug | Impact | Status |
 |------|-----|--------|--------|
 | Persistence (fork) | A commit's rows and index entries are separate LevelDB writes. | A process crash in the middle of a commit can leave part of a transaction, or an inconsistent index, on disk. | From code |
-| Persistence (fork) | Results from the storage write queue aren't matched to the writer that submitted them. | Rarely, a write returns before its data is visible, or reports another write's error. The transaction lock serializes most writers. | From code |
 
 ## Transactions and concurrency
 

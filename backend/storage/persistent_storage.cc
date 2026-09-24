@@ -352,6 +352,47 @@ absl::Status PersistentStorage::CreateCheckpoint(
 // WriteQueue — serializes all LevelDB writes through a single worker thread.
 // ---------------------------------------------------------------------------
 
+namespace {
+
+// Collects the keys a WriteBatch puts or deletes.
+class BatchKeyCollector : public leveldb::WriteBatch::Handler {
+ public:
+  void Put(const leveldb::Slice& key, const leveldb::Slice& value) override {
+    keys.push_back(key.ToString());
+  }
+  void Delete(const leveldb::Slice& key) override {
+    keys.push_back(key.ToString());
+  }
+  std::vector<std::string> keys;
+};
+
+// Writes a batch, first giving the test hook, if any, a chance to fail it.
+leveldb::Status WriteBatchWithHook(
+    leveldb::DB* db, leveldb::WriteBatch* batch,
+    const std::function<absl::Status(const std::vector<std::string>&)>& hook) {
+  if (hook) {
+    BatchKeyCollector collector;
+    batch->Iterate(&collector);
+    if (absl::Status status = hook(collector.keys); !status.ok()) {
+      return leveldb::Status::IOError(std::string(status.message()));
+    }
+  }
+  return db->Write(leveldb::WriteOptions(), batch);
+}
+
+}  // namespace
+
+void PersistentStorage::SetWriteHookForTesting(
+    std::function<absl::Status(const std::vector<std::string>& keys)> hook) {
+  write_queue_.SetWriteHook(std::move(hook));
+}
+
+void PersistentStorage::WriteQueue::SetWriteHook(
+    std::function<absl::Status(const std::vector<std::string>&)> hook) {
+  std::unique_lock<std::mutex> lock(mu_);
+  write_hook_ = std::move(hook);
+}
+
 PersistentStorage::WriteQueue::WriteQueue(leveldb::DB* db) : db_(db) {
   worker_ = std::thread(&WriteQueue::WorkerLoop, this);
 }
@@ -364,51 +405,44 @@ PersistentStorage::WriteQueue::~WriteQueue() {
 
 leveldb::Status PersistentStorage::WriteQueue::Submit(
     leveldb::WriteBatch batch) {
+  PendingWrite pending{.batch = std::move(batch)};
   std::unique_lock<std::mutex> lock(mu_);
   if (shutdown_) {
     return leveldb::Status::IOError("WriteQueue is shutting down");
   }
-  queue_.push(std::move(batch));
-  cv_.notify_one();
-  cv_.wait(lock, [this] { return !results_.empty() || shutdown_; });
-  if (shutdown_ && results_.empty()) {
-    return leveldb::Status::IOError("WriteQueue shut down");
-  }
-  leveldb::Status result = std::move(results_.front());
-  results_.pop();
-  return result;
+  queue_.push(&pending);
+  work_cv_.notify_one();
+  // The worker drains the queue before it exits, so every queued batch is
+  // eventually marked done, even during shutdown.
+  done_cv_.wait(lock, [&pending] { return pending.done; });
+  return pending.status;
 }
 
 void PersistentStorage::WriteQueue::Shutdown() {
   {
     std::unique_lock<std::mutex> lock(mu_);
     shutdown_ = true;
-    cv_.notify_one();  // Wake the worker
+    work_cv_.notify_one();
   }
   if (worker_.joinable()) {
     worker_.join();
-  }
-  // Notify any remaining waiters (should be none after worker finishes).
-  {
-    std::unique_lock<std::mutex> lock(mu_);
-    cv_.notify_all();
   }
 }
 
 void PersistentStorage::WriteQueue::WorkerLoop() {
   std::unique_lock<std::mutex> lock(mu_);
   while (true) {
-    cv_.wait(lock, [this] { return !queue_.empty() || shutdown_; });
-    if (shutdown_ && queue_.empty()) break;
-    while (!queue_.empty()) {
-      leveldb::WriteBatch batch = std::move(queue_.front());
-      queue_.pop();
-      lock.unlock();
-      leveldb::Status s = db_->Write(leveldb::WriteOptions(), &batch);
-      lock.lock();
-      results_.push(std::move(s));
-      cv_.notify_all();
-    }
+    work_cv_.wait(lock, [this] { return !queue_.empty() || shutdown_; });
+    if (queue_.empty()) break;  // Shutting down, and nothing left to write.
+    PendingWrite* pending = queue_.front();
+    queue_.pop();
+    auto hook = write_hook_;
+    lock.unlock();
+    leveldb::Status status = WriteBatchWithHook(db_, &pending->batch, hook);
+    lock.lock();
+    pending->status = std::move(status);
+    pending->done = true;
+    done_cv_.notify_all();
   }
 }
 

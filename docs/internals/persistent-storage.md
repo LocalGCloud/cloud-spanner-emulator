@@ -362,15 +362,21 @@ class WriteQueue {  // private to PersistentStorage
  public:
   explicit WriteQueue(leveldb::DB* db);
   ~WriteQueue();
-  leveldb::Status Submit(leveldb::WriteBatch batch);  // blocks
+  leveldb::Status Submit(leveldb::WriteBatch batch);  // blocks until written
   void Shutdown();
+  void SetWriteHook(...);  // tests only, via SetWriteHookForTesting
  private:
+  struct PendingWrite {    // on the submitter's stack
+    leveldb::WriteBatch batch;
+    leveldb::Status status;
+    bool done = false;
+  };
   void WorkerLoop();
   std::thread worker_;
   std::mutex mu_;
-  std::condition_variable cv_;       // shared by the worker and submitters
-  std::queue<leveldb::WriteBatch> queue_;
-  std::queue<leveldb::Status> results_;  // one FIFO shared by all submitters
+  std::condition_variable work_cv_;  // wakes the worker
+  std::condition_variable done_cv_;  // wakes submitters
+  std::queue<PendingWrite*> queue_;
   leveldb::DB* db_;
   bool shutdown_ = false;
 };
@@ -380,50 +386,44 @@ class WriteQueue {  // private to PersistentStorage
 
 ```text
 Submit(batch):
+  pending = {batch}            // on this thread's stack
   lock mu_
   if shutdown_: return IOError("WriteQueue is shutting down")
-  push batch; notify_one
-  wait until !results_.empty() || shutdown_
-  if shutdown_ and results_ is empty: return IOError("WriteQueue shut down")
-  pop and return results_.front()
+  push &pending; work_cv_.notify_one
+  wait on done_cv_ until pending.done
+  return pending.status
 
 WorkerLoop():
   lock mu_
   loop:
-    wait until !queue_.empty() || shutdown_
-    if shutdown_ and queue_ is empty: exit
-    while queue_ is not empty:
-      pop batch; unlock
-      db_->Write(leveldb::WriteOptions(), &batch)   // no sync
-      lock; push status to results_; notify_all
+    wait on work_cv_ until !queue_.empty() || shutdown_
+    if queue_ is empty: exit     // shutting down, nothing left
+    pop pending; unlock
+    status = db_->Write(leveldb::WriteOptions(), &pending->batch)   // no sync
+    lock; pending->status = status; pending->done = true
+    done_cv_.notify_all
 
 Shutdown():
-  set shutdown_; notify_one; join the worker; notify_all
+  set shutdown_; work_cv_.notify_one; join the worker
 ```
 
 The worker is the only code that calls `db_->Write()` on a live database. It
-drops `mu_` while writing, so other threads can queue batches.
+drops `mu_` while writing, so other threads can queue batches. Batches are
+written one at a time in submission order.
 
 ### Result matching
 
-`results_` is one FIFO shared by every submitter. Results aren't tied to the
-batch that produced them. When the worker pushes a result and calls
-`notify_all`, whichever waiting submitter gets `mu_` first pops it. As a
-result:
+Each submitter gets the status of its own batch, and only after that batch has
+been written. The result lives in the submitter's `PendingWrite`, which stays
+on its stack until the worker marks it done. The worker drains the queue
+before it exits, so a batch queued before `Shutdown()` is still written and
+its submitter gets its real status.
 
-- A submitter can take the status of an earlier batch and return before its
-  own batch is written. The caller can then return before its data is visible.
-- A LevelDB error can reach a different caller than the one whose batch
-  failed.
-- After `Shutdown()` sets `shutdown_`, a waiting submitter whose result isn't
-  in the queue yet returns `IOError("WriteQueue shut down")`, even if the
-  worker still writes its batch.
-
-In practice these cases need two threads submitting to the same database at
-once. The database's transaction lock allows one read-write transaction or
-schema change at a time, and `Shutdown()` runs only from the destructor, so the
-window is small. It isn't closed. Giving each submitter its own result slot,
-such as a promise per batch, would close it.
+Before 2026-09-24, results went into one FIFO shared by all submitters, and
+whichever waiter got the lock first took the front result. A caller could
+return before its batch was written, or get another batch's error.
+`PersistentStorageTest.WriteQueue_EachWriterGetsItsOwnResult` covers this:
+eight concurrent writers, with the test hook failing every write to one table.
 
 ## Sequence counters
 
@@ -540,8 +540,8 @@ atomic across a process crash.
 | Scenario | Behavior |
 |----------|----------|
 | `Submit()` after `Shutdown()` | Returns `IOError("WriteQueue is shutting down")` |
-| `Shutdown()` while submitters wait | The worker drains the queue. A waiter can still get `IOError` (see [Result matching](#result-matching)). |
-| LevelDB write error | The status goes to whichever submitter pops it. The worker keeps going. |
+| `Shutdown()` while submitters wait | The worker writes every queued batch, and each waiter gets its own batch's status. |
+| LevelDB write error | The status goes to the submitter of the failed batch. The worker keeps going. |
 | Read during a write | The snapshot is taken at the start of `Read()`. Later writes are invisible. |
 | Iterator released late | The snapshot is held until the iterator is destroyed. |
 | `PersistentStorage` destroyed | `write_queue_.Shutdown()` runs in the destructor. |

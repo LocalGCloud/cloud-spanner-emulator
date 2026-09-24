@@ -4,6 +4,23 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] Storage Writes Get Their Own Results
+
+### Fixed
+- With `--data_dir`, the LevelDB write queue returned results through one
+  FIFO shared by every writer, so a concurrent writer could return before
+  its batch was written, and one writer's error could be reported to
+  another. Each queued batch now carries its own result slot, and `Submit`
+  returns only after that batch is written, with its own status. The worker
+  and the waiting writers also use separate condition variables now. Batches
+  are still written one at a time, in order.
+- Tests: `PersistentStorageTest.WriteQueue_EachWriterGetsItsOwnResult`, with
+  eight concurrent writers and a new test-only write hook
+  (`PersistentStorage::SetWriteHookForTesting`) that fails every write to
+  one table. Before the fix, one run had 55 of 64 failing writes report
+  success, 20 errors reach the wrong writer, and 130 of 256 successful
+  writes not yet visible when `Write` returned. It passes 10 of 10 runs now.
+
 ## [2026-09-24] Gateway Stops the Emulator on SIGINT and SIGTERM
 
 ### Fixed

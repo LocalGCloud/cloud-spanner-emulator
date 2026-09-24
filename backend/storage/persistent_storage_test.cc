@@ -24,6 +24,8 @@
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -649,6 +651,62 @@ TEST_F(PersistentStorageTest, WriteQueue_ConcurrentSubmit) {
     EXPECT_TRUE(itr_->ColumnValue(0).is_valid());
   }
   EXPECT_EQ(count, 4);
+}
+
+TEST_F(PersistentStorageTest, WriteQueue_EachWriterGetsItsOwnResult) {
+  // Fail every batch that writes kFailingTable, and slow the others down so
+  // several batches wait in the queue at once.
+  const TableID kFailingTable = "failing_table:0";
+  storage_->SetWriteHookForTesting(
+      [&](const std::vector<std::string>& keys) -> absl::Status {
+        for (const std::string& key : keys) {
+          if (absl::StrContains(key, kFailingTable)) {
+            return absl::UnavailableError("injected write failure");
+          }
+        }
+        absl::SleepFor(absl::Microseconds(200));
+        return absl::OkStatus();
+      });
+
+  const absl::Time t0 = absl::Now();
+  constexpr int kThreads = 8;
+  constexpr int kWritesPerThread = 40;
+  std::atomic<int> failures_reported_to_wrong_writer{0};
+  std::atomic<int> failures_not_reported{0};
+  std::atomic<int> writes_not_visible_on_return{0};
+  std::vector<std::thread> threads;
+  for (int t = 0; t < kThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      for (int i = 0; i < kWritesPerThread; ++i) {
+        const int64_t key = t * 1000 + i;
+        const bool should_fail = i % 5 == 0;
+        const TableID& table = should_fail ? kFailingTable : kTableId0;
+        absl::Status status = storage_->Write(t0, table, Key({Int64(key)}),
+                                              {kColumnID}, {Int64(key)});
+        if (should_fail) {
+          if (status.ok()) ++failures_not_reported;
+          continue;
+        }
+        if (!status.ok()) {
+          ++failures_reported_to_wrong_writer;
+          continue;
+        }
+        // The batch must be written by the time Write returns.
+        std::vector<googlesql::Value> values;
+        if (!storage_->Lookup(t0, kTableId0, Key({Int64(key)}), {kColumnID},
+                              &values)
+                 .ok() ||
+            values.size() != 1 || values[0] != Int64(key)) {
+          ++writes_not_visible_on_return;
+        }
+      }
+    });
+  }
+  for (auto& thread : threads) thread.join();
+
+  EXPECT_EQ(failures_reported_to_wrong_writer.load(), 0);
+  EXPECT_EQ(failures_not_reported.load(), 0);
+  EXPECT_EQ(writes_not_visible_on_return.load(), 0);
 }
 
 TEST_F(PersistentStorageTest, WriteQueue_Shutdown) {
