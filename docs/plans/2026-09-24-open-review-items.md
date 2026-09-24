@@ -22,8 +22,10 @@ aren't repaired (no backward compatibility for now); a persisted IAM policy
 whose resource is missing is dropped with a warning; dropping an unavailable
 database moves it to `.quarantine/`.
 
-Found along the way and left open: a REST field mask in the URL isn't
-converted from camelCase (see [Known bugs](../known-gaps.md#known-bugs)).
+Found along the way and fixed afterwards: a REST field mask in the URL wasn't
+converted from camelCase, so `UpdateDatabase`, `UpdateBackup` and
+`UpdateBackupSchedule` rejected `?updateMask=enableDropProtection`-style
+masks.
 
 You are working in a fork of Google's Cloud Spanner Emulator (C++ with Bazel,
 plus a Go REST gateway). A documentation review on 2026-09-24 found the bugs

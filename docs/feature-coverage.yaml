@@ -3291,7 +3291,8 @@
         "tests": [
           "frontend/common/status_test.cc",
           "tests/gcloud/read_write_test.py",
-          "tests/gcloud/instance_admin_test.py"
+          "tests/gcloud/instance_admin_test.py",
+          "gateway/gateway_test.go"
         ],
         "documentation": [
           "docs/capabilities.md",
@@ -3299,7 +3300,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "REST (port 9020) is served by the grpc-gateway proxy in gateway_main, which gcloud tests use end to end. Errors keep their gRPC status code and message and carry only standard google.rpc details. Only gateway_main exposes REST; emulator_main alone is gRPC-only."
+      "notes": "REST (port 9020) is served by the grpc-gateway proxy in gateway_main, which gcloud tests use end to end. Errors keep their gRPC status code and message and carry only standard google.rpc details. Only gateway_main exposes REST; emulator_main alone is gRPC-only. Field masks in the URL (for example ?updateMask=enableDropProtection on UpdateDatabase, UpdateBackup, and UpdateBackupSchedule) are converted from their JSON camelCase form to proto field names, as Cloud Spanner accepts; snake_case paths work too."
     },
     {
       "id": "clients.client_libraries",

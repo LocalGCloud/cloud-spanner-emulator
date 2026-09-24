@@ -22,9 +22,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,7 +34,10 @@ import (
 	_ "google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/utilities"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	instancepb "cloud.google.com/go/spanner/admin/instance/apiv1/instancepb"
 	lrgw "cloud_spanner_emulator/gateway/longrunning_operations_gateway"
@@ -99,6 +104,61 @@ func emulatorArgs(opts Options) []string {
 		fmt.Sprintf("--override_change_stream_partition_token_alive_seconds=%d",
 			opts.OverrideChangeStreamPartitionTokenAliveSeconds))
 	return args
+}
+
+// newQueryParser returns the parser that fills requests from URL query
+// parameters.
+func newQueryParser() runtime.QueryParameterParser {
+	return &fieldMaskQueryParser{}
+}
+
+// fieldMaskQueryParser fills requests from URL query parameters like
+// runtime.DefaultQueryParser, then converts the paths of the request's field
+// masks from their JSON form (lowerCamelCase, as in
+// ?updateMask=enableDropProtection) to proto field names
+// (enable_drop_protection), which the emulator's handlers compare against.
+// Cloud Spanner's REST API accepts both forms. A field mask in a JSON request
+// body is already converted by protojson, and converting a proto field name
+// leaves it unchanged.
+type fieldMaskQueryParser struct {
+	runtime.DefaultQueryParser
+}
+
+func (p *fieldMaskQueryParser) Parse(msg proto.Message, values url.Values, filter *utilities.DoubleArray) error {
+	if err := p.DefaultQueryParser.Parse(msg, values, filter); err != nil {
+		return err
+	}
+	request := msg.ProtoReflect()
+	fields := request.Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		field := fields.Get(i)
+		if field.IsList() || field.Message() == nil ||
+			field.Message().FullName() != "google.protobuf.FieldMask" || !request.Has(field) {
+			continue
+		}
+		mask := request.Mutable(field).Message()
+		paths := mask.Mutable(mask.Descriptor().Fields().ByName("paths")).List()
+		for j := 0; j < paths.Len(); j++ {
+			paths.Set(j, protoreflect.ValueOfString(protoFieldPath(paths.Get(j).String())))
+		}
+	}
+	return nil
+}
+
+// protoFieldPath converts a field mask path from its JSON form to proto field
+// names, for example encryptionConfig.kmsKeyName to
+// encryption_config.kms_key_name.
+func protoFieldPath(path string) string {
+	var b strings.Builder
+	for _, r := range path {
+		if 'A' <= r && r <= 'Z' {
+			b.WriteByte('_')
+			b.WriteRune(r + ('a' - 'A'))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // emulatorStopTimeout is how long the gateway waits for the emulator grpc
@@ -177,7 +237,8 @@ func (gw *Gateway) Run() {
 
 	// Setup the gateway services.
 	mux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{}))
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{}),
+		runtime.SetQueryParameterParser(newQueryParser()))
 	opts := []grpc.DialOption{grpc.WithInsecure()}
 	err = spgw.RegisterSpannerHandlerFromEndpoint(ctx, mux, addr, opts)
 	if err != nil {

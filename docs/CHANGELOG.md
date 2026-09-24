@@ -4,6 +4,30 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] REST Field Masks in the URL Accept camelCase
+
+### Fixed
+- Over REST, a field mask passed in the URL wasn't converted from its JSON
+  form, so `PATCH .../databases/db?updateMask=enableDropProtection` failed
+  with `Unsupported database update field: enableDropProtection`, and
+  `UpdateBackup` (`?updateMask=expireTime`) and `UpdateBackupSchedule`
+  (`?updateMask=retentionDuration`) failed the same way. Cloud Spanner's REST
+  API documents the camelCase form. grpc-gateway copies query-string mask
+  paths as-is, while the handlers compare proto field names; masks in a
+  JSON body (such as `UpdateInstance`'s `fieldMask`) were already converted
+  by protojson.
+- `gateway_main` now fills requests with its own query parser, which runs
+  grpc-gateway's default parser and then converts each field mask path on
+  the request from lowerCamelCase to proto field names (`expireTime` to
+  `expire_time`, `encryptionConfig.kmsKeyName` to
+  `encryption_config.kms_key_name`). snake_case paths are unchanged, so both
+  forms work. gRPC clients weren't affected.
+- Tests: `TestQueryParserConvertsFieldMaskPathsToProtoNames` in
+  `//gateway:gateway_test` (fails with the default parser). Checked end to
+  end over REST: all three RPCs rejected the camelCase mask with the
+  previous build and accept it now, and snake_case and body masks still
+  work.
+
 ## [2026-09-24] Commits Are Atomic on Disk
 
 ### Fixed

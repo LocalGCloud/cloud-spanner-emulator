@@ -17,11 +17,16 @@
 package gateway
 
 import (
+	"net/url"
 	"os/exec"
 	"slices"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/grpc-ecosystem/grpc-gateway/v2/utilities"
+
+	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 )
 
 func TestEmulatorArgsForwardsRepairCorruptedDatabases(t *testing.T) {
@@ -100,4 +105,31 @@ func TestStopEmulatorKillsAProcessThatIgnoresSigterm(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	stopEmulator(cmd.Process, exited, 200*time.Millisecond)
 	waitForExit(t, exited)
+}
+
+func TestQueryParserConvertsFieldMaskPathsToProtoNames(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  []string
+	}{
+		// The JSON form that Cloud Spanner's REST API documents.
+		{"updateMask=enableDropProtection", []string{"enable_drop_protection"}},
+		// Proto field names still work.
+		{"updateMask=enable_drop_protection", []string{"enable_drop_protection"}},
+		// Several paths, and nested paths.
+		{"updateMask=expireTime,encryptionConfig.kmsKeyName", []string{"expire_time", "encryption_config.kms_key_name"}},
+		{"update_mask=retentionDuration", []string{"retention_duration"}},
+	} {
+		values, err := url.ParseQuery(tc.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := &databasepb.UpdateDatabaseRequest{}
+		if err := newQueryParser().Parse(request, values, utilities.NewDoubleArray(nil)); err != nil {
+			t.Fatalf("Parse(%q) failed: %v", tc.query, err)
+		}
+		if got := request.GetUpdateMask().GetPaths(); !slices.Equal(got, tc.want) {
+			t.Errorf("Parse(%q) paths = %q, want %q", tc.query, got, tc.want)
+		}
+	}
 }

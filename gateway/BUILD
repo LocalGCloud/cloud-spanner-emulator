@@ -73,8 +73,11 @@ go_library(
         ":spanner_gateway",
         "//common:instance_go_proto",
         "@grpc_ecosystem_grpc_gateway//runtime:go_default_library",
+        "@grpc_ecosystem_grpc_gateway//utilities:go_default_library",
         "@org_golang_google_genproto_googleapis_rpc//errdetails",
         "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//reflect/protoreflect",
     ],
 )
 
@@ -83,4 +86,8 @@ go_test(
     size = "small",
     srcs = ["gateway_test.go"],
     embed = [":gateway"],
+    deps = [
+        "//common:database_go_proto",
+        "@grpc_ecosystem_grpc_gateway//utilities:go_default_library",
+    ],
 )

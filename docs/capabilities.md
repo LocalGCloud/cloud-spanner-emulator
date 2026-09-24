@@ -167,7 +167,8 @@ for limits and differences from production.
 REST for the Spanner, Database Admin, Instance Admin and Operations APIs,
 including instance partition operations (fork). Errors keep their gRPC status
 code and carry only standard `google.rpc` details (fork); before 2026-09-23
-many came back as HTTP 500.
+many came back as HTTP 500. Field masks accept the JSON form
+(`?updateMask=enableDropProtection`) as well as proto field names (fork).
 
 ## Clients and tools
 
