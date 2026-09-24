@@ -12,3 +12,4 @@ current behavior, see [capabilities](../capabilities.md),
 | 2026-05-07 | [OPTIMIZER_VERSION hint design](2026-05-07-optimizer-version-hint-design.md) |
 | 2026-06-01 | [ZetaSQL `constexpr` build fix for GCC 12](2026-06-01-zetasql-constexpr-fix.md) |
 | 2026-08-25 | [Feature coverage inventory design](2026-08-25-spanner-feature-parity-coverage-design.md) |
+| 2026-09-24 | [Open items from the documentation review](2026-09-24-open-review-items.md) (task brief) |
