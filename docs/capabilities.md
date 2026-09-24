@@ -156,9 +156,8 @@ Both dialects, with all `value_capture_type` settings, `FOR ALL`, table and
 column tracking, retention from 1 to 7 days, `MUTABLE_KEY_RANGE` partition
 mode, and transaction exclusion. Queries follow the production flow of
 partition tokens and child partitions. With `--data_dir`, definitions,
-records and partition history survive restarts, and reads can start before a
-restart (fork), except for streams created in `CreateDatabase`, which lose
-their creation time ([known bug](known-gaps.md#known-bugs)). See [Change streams](change-streams.md)
+records, partition history and creation times survive restarts, and reads
+can start before a restart (fork). See [Change streams](change-streams.md)
 for limits and differences from production.
 
 ## REST gateway

@@ -4,6 +4,32 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] Database Create Times Are Recorded
+
+### Fixed
+- With `--data_dir`, change streams created in the `CreateDatabase` request
+  got a creation time of 1970-01-01 after a restart, and `GetDatabase` never
+  returned `create_time`. `Database::ToProto` didn't set `create_time`, so the
+  `CreateDatabase` handler saved the proto default (1970) as the database's
+  `createTime` and as its first DDL batch's timestamp, which startup replays.
+  A `start_timestamp` before the stream's real creation then passed
+  validation, found no partition, and failed with `INTERNAL`
+  (`RET_CHECK ... !IsQueryResultEmpty`). `ToProto` now returns the database's
+  create time, the same time its initial schema uses, so `GetDatabase` and
+  `ListDatabases` report it, `metadata.json` saves it, and change stream
+  creation times match before and after a restart. `RestoreDatabase` now also
+  uses the restore time for the restored database's first batch.
+- The change stream initial query returns `OUT_OF_RANGE` instead of
+  `INTERNAL` when no partition covers `start_timestamp`.
+- Data directories written before this change keep their 1970 create times;
+  nothing repairs them. Recreate those databases if you need the real time.
+- Tests: `PersistentDatabaseDdlTest.CreateTimeIsReportedPersistedAndReplayedForInitialStatements`
+  in `frontend/handlers:databases_test` (fails without the fix: no
+  `create_time`). Checked end to end over REST with a restart: the previous
+  build returned `INTERNAL` for an early `start_timestamp` after the restart;
+  this build returns `OUT_OF_RANGE`, and `createTime` matches before and
+  after. A data directory from the previous build returns `OUT_OF_RANGE` too.
+
 ## [2026-09-24] Sequences Continue After Restarts
 
 ### Fixed

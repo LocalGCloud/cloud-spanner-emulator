@@ -17,6 +17,7 @@
 #include "frontend/entities/database.h"
 
 #include "absl/status/status.h"
+#include "frontend/converters/time.h"
 #include "google/spanner/admin/database/v1/spanner_database_admin.pb.h"
 #include "googlesql/base/status_macros.h"
 
@@ -28,6 +29,8 @@ namespace frontend {
 absl::Status Database::ToProto(admin::database::v1::Database* database) {
   database->set_name(database_uri_);
   database->set_state(admin::database::v1::Database::READY);
+  GOOGLESQL_ASSIGN_OR_RETURN(*database->mutable_create_time(),
+                             TimestampToProto(create_time_));
   database->set_database_dialect(backend()->dialect());
   database->set_enable_drop_protection(enable_drop_protection());
   return absl::OkStatus();

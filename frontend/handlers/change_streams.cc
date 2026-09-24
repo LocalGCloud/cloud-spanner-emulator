@@ -205,8 +205,18 @@ absl::Status ChangeStreamsHandler::ExecuteInitialQuery(
         partition_table_, metadata().start_timestamp)};
     initial_query.change_stream_internal_lookup = metadata().change_stream_name;
     GOOGLESQL_ASSIGN_OR_RETURN(auto partition_results, txn->ExecuteSql(initial_query));
-    // Initial query is guaranteed to return at least 1 child partition record.
-    GOOGLESQL_RET_CHECK(!IsQueryResultEmpty(partition_results));
+    // Validation keeps start_timestamp at or after the change stream's
+    // creation time, when its first partitions start. If the recorded
+    // creation time is earlier than those partitions (for example in data
+    // persisted before database create times were recorded), no partition
+    // covers start_timestamp: report it as out of range, not internal.
+    if (IsQueryResultEmpty(partition_results)) {
+      return absl::OutOfRangeError(absl::Substitute(
+          "Specified start_timestamp is before the first partition of change "
+          "stream $0. Received start_timestamp: $1.",
+          metadata().change_stream_name,
+          absl::FormatTime(metadata().start_timestamp)));
+    }
 
     const bool mutable_key_range =
         metadata().partition_mode ==

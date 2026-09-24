@@ -252,16 +252,25 @@ it has no timestamp. Later batches without a timestamp use the replay time.
 `DatabaseManager::Creation::Build` gives the initial schema the database
 create time when its timestamp is unset.
 
-Known bug: `Database::ToProto` in `frontend/entities/database.cc` doesn't set
-`create_time`, so the `CreateDatabase` handler in
-`frontend/handlers/databases.cc` saves `createTime` as
-`1970-01-01T00:00:00+00:00`, and the first batch gets the same timestamp.
-After a restart, change streams created in `CreateDatabase` have a 1970
-creation time. A `start_timestamp` before their real creation time then
-passes validation, finds no partitions, and fails the initial query's
-`RET_CHECK` with `INTERNAL`.
+`DatabaseManager` picks one create time per database (`clock->Now()` for
+`CreateDatabase`, the restore time for `RestoreDatabase`). `Creation::Build`
+uses it as the initial batch's timestamp, and `Database::ToProto` in
+`frontend/entities/database.cc` returns it as `create_time`. The
+`CreateDatabase` handler in `frontend/handlers/databases.cc` saves that
+`create_time` as both `createTime` and the first batch's
+`schemaChangeTimestamp`, so live and replayed creation times match.
 
-Tests: `DatabaseTest.ChangeStreamCreationTimePersistsAndMatchesCreateTime`
+Builds before 2026-09-24 didn't set `create_time` in `ToProto`, so their
+metadata holds `1970-01-01T00:00:00+00:00`. Replaying it gives change streams
+from `CreateDatabase` a creation time earlier than their first partition. The
+initial query in `ChangeStreamsHandler::ExecuteInitialQuery`
+(`frontend/handlers/change_streams.cc`) then finds no partition covering
+`start_timestamp`, and returns `OUT_OF_RANGE` rather than failing a
+`RET_CHECK`.
+
+Tests: `PersistentDatabaseDdlTest.CreateTimeIsReportedPersistedAndReplayedForInitialStatements`
+(`frontend/handlers/databases_test.cc`),
+`DatabaseTest.ChangeStreamCreationTimePersistsAndMatchesCreateTime`
 (`backend/database/database_test.cc`),
 `DatabaseManagerTest.InitialSchemaUsesPersistedCreationTimestamp` and
 `DatabaseManagerTest.LegacyInitialTimestampDoesNotDuplicatePartitionsOnReplay`

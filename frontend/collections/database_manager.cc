@@ -942,10 +942,18 @@ DatabaseManager::Creation::Build(
       database_uri_, &project_id, &instance_id, &database_id));
   GOOGLESQL_RETURN_IF_ERROR(
       RejectDeletionMarkedRoot(manager_->data_dir_, database_uri_));
+  auto initial_schema = schema_change_operations;
+  if (!initial_schema.empty() &&
+      initial_schema.front().schema_change_timestamp ==
+          absl::InfinitePast()) {
+    // As above: the metadata journal records create_time as the initial
+    // batch's timestamp, so the live database must use it too.
+    initial_schema.front().schema_change_timestamp = create_time;
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::unique_ptr<backend::Database> backend_database,
       backend::Database::Create(manager_->clock_, database_id,
-                                schema_change_operations, id_counters,
+                                initial_schema, id_counters,
                                 database_uri_));
   database_ = std::make_shared<Database>(
       database_uri_, std::move(backend_database), create_time);

@@ -75,12 +75,10 @@ error. To use the flag in Docker, run `emulator_main` directly (see
 | Backup schedules | The full schedule | `backup_catalog.json` |
 
 At startup the emulator rebuilds each database's schema by replaying its DDL
-batches in order, each at its original commit timestamp. This keeps time-based
-schema state such as change stream creation times, except for the first batch
-of a database (the statements sent with `CreateDatabase`), which is replayed at
-a 1970 timestamp because the database's create time isn't recorded. Change
-streams created in `CreateDatabase` therefore lose their creation time; create
-them with `UpdateDatabaseDdl` instead.
+batches in order, each at its original commit timestamp. The first batch (the
+statements sent with `CreateDatabase`) runs at the database's create time,
+which is saved as `createTime` and returned by `GetDatabase`. This keeps
+time-based schema state such as change stream creation times.
 
 IAM policies are stored and returned, but the emulator doesn't enforce them.
 
@@ -304,6 +302,11 @@ whole emulator:
 - DDL saved before per-batch timestamps existed is replayed at the database's
   create time (first batch) or at the restart time (later batches). A change
   stream created in a later batch gets the restart time as its creation time.
+- Builds before 2026-09-24 saved every database's `createTime`, and its first
+  DDL batch's timestamp, as `1970-01-01T00:00:00+00:00`. Those databases keep
+  reporting 1970, and their change streams from `CreateDatabase` have a 1970
+  creation time. Nothing repairs this; recreate the database (or the data
+  directory) if you need the real time.
 - Replayed DDL skips some checks that were added after it was first accepted
   (currently the geo-partitioning placement checks), so databases created by
   older builds keep loading.

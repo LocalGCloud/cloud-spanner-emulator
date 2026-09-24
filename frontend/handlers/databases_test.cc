@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,7 +26,9 @@
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "backend/database/database.h"
+#include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/printer/print_ddl.h"
 #include "common/constants.h"
@@ -344,6 +347,88 @@ TEST_F(PersistentDatabaseDdlTest,
   MetadataStore disk_state(data_dir_.path());
   GOOGLESQL_ASSERT_OK(disk_state.Load());
   EXPECT_TRUE(disk_state.AllPendingDdlOperations().contains(database_name_));
+}
+
+TEST_F(PersistentDatabaseDdlTest,
+       CreateTimeIsReportedPersistedAndReplayedForInitialStatements) {
+  const std::string database_name = instance_name_ + "/databases/csdb";
+  database_api::CreateDatabaseRequest create_request;
+  create_request.set_parent(instance_name_);
+  create_request.set_create_statement("CREATE DATABASE `csdb`");
+  create_request.add_extra_statements(
+      "CREATE TABLE T (K INT64) PRIMARY KEY (K)");
+  create_request.add_extra_statements("CREATE CHANGE STREAM CS FOR T");
+  operations_api::Operation create_operation;
+  grpc::ClientContext create_context;
+  grpc::Status status = env_.database_admin_client()->CreateDatabase(
+      &create_context, create_request, &create_operation);
+  ASSERT_TRUE(status.ok()) << status.error_message();
+
+  // The change stream's creation time is the database's creation time.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<Database> database,
+      env_.server()->env()->database_manager()->GetDatabase(database_name));
+  const absl::Time live_creation_time = database->backend()
+                                            ->GetLatestSchema()
+                                            ->FindChangeStream("CS")
+                                            ->creation_time();
+  ASSERT_GT(live_creation_time, absl::UnixEpoch());
+
+  database_api::GetDatabaseRequest get_request;
+  get_request.set_name(database_name);
+  database_api::Database get_response;
+  grpc::ClientContext get_context;
+  status = env_.database_admin_client()->GetDatabase(&get_context, get_request,
+                                                     &get_response);
+  ASSERT_TRUE(status.ok()) << status.error_message();
+  ASSERT_TRUE(get_response.has_create_time());
+  EXPECT_EQ(absl::FromUnixSeconds(get_response.create_time().seconds()) +
+                absl::Nanoseconds(get_response.create_time().nanos()),
+            live_creation_time);
+
+  // metadata.json records the same time for the database and for its first
+  // schema-change batch, which startup replays.
+  MetadataStore disk_state(data_dir_.path());
+  GOOGLESQL_ASSERT_OK(disk_state.Load());
+  const std::map<std::string, MetadataStore::InstanceInfo> instances =
+      disk_state.instances();
+  const MetadataStore::DatabaseInfo& persisted =
+      instances.at(instance_name_).databases.at("csdb");
+  absl::Time persisted_create_time;
+  std::string parse_error;
+  ASSERT_TRUE(absl::ParseTime(absl::RFC3339_full, persisted.create_time,
+                              &persisted_create_time, &parse_error))
+      << parse_error;
+  EXPECT_EQ(persisted_create_time, live_creation_time);
+  ASSERT_FALSE(persisted.schema_change_batches.empty());
+  absl::Time persisted_batch_time;
+  ASSERT_TRUE(absl::ParseTime(
+      absl::RFC3339_full,
+      persisted.schema_change_batches.front().schema_change_timestamp,
+      &persisted_batch_time, &parse_error))
+      << parse_error;
+  EXPECT_EQ(persisted_batch_time, live_creation_time);
+
+  // Replay the persisted batch the way startup does. Use in-memory storage,
+  // since the live database still holds the on-disk files.
+  absl::SetFlag(&FLAGS_data_dir, "");
+  DatabaseManager restarted_manager(env_.server()->env()->clock());
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<DatabaseManager::Creation> creation,
+      restarted_manager.ReserveDatabase(database_name));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<Database> replayed,
+      creation->Build(
+          {backend::SchemaChangeOperation{
+              .statements = persisted.schema_change_batches.front().statements,
+              .schema_change_timestamp = persisted_batch_time,
+              .replaying_committed_ddl = true}},
+          backend::Database::IdCounterValues{}, persisted_create_time));
+  absl::SetFlag(&FLAGS_data_dir, data_dir_.path());
+  EXPECT_EQ(
+      replayed->backend()->GetLatestSchema()->FindChangeStream("CS")
+          ->creation_time(),
+      live_creation_time);
 }
 
 // Tests for CreateDatabase.

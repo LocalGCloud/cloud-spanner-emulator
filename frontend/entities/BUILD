@@ -63,6 +63,7 @@ cc_library(
     ],
     deps = [
         "//backend/database",
+        "//frontend/converters:time",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/time",

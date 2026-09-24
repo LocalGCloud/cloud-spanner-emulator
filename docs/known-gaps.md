@@ -16,7 +16,6 @@ confirmed against a running emulator; the others come from reading the code.
 
 | Area | Bug | Impact | Status |
 |------|-----|--------|--------|
-| Change streams (fork) | Change streams created in the `CreateDatabase` request lose their creation time after a restart, because a database's create time is never recorded (it's saved as 1970, and `GetDatabase` returns none). | A `start_timestamp` before the stream's real creation time returns `INTERNAL` instead of `OUT_OF_RANGE`. Create change streams with `UpdateDatabaseDdl` instead. | Reproduced |
 | Persistence (fork) | A database quarantined by `--repair_corrupted_databases` leaves a `.metadata-committed` marker behind, so the next start fails with "committed data but no metadata". | Delete the leftover database folder by hand before restarting. | From code |
 | Persistence (fork) | If a database that fails to restore has an IAM policy, restoring the policy fails and stops startup. | Defeats per-database fault isolation for that database. | From code |
 | Persistence (fork) | `DropDatabase` on an unavailable database deletes its data without a quarantine copy, and the database stays listed as `CREATING` until restart. Recreating the same name in that run gives an unusable database. | Restart before recreating the database. | From code |
@@ -57,7 +56,7 @@ confirmed against a running emulator; the others come from reading the code.
   `UpdateDatabaseDdl`.
 - `UpdateDatabase` accepts only `enable_drop_protection`, and `UpdateInstance`
   only display name, node count, processing units and labels.
-- `GetDatabase` doesn't report `create_time`, `version_retention_period`,
+- `GetDatabase` doesn't report `version_retention_period`,
   `earliest_version_time` or `default_leader`.
 - `DeleteInstance` doesn't check its databases' drop protection.
 - `encryption_config` is ignored by `CreateDatabase`, `CreateBackup` and
@@ -132,10 +131,13 @@ Details are in [Change streams](change-streams.md).
   and PostgreSQL ignores it (or fails, for `value_capture_type`). Use
   PostgreSQL's `RESET`, or set an explicit value.
 - Partition rotations run as transactions and can abort a user transaction.
-- Change streams created in `CreateDatabase` lose their creation time after
-  a restart; see [Known bugs](#known-bugs). For databases persisted before
-  2026-08-16 (commit `b8bf6521`), change streams created later get the restart
-  time as their creation time.
+- Data directories written before 2026-09-24 saved every database's create
+  time as 1970, so change streams created in `CreateDatabase` there have a
+  1970 creation time after a restart, and reading them from before their real
+  creation returns `OUT_OF_RANGE` with "before the first partition". Recreate
+  those databases to fix it. For databases persisted before 2026-08-16
+  (commit `b8bf6521`), change streams created later get the restart time as
+  their creation time.
 
 ## Schema and DDL
 

@@ -432,15 +432,16 @@ partition tokens from before the restart stay valid.
 - **Partitions** that were active at shutdown are replaced on the first pass
   after startup, about 20 seconds later.
 - **Creation times** are restored by replaying each DDL batch at its original
-  commit timestamp, with two exceptions:
-  - A change stream created in the `CreateDatabase` request (in
-    `extra_statements`) gets a creation time of 1970-01-01 after a restart,
-    because the database create time is saved as 1970-01-01. After that, a
-    `start_timestamp` earlier than the change stream's real creation time
-    fails with an `INTERNAL` error (`RET_CHECK failure ...
-    !IsQueryResultEmpty(partition_results)`) instead of `OUT_OF_RANGE`.
-    Create change streams with a separate `UpdateDatabaseDdl` request to
-    avoid this.
+  commit timestamp. A change stream created in the `CreateDatabase` request
+  (in `extra_statements`) gets the database's create time, which is also what
+  `GetDatabase` returns as `create_time`. Two kinds of older data directories
+  are exceptions:
+  - Builds before 2026-09-24 saved every database's create time as
+    1970-01-01. A change stream created in `CreateDatabase` in such a
+    directory has a 1970 creation time after a restart, so a
+    `start_timestamp` before its real creation passes validation and then
+    fails with `OUT_OF_RANGE` ("Specified start_timestamp is before the first
+    partition of change stream ..."). Recreate the database to fix it.
   - Metadata written by builds before commit `b8bf6521` (2026-08-16) has no
     DDL batch timestamps. A change stream from a later DDL batch in that
     metadata gets the restart time as its creation time, so you can't read
@@ -477,4 +478,3 @@ These views list change streams:
 | Setting an option to `NULL` doesn't reset it. | The old value still applies. Set an explicit value, or use `RESET` in PostgreSQL. |
 | The process that replaces partitions uses read-write transactions, and the emulator runs one read-write transaction at a time. | User transactions can abort now and then. Retry them, as the client libraries do. |
 | Records aren't deleted after `retention_period`. | Disk use grows with change volume. |
-| After a restart, change streams created in `CreateDatabase` lose their creation time. | An early `start_timestamp` returns `INTERNAL` instead of `OUT_OF_RANGE`. See [Restarts and persistence](#restarts-and-persistence). |
