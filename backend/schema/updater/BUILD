@@ -172,6 +172,7 @@ cc_library(
         "//backend/schema/verifiers:interleaving_verifiers",
         "//backend/schema/verifiers:placement_verifiers",
         "//backend/storage",
+        "//backend/storage:sequence_state_store",
         "//common:constants",
         "//common:errors",
         "//common:feature_flags",

@@ -38,6 +38,7 @@
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/versioned_catalog.h"
 #include "backend/schema/updater/schema_updater.h"
+#include "backend/storage/sequence_state_store.h"
 #include "backend/storage/storage.h"
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_only_transaction.h"
@@ -225,6 +226,9 @@ class Database {
 
   // Underlying storage for the database.
   std::unique_ptr<Storage> storage_;
+
+  // Sequence counters kept in storage_, so they survive restarts.
+  std::unique_ptr<SequenceStateStore> sequence_state_store_;
 
   // Lock management.
   std::unique_ptr<LockManager> lock_manager_;

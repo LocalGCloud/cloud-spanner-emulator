@@ -64,8 +64,9 @@ Both GoogleSQL and PostgreSQL DDL, through `CreateDatabase` and
 - secondary indexes, including unique, `NULL_FILTERED` and `STORING`;
 - foreign keys, check constraints, generated columns, hidden columns and
   column defaults;
-- sequences, `IDENTITY` columns and generated primary keys (positions don't
-  survive a restart; see [Known gaps](known-gaps.md#known-bugs));
+- sequences, `IDENTITY` columns and generated primary keys. With
+  `--data_dir`, sequences continue after a restart or backup restore instead
+  of repeating values; a restart can skip up to 1,000 counter values (fork);
 - views, named schemas, synonyms and SQL user-defined functions;
 - search indexes, `TOKENLIST` columns and vector indexes (validated; searches
   are exact);
@@ -141,9 +142,9 @@ Require `--data_dir`. See [Persistence](persistence.md#backups).
 
 ## Persistence (fork)
 
-With `--data_dir`, rows (every version), schema, instances, instance configs,
-instance partitions, IAM policies, long-running operations, backups and
-backup schedules survive restarts. Schema changes replay at their original
+With `--data_dir`, rows (every version), schema, sequence counters, instances,
+instance configs, instance partitions, IAM policies, long-running operations,
+backups and backup schedules survive restarts. Schema changes replay at their original
 timestamps, interrupted schema changes are finished or rolled back at
 startup, and a database that fails to restore is marked unavailable instead
 of stopping the emulator. See [Persistence](persistence.md), including its

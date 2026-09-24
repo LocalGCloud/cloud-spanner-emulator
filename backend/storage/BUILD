@@ -73,6 +73,36 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "sequence_state_store",
+    srcs = ["sequence_state_store.cc"],
+    hdrs = ["sequence_state_store.h"],
+    deps = [
+        ":storage",
+        "//backend/common:ids",
+        "//backend/datamodel:key",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_googlesql//googlesql/public:value",
+    ],
+)
+
+cc_test(
+    name = "sequence_state_store_test",
+    srcs = ["sequence_state_store_test.cc"],
+    deps = [
+        ":in_memory_storage",
+        ":sequence_state_store",
+        "@com_google_absl//absl/status",
+        "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_test(
     name = "in_memory_storage_test",
     srcs = [

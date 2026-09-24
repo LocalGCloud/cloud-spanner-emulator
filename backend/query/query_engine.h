@@ -159,6 +159,10 @@ class QueryEngine {
     function_catalog_.SetLatestSchema(schema);
   }
 
+  void SetSequenceStateStoreForFunctionCatalog(SequenceStateStore* store) {
+    function_catalog_.SetSequenceStateStore(store);
+  }
+
  private:
   static std::string GetTimeZone(const Schema* schema);
 

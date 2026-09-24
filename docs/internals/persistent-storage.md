@@ -424,6 +424,34 @@ schema change at a time, and `Shutdown()` runs only from the destructor, so the
 window is small. It isn't closed. Giving each submitter its own result slot,
 such as a promise per batch, would close it.
 
+## Sequence counters
+
+Sequence positions live in memory in `Sequence::SequenceLastValues`, keyed by
+a sequence ID that is a random UUID and changes every time the DDL is
+replayed. To survive restarts, `SequenceStateStore`
+(`backend/storage/sequence_state_store.cc`) keeps one row per sequence in the
+database's own storage, in the reserved table `_emulator_sequence_state`
+(generated table IDs always contain `:`, so it can't collide), keyed by the
+sequence's name with an `INT64` column `next_counter`.
+
+- `Sequence::GetNextSequenceValue` loads `next_counter` on a sequence's first
+  use in the process, and saves a counter 1,000 values ahead whenever the
+  in-memory counter passes the saved one (`SequenceSavedCounters`). Every
+  value handed out therefore came from a counter below the saved one.
+- `GET_INTERNAL_SEQUENCE_STATE` returns the saved counter until the sequence
+  is used in the process.
+- The schema updater forgets the saved counter (writes `NULL`) on live
+  `CREATE SEQUENCE`, `DROP SEQUENCE`, and `ALTER SEQUENCE` that sets the start
+  counter. Replayed DDL (`replaying_committed_ddl`) leaves it alone, so the
+  last incarnation's counter survives a replay of create, drop and recreate.
+- The row is written outside the transaction, like the in-memory counter, and
+  with the same durability as other row writes. Backups copy it with the rest
+  of the LevelDB directory.
+
+Tests: `backend/storage/sequence_state_store_test.cc`,
+`QueryEngineTest.SequenceContinuesFromSavedCounterAfterRestart` and
+`SequenceSchemaUpdaterTest.SavedCounterFollowsLiveDdlOnly`.
+
 ## Checkpoints
 
 `PersistentStorage::CreateCheckpoint(output_dir)` makes a point-in-time copy

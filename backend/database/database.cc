@@ -231,6 +231,10 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
   // set the latest schema to the function catalog here.
   database->query_engine_->SetLatestSchemaForFunctionCatalog(
       database->versioned_catalog_->GetLatestSchema());
+  database->sequence_state_store_ =
+      std::make_unique<SequenceStateStore>(database->storage_.get());
+  database->query_engine_->SetSequenceStateStoreForFunctionCatalog(
+      database->sequence_state_store_.get());
 
   database->storage_->SetVersionRetentionPeriod(
       database->versioned_catalog_->version_retention_period());

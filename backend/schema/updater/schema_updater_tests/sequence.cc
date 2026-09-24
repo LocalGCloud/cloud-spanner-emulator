@@ -31,6 +31,7 @@
 #include "backend/schema/catalog/view.h"
 #include "backend/schema/graph/schema_node.h"
 #include "backend/schema/updater/schema_updater_tests/base.h"
+#include "backend/storage/sequence_state_store.h"
 #include "common/errors.h"
 #include "tests/common/scoped_feature_flags_setter.h"
 
@@ -46,6 +47,7 @@ using database_api::DatabaseDialect::GOOGLE_STANDARD_SQL;
 using database_api::DatabaseDialect::POSTGRESQL;
 using ::google::spanner::emulator::test::ScopedEmulatorFeatureFlagsSetter;
 using testing::Optional;
+using ::googlesql_base::testing::IsOkAndHolds;
 
 class SequenceSchemaUpdaterTest : public SchemaUpdaterTest {
  public:
@@ -2502,6 +2504,56 @@ TEST_P(SequenceSchemaUpdaterTest, GSQLSequenceClause_AlterSequence) {
   EXPECT_EQ(sequence->DebugString(),
             "Sequence myseq. Sequence kind: BIT_REVERSED_POSITIVE\n  "
             "start_with_counter: 200");
+}
+
+TEST_P(SequenceSchemaUpdaterTest, SavedCounterFollowsLiveDdlOnly) {
+  if (GetParam() == POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  const std::string create = "CREATE SEQUENCE myseq BIT_REVERSED_POSITIVE";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::unique_ptr<const Schema> schema,
+                       CreateSchema({create}));
+  SequenceStateStore state_store(storage_.get());
+  GOOGLESQL_ASSERT_OK(state_store.Save("myseq", 1000));
+
+  // Replaying committed DDL at startup keeps the saved counter, even through
+  // statements that restart, drop and recreate the sequence.
+  {
+    SchemaUpdater updater;
+    SchemaChangeContext context{.type_factory = &type_factory_,
+                                .table_id_generator = &table_id_generator_,
+                                .column_id_generator = &column_id_generator_,
+                                .storage = storage_.get(),
+                                .pg_oid_assigner = pg_oid_assigner_.get()};
+    const std::vector<std::string> replayed = {
+        create,
+        "ALTER SEQUENCE myseq RESTART COUNTER WITH 5",
+        "DROP SEQUENCE myseq",
+        create,
+    };
+    GOOGLESQL_ASSERT_OK(updater.ValidateSchemaFromDDL(
+        SchemaChangeOperation{.statements = replayed,
+                              .database_dialect = GOOGLE_STANDARD_SQL,
+                              .replaying_committed_ddl = true},
+        context));
+  }
+  EXPECT_THAT(state_store.Load("myseq"), IsOkAndHolds(1000));
+
+  // Changing other options keeps it.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      schema, UpdateSchema(schema.get(), {"ALTER SEQUENCE myseq SKIP RANGE 1, 9"}));
+  EXPECT_THAT(state_store.Load("myseq"), IsOkAndHolds(1000));
+
+  // A live restart forgets it, so the sequence starts from the new counter.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      schema, UpdateSchema(schema.get(),
+                           {"ALTER SEQUENCE myseq RESTART COUNTER WITH 5"}));
+  EXPECT_THAT(state_store.Load("myseq"), IsOkAndHolds(std::nullopt));
+
+  // So does a live drop.
+  GOOGLESQL_ASSERT_OK(state_store.Save("myseq", 2000));
+  GOOGLESQL_ASSERT_OK(UpdateSchema(schema.get(), {"DROP SEQUENCE myseq"}).status());
+  EXPECT_THAT(state_store.Load("myseq"), IsOkAndHolds(std::nullopt));
 }
 
 }  // namespace test

@@ -17,6 +17,7 @@
 #include "backend/schema/catalog/sequence.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "googlesql/public/options.pb.h"
@@ -36,11 +37,21 @@
 #include "common/constants.h"
 #include "common/errors.h"
 #include "common/limits.h"
+#include "googlesql/base/status_macros.h"
 
 namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
+
+namespace {
+
+// How far ahead of the values handed out a sequence saves its counter. A
+// restart skips at most this many counter values, as production sequences can
+// also skip values.
+constexpr int64_t kSavedCounterAhead = 1000;
+
+}  // namespace
 
 absl::Status Sequence::Validate(SchemaValidationContext* context) const {
   return validate_(this, context);
@@ -68,13 +79,22 @@ absl::Status Sequence::DeepClone(SchemaGraphEditor* editor,
   return absl::OkStatus();
 }
 
-absl::StatusOr<googlesql::Value> Sequence::GetNextSequenceValue() const {
+absl::StatusOr<googlesql::Value> Sequence::GetNextSequenceValue(
+    SequenceStateStore* state_store) const {
   absl::MutexLock lock(SequenceMutex);
   if (!Sequence::SequenceLastValues.contains(id_)) {
     if (start_with_.has_value()) {
       Sequence::SequenceLastValues[id_] = start_with_.value();
     } else {
       Sequence::SequenceLastValues[id_] = kSequenceDefaultStartWith;
+    }
+    // Continue from the counter saved before a restart, if there is one.
+    if (state_store != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::optional<int64_t> saved_counter,
+                       state_store->Load(name_));
+      if (saved_counter.has_value()) {
+        Sequence::SequenceLastValues[id_] = *saved_counter;
+      }
     }
   }
   if (Sequence::SequenceLastValues[id_] < 0) {
@@ -109,14 +129,37 @@ absl::StatusOr<googlesql::Value> Sequence::GetNextSequenceValue() const {
       skip_range_min_.has_value() && skip_range_max_.has_value() &&
       (value <= skip_range_max_.value() && value >= skip_range_min_.value()));
 
+  // Keep the saved counter above every counter handed out.
+  if (state_store != nullptr) {
+    const int64_t next_counter = Sequence::SequenceLastValues[id_];
+    auto saved = Sequence::SequenceSavedCounters.find(id_);
+    if (saved == Sequence::SequenceSavedCounters.end() ||
+        next_counter > saved->second) {
+      const int64_t counter_to_save =
+          next_counter > kInt64Max - kSavedCounterAhead
+              ? kInt64Max
+              : next_counter + kSavedCounterAhead;
+      GOOGLESQL_RETURN_IF_ERROR(state_store->Save(name_, counter_to_save));
+      Sequence::SequenceSavedCounters[id_] = counter_to_save;
+    }
+  }
+
   return googlesql::Value::Int64(value);
 }
 
-googlesql::Value Sequence::GetInternalSequenceState() const {
+absl::StatusOr<googlesql::Value> Sequence::GetInternalSequenceState(
+    const SequenceStateStore* state_store) const {
   // If no sequence value has been retrieved before, then the current state is
   // NULL.
   absl::MutexLock lock(SequenceMutex);
   if (!Sequence::SequenceLastValues.contains(id_)) {
+    if (state_store != nullptr) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::optional<int64_t> saved_counter,
+                       state_store->Load(name_));
+      if (saved_counter.has_value()) {
+        return googlesql::Value::Int64(*saved_counter);
+      }
+    }
     return googlesql::Value::NullInt64();
   }
   return googlesql::Value::Int64(Sequence::SequenceLastValues[id_]);
@@ -124,6 +167,8 @@ googlesql::Value Sequence::GetInternalSequenceState() const {
 
 void Sequence::ResetSequenceLastValue() const {
   absl::MutexLock lock(SequenceMutex);
+  // Save the counter again on the next value, from the new start.
+  Sequence::SequenceSavedCounters.erase(id_);
   if (!Sequence::SequenceLastValues.contains(id_)) {
     return;
   }
@@ -141,6 +186,7 @@ void Sequence::RemoveSequenceFromLastValuesMap() const {
   if (it != Sequence::SequenceLastValues.end()) {
     Sequence::SequenceLastValues.erase(it);
   }
+  Sequence::SequenceSavedCounters.erase(id_);
 }
 
 }  // namespace backend

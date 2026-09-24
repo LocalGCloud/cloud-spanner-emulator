@@ -68,6 +68,7 @@ error. To use the flag in Docker, run `emulator_main` directly (see
 | Instance partitions | The full partition | `metadata.json` |
 | Databases | Dialect, create time, drop protection, and every committed DDL batch with its commit timestamp and proto descriptors | `metadata.json` |
 | ID counters | Table, column, and change stream ID counters per database | `metadata.json` |
+| Sequence counters | Each sequence's counter, including `IDENTITY` columns' sequences, saved up to 1,000 values ahead | The database's LevelDB directory (so backups carry it too) |
 | IAM policies | Policies on instances, databases, instance configs, instance partitions, backups, and backup schedules | `metadata.json` |
 | Long-running operations | Operations from creating or updating instances, instance configs, instance partitions, and databases; database DDL; moving instances; and creating, copying, and restoring backups | `backup_catalog.json` |
 | Backups | Backup metadata, plus a full copy of the database's LevelDB data | `backup_catalog.json` and `backups/` |
@@ -88,8 +89,6 @@ IAM policies are stored and returned, but the emulator doesn't enforce them.
 - Sessions. Clients need new sessions after a restart.
 - Open transactions. Anything not committed is lost.
 - In-flight change stream queries. Start them again after a restart.
-- Sequence and `IDENTITY` column positions. See
-  [Known limitations](#known-limitations).
 - Row versions older than the database's version retention period (default
   1 hour). See [Space usage](#space-usage).
 
@@ -324,13 +323,12 @@ whole emulator:
 
 ## Known limitations
 
-- **Sequences restart after a restart.** Sequence and `IDENTITY` column
-  positions are kept only in memory. After a restart, a sequence returns the
-  values it returned before, so inserts into tables keyed by
-  `GET_NEXT_SEQUENCE_VALUE` or an `IDENTITY` column fail with
-  `ALREADY_EXISTS`. Reproduced on 2026-09-24 with a `bit_reversed_positive`
-  sequence. Until it's fixed, generate keys in the application (for example
-  UUIDs) when the data must survive restarts.
+- **A restart can skip sequence values.** A sequence saves its counter up to
+  1,000 values ahead, so after a restart it continues from the saved counter
+  and never repeats a value, but it can skip up to 1,000 counter values.
+  `GET_INTERNAL_SEQUENCE_STATE` shows the jump. Cloud Spanner sequences can
+  also skip values. Databases persisted before this was added (2026-09-24)
+  have no saved counter; their sequences start over once, as before.
 - **IAM policy on an unavailable database stops startup.** Restoring an IAM
   policy checks that its resource exists. An `UNAVAILABLE` database fails that
   check, so a database-level policy on it turns an isolated failure into

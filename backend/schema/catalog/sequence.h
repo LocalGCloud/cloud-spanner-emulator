@@ -27,6 +27,7 @@
 #include "backend/common/ids.h"
 #include "backend/schema/ddl/operations.pb.h"
 #include "backend/schema/updater/schema_validation_context.h"
+#include "backend/storage/sequence_state_store.h"
 
 namespace google {
 namespace spanner {
@@ -70,12 +71,23 @@ class Sequence : public SchemaNode {
   inline static absl::flat_hash_map<std::string, int64_t> SequenceLastValues
       ABSL_GUARDED_BY(SequenceMutex);
 
-  // Returns the next sequence value according to the sequence kind.
-  absl::StatusOr<googlesql::Value> GetNextSequenceValue() const
+  // The counter saved in each sequence's SequenceStateStore, keyed like
+  // SequenceLastValues. Counters below it may have been handed out.
+  inline static absl::flat_hash_map<std::string, int64_t> SequenceSavedCounters
+      ABSL_GUARDED_BY(SequenceMutex);
+
+  // Returns the next sequence value according to the sequence kind. When
+  // `state_store` is set, the sequence continues from the counter saved there
+  // on its first use in this process, and saves its counter ahead of the
+  // values it hands out, so values aren't reused after a restart.
+  absl::StatusOr<googlesql::Value> GetNextSequenceValue(
+      SequenceStateStore* state_store = nullptr) const
       ABSL_LOCKS_EXCLUDED(SequenceMutex);
 
-  // Returns the internal current counter of the sequence.
-  googlesql::Value GetInternalSequenceState() const
+  // Returns the internal current counter of the sequence, or the counter saved
+  // in `state_store` if the sequence hasn't been used in this process.
+  absl::StatusOr<googlesql::Value> GetInternalSequenceState(
+      const SequenceStateStore* state_store = nullptr) const
       ABSL_LOCKS_EXCLUDED(SequenceMutex);
 
   // Reset the sequence's last value to the schema's current start_with_.

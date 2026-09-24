@@ -86,6 +86,7 @@ cc_library(
         "//backend/schema/parser:ddl_parser",
         "//backend/schema/updater:ddl_type_conversion",
         "//backend/schema/updater:schema_validation_context",
+        "//backend/storage:sequence_state_store",
         "//common:bit_reverse",
         "//common:constants",
         "//common:errors",

@@ -32,6 +32,7 @@
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "absl/cleanup/cleanup.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/flags/flag.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -51,6 +52,8 @@
 #include "backend/query/query_context.h"
 #include "backend/query/remote_udf/remote_udf_evaluator.h"
 #include "backend/schema/catalog/schema.h"
+#include "backend/storage/in_memory_storage.h"
+#include "backend/storage/sequence_state_store.h"
 #include "common/feature_flags.h"
 #include "common/limits.h"
 #include "tests/common/row_reader.h"
@@ -5054,6 +5057,74 @@ TEST_P(QueryEngineTest, UDFCallingSequenceInsert) {
 
   EXPECT_EQ(result.rows, nullptr);
   EXPECT_EQ(result.modified_row_count, 3);
+}
+
+TEST_P(QueryEngineTest, SequenceContinuesFromSavedCounterAfterRestart) {
+  if (GetParam() == POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  test::ScopedEmulatorFeatureFlagsSetter setter({
+      .enable_bit_reversed_positive_sequences = true,
+  });
+  const std::vector<std::string> ddl = {
+      R"(CREATE SEQUENCE seq OPTIONS(sequence_kind="bit_reversed_positive"))"};
+  InMemoryStorage storage;
+  SequenceStateStore state_store(&storage);
+  query_engine().SetSequenceStateStoreForFunctionCatalog(&state_store);
+  test::TestRowReader reader{{}};
+  MockRowWriter writer;
+
+  auto run_query = [&](const Schema* schema,
+                       const std::string& sql) -> absl::StatusOr<googlesql::Value> {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        QueryResult result,
+        query_engine().ExecuteSql(
+            Query{sql},
+            QueryContext{.schema = schema,
+                         .reader = &reader,
+                         .writer = &writer,
+                         .allow_read_write_only_functions = true}));
+    GOOGLESQL_ASSIGN_OR_RETURN(auto rows, GetAllColumnValues(std::move(result.rows)));
+    if (rows.size() != 1 || rows[0].size() != 1) {
+      return absl::InternalError("expected a single value");
+    }
+    return rows[0][0];
+  };
+
+  // Hand out values from the first "process".
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::unique_ptr<const Schema> schema,
+                       test::CreateSchemaFromDDL(ddl, type_factory()));
+  query_engine().SetLatestSchemaForFunctionCatalog(schema.get());
+  absl::flat_hash_set<int64_t> handed_out;
+  for (int i = 0; i < 3; ++i) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        googlesql::Value value,
+        run_query(schema.get(), "SELECT GET_NEXT_SEQUENCE_VALUE(SEQUENCE seq)"));
+    handed_out.insert(value.int64_value());
+  }
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::Value state_before,
+      run_query(schema.get(),
+                "SELECT GET_INTERNAL_SEQUENCE_STATE(SEQUENCE seq)"));
+
+  // A restart replays the DDL, which gives the sequence a new identity and
+  // no in-memory counter. It must continue from the saved counter.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::unique_ptr<const Schema> restarted,
+                       test::CreateSchemaFromDDL(ddl, type_factory()));
+  query_engine().SetLatestSchemaForFunctionCatalog(restarted.get());
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::Value state_after,
+      run_query(restarted.get(),
+                "SELECT GET_INTERNAL_SEQUENCE_STATE(SEQUENCE seq)"));
+  ASSERT_FALSE(state_after.is_null());
+  EXPECT_GE(state_after.int64_value(), state_before.int64_value());
+  for (int i = 0; i < 3; ++i) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        googlesql::Value value, run_query(restarted.get(),
+                               "SELECT GET_NEXT_SEQUENCE_VALUE(SEQUENCE seq)"));
+    EXPECT_FALSE(handed_out.contains(value.int64_value()))
+        << "value handed out again after restart: " << value.int64_value();
+  }
 }
 
 TEST_P(QueryEngineTest, UDFUsingIndexInScalarSubquery) {

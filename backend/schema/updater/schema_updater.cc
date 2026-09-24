@@ -118,6 +118,7 @@
 #include "backend/schema/verifiers/foreign_key_verifiers.h"
 #include "backend/schema/verifiers/interleaving_verifiers.h"
 #include "backend/schema/verifiers/placement_verifiers.h"
+#include "backend/storage/sequence_state_store.h"
 #include "backend/storage/storage.h"
 #include "common/constants.h"
 #include "common/errors.h"
@@ -608,6 +609,10 @@ class SchemaUpdaterImpl {
       const Table* table);
   absl::Status AlterSequence(const ddl::AlterSequence& alter_sequence,
                              const Sequence* current_sequence);
+  // Forgets the counter a sequence saved in storage, when a live schema change
+  // creates, restarts or drops it. Replayed DDL keeps the saved counter, which
+  // is what lets a sequence continue where it left off after a restart.
+  absl::Status ForgetSavedSequenceCounter(const std::string& sequence_name);
   absl::Status AlterNamedSchema(const ddl::AlterSchema& alter_schema);
 
   absl::Status AlterLocalityGroup(
@@ -5123,6 +5128,7 @@ absl::StatusOr<const Sequence*> SchemaUpdaterImpl::CreateSequence(
         }));
   }
 
+  GOOGLESQL_RETURN_IF_ERROR(ForgetSavedSequenceCounter(sequence->Name()));
   GOOGLESQL_RETURN_IF_ERROR(AddNode(builder.build()));
   return sequence;
 }
@@ -5516,7 +5522,22 @@ absl::Status SchemaUpdaterImpl::AlterSequence(
         // Set sequence options
         return SetSequenceOptions(repeated_set_options, editor);
       }));
+  // Setting the start counter restarts the sequence from it.
+  for (const ddl::SetOption& option : repeated_set_options) {
+    if (option.option_name() == kSequenceStartWithCounterOptionName) {
+      GOOGLESQL_RETURN_IF_ERROR(ForgetSavedSequenceCounter(sequence_name));
+      break;
+    }
+  }
   return absl::OkStatus();
+}
+
+absl::Status SchemaUpdaterImpl::ForgetSavedSequenceCounter(
+    const std::string& sequence_name) {
+  if (replaying_committed_ddl_ || storage_ == nullptr) {
+    return absl::OkStatus();
+  }
+  return SequenceStateStore(storage_).Remove(sequence_name);
 }
 
 absl::Status SchemaUpdaterImpl::AlterNamedSchema(
@@ -6408,6 +6429,7 @@ absl::Status SchemaUpdaterImpl::DropChangeStream(
 absl::Status SchemaUpdaterImpl::DropSequence(const Sequence* drop_sequence) {
   global_names_.RemoveName(drop_sequence->Name());
   drop_sequence->RemoveSequenceFromLastValuesMap();
+  GOOGLESQL_RETURN_IF_ERROR(ForgetSavedSequenceCounter(drop_sequence->Name()));
   GOOGLESQL_RETURN_IF_ERROR(DropNode(drop_sequence));
   return absl::OkStatus();
 }

@@ -47,6 +47,7 @@ cc_library(
         "//backend/storage",
         "//backend/storage:in_memory_storage",
         "//backend/storage:persistent_storage",
+        "//backend/storage:sequence_state_store",
         "//backend/transaction:read_only_transaction",
         "//backend/transaction:read_write_transaction",
         "//common:clock",

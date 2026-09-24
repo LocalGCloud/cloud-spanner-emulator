@@ -38,8 +38,9 @@ above. Appending only flags fails to start. All flags are listed in
 
 The full list, with limits for each, is in [Capabilities](docs/capabilities.md).
 
-- **Persistence** with `--data_dir`: rows, schema, instances, instance
-  partitions, IAM policies, operations and backups survive restarts. A
+- **Persistence** with `--data_dir`: rows, schema, sequence counters,
+  instances, instance partitions, IAM policies, operations and backups survive
+  restarts. A
   database that fails to restore is isolated instead of stopping the emulator.
   See [Persistence](docs/persistence.md).
 - **Backups and restore**, backup schedules (stored, not run), custom instance

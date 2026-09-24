@@ -93,6 +93,7 @@ cc_library(
         "//backend/schema/printer:print_ddl",
         "//backend/schema/updater:global_schema_names",
         "//backend/schema/updater:schema_updater",
+        "//backend/storage:sequence_state_store",
         "//common:errors",
         "//common:feature_flags",
         "//tests/common:proto_matchers",

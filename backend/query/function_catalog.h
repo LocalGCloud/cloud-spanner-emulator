@@ -29,6 +29,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "backend/common/case.h"
 #include "backend/schema/catalog/schema.h"
+#include "backend/storage/sequence_state_store.h"
 
 namespace google {
 namespace spanner {
@@ -67,6 +68,12 @@ class FunctionCatalog {
   }
 
   const backend::Schema* GetLatestSchema() const { return latest_schema_; }
+
+  // Where sequence functions keep counters across restarts. Unset (the
+  // default) keeps them in memory only.
+  void SetSequenceStateStore(backend::SequenceStateStore* store) {
+    sequence_state_store_ = store;
+  }
 
  private:
   void AddGoogleSQLBuiltInFunctions(googlesql::TypeFactory* type_factory);
@@ -110,6 +117,8 @@ class FunctionCatalog {
   // A pointer to the latest schema, since some functions need to access it
   // (e.g. sequence functions).
   const backend::Schema* latest_schema_;
+  // Not owned. Set by the database that owns this catalog.
+  backend::SequenceStateStore* sequence_state_store_ = nullptr;
 };
 
 }  // namespace backend

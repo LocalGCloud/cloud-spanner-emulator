@@ -4,6 +4,27 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] Sequences Continue After Restarts
+
+### Fixed
+- With `--data_dir`, a sequence started over after a restart and returned
+  values it had already returned, so inserts into tables keyed by
+  `GET_NEXT_SEQUENCE_VALUE` or an `IDENTITY` column failed with
+  `ALREADY_EXISTS`. Sequence positions were kept only in memory, keyed by a
+  random ID that changes when the DDL is replayed. Each database now keeps its
+  sequences' counters in its own storage (`backend/storage/sequence_state_store.cc`),
+  saved up to 1,000 values ahead, so a sequence continues after a restart or a
+  backup restore and a restart can skip up to 1,000 counter values. Live
+  `CREATE`, `DROP` and start-counter `ALTER` statements reset the saved
+  counter; replayed DDL doesn't. Databases persisted before this change start
+  over once, as before, because nothing was saved for them.
+- Tests: `backend/storage:sequence_state_store_test`, a restart simulation in
+  `backend/query:query_engine_test`, and the live-versus-replay rules in
+  `backend/schema/updater:schema_updater_test`. Checked end to end over REST
+  in both dialects: inserts after a restart, into a restored backup, and after
+  a second restart all succeed with distinct keys (the previous build failed
+  every insert after a restart).
+
 ## [2026-09-24] Documentation Review
 
 ### Changed
@@ -34,8 +55,8 @@ Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
   `UpdateDatabaseDdl`. Streams created in the `CreateDatabase` request get a
   1970 creation time after a restart (known bug; the 2026-08-16 entry and the
   README said creation times always survive).
-- Sequence and `IDENTITY` positions don't persist, so sequences reuse values
-  after a restart (known bug).
+- Sequence and `IDENTITY` positions didn't persist, so sequences reused values
+  after a restart (fixed in the entry above).
 - The change stream docs described queries, limits and internals that don't
   match the code (for example, a `NULL` partition token returns only child
   partition records, heartbeats allow 100–300000 ms, and start times can be at

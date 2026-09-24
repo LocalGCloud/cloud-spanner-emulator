@@ -16,7 +16,6 @@ confirmed against a running emulator; the others come from reading the code.
 
 | Area | Bug | Impact | Status |
 |------|-----|--------|--------|
-| Persistence (fork) | Sequence positions aren't persisted. After a restart with `--data_dir`, a sequence starts over and returns values it already returned. A restored backup likely behaves the same way (not reproduced). | Inserts into tables keyed by `GET_NEXT_SEQUENCE_VALUE` or an `IDENTITY` column fail with `ALREADY_EXISTS` after a restart. | Reproduced |
 | Change streams (fork) | Change streams created in the `CreateDatabase` request lose their creation time after a restart, because a database's create time is never recorded (it's saved as 1970, and `GetDatabase` returns none). | A `start_timestamp` before the stream's real creation time returns `INTERNAL` instead of `OUT_OF_RANGE`. Create change streams with `UpdateDatabaseDdl` instead. | Reproduced |
 | Persistence (fork) | A database quarantined by `--repair_corrupted_databases` leaves a `.metadata-committed` marker behind, so the next start fails with "committed data but no metadata". | Delete the leftover database folder by hand before restarting. | From code |
 | Persistence (fork) | If a database that fails to restore has an IAM policy, restoring the policy fails and stops startup. | Defeats per-database fault isolation for that database. | From code |
@@ -87,8 +86,6 @@ confirmed against a running emulator; the others come from reading the code.
 
 Details and workarounds are in [Persistence](persistence.md#known-limitations).
 
-- Sequence and `IDENTITY` counters aren't persisted; see
-  [Known bugs](#known-bugs).
 
 - Row writes aren't synced to disk. Data survives a process crash but not an
   OS crash or power loss.

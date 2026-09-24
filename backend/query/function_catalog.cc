@@ -1028,7 +1028,7 @@ FunctionCatalog::GetInternalSequenceStateFunction(
     if (sequence == nullptr) {
       return error::SequenceNotFound(sequence_name);
     }
-    return sequence->GetInternalSequenceState();
+    return sequence->GetInternalSequenceState(sequence_state_store_);
   };
 
   googlesql::FunctionOptions function_options;
@@ -1088,7 +1088,7 @@ FunctionCatalog::GetTableColumnIdentityStateFunction(
     GOOGLESQL_RET_CHECK(column->sequences_used().size() == 1);
     const Sequence* sequence =
         static_cast<const Sequence*>(column->sequences_used().at(0));
-    return sequence->GetInternalSequenceState();
+    return sequence->GetInternalSequenceState(sequence_state_store_);
   };
 
   googlesql::FunctionOptions function_options;
@@ -1138,7 +1138,7 @@ FunctionCatalog::GetNextSequenceValueFunction(const std::string& catalog_name) {
     if (sequence == nullptr) {
       return error::SequenceNotFound(sequence_name);
     }
-    return sequence->GetNextSequenceValue();
+    return sequence->GetNextSequenceValue(sequence_state_store_);
   };
 
   googlesql::FunctionOptions function_options;

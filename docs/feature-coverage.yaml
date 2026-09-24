@@ -916,7 +916,7 @@
       "id": "schema.sequences",
       "category": "Schema and DDL",
       "feature": "Sequences",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -928,17 +928,20 @@
       "evidence": {
         "implementation": [
           "backend/schema/updater/schema_updater.cc",
-          "backend/schema/catalog/sequence.cc"
+          "backend/schema/catalog/sequence.cc",
+          "backend/storage/sequence_state_store.cc"
         ],
         "tests": [
           "backend/schema/updater/schema_updater_tests/sequence.cc",
           "tests/conformance/cases/sequence_read_write.cc",
-          "tests/conformance/cases/query.cc"
+          "tests/conformance/cases/query.cc",
+          "backend/storage/sequence_state_store_test.cc",
+          "backend/query/query_engine_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE/ALTER/DROP SEQUENCE (bit_reversed_positive, skip ranges, start_with_counter), GET_NEXT_SEQUENCE_VALUE and GET_INTERNAL_SEQUENCE_STATE work in both dialects and in DML, defaults and views. Gap: the sequence counter lives only in process memory (Sequence::SequenceLastValues) and is not persisted with --data_dir or included in backups, so after a restart or restore values restart from start_with_counter and can collide with existing keys (untested)."
+      "notes": "CREATE/ALTER/DROP SEQUENCE (bit_reversed_positive, skip ranges, start_with_counter), GET_NEXT_SEQUENCE_VALUE and GET_INTERNAL_SEQUENCE_STATE work in both dialects and in DML, defaults and views. With --data_dir, each sequence saves its counter in the database's storage up to 1,000 values ahead, so it continues after a restart or backup restore instead of repeating values; a restart can skip up to 1,000 counter values."
     },
     {
       "id": "schema.udfs",
@@ -3442,7 +3445,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "With --data_dir (accepted by emulator_main and gateway_main), row data (LevelDB, multi-version), schema history, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, and change stream creation times survive restarts, and metadata writes are atomic and journaled. Not persisted: sessions, in-flight transactions and queries, and sequence and identity-column counters, which restart from start_with_counter and can generate keys that collide with existing rows; old row versions are dropped after the version retention period (default 1 hour). The startup restore path in emulator_main is covered only by component tests."
+      "notes": "With --data_dir (accepted by emulator_main and gateway_main), row data (LevelDB, multi-version), schema history, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change stream creation times survive restarts, and metadata writes are atomic and journaled. Not persisted: sessions and in-flight transactions and queries; old row versions are dropped after the version retention period (default 1 hour). The startup restore path in emulator_main is covered only by component tests."
     },
     {
       "id": "emulator.startup",
