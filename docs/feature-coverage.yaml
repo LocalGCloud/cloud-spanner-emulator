@@ -3030,11 +3030,12 @@
           "frontend/persistence/metadata_store_test.cc"
         ],
         "documentation": [
-          "README.md"
+          "README.md",
+          "docs/persistence.md"
         ]
       },
       "verification": "tested",
-      "notes": "SetIamPolicy and GetIamPolicy store and return policies for instances, databases, instance partitions, instance configs, backups, and backup schedules; policies persist with --data_dir and are removed with their resource. The etag is generated only when the caller omits one and is never checked, TestIamPermissions returns every requested permission, and no policy is ever enforced."
+      "notes": "SetIamPolicy and GetIamPolicy store and return policies for instances, databases, instance partitions, instance configs, backups, and backup schedules; policies persist with --data_dir and are removed with their resource. At startup a database that failed to restore keeps its policy, and a policy whose resource no longer exists is dropped with a warning instead of stopping the emulator. The etag is generated only when the caller omits one and is never checked, TestIamPermissions returns every requested permission, and no policy is ever enforced."
     },
     {
       "id": "security.database_roles",

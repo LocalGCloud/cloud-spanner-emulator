@@ -220,11 +220,28 @@ A database that fails to restore doesn't stop the emulator. The emulator logs
   queries), DDL, and backups.
 - Its data and metadata stay on disk so you can inspect them. It is retried at
   every startup.
+- It keeps its IAM policies. `GetIamPolicy`, `SetIamPolicy` and
+  `TestIamPermissions` work on it as on any other database.
 
 Common reasons are a missing or unreadable `storage/` directory
 (`Persisted database storage is missing or unreadable for <database>`) and a
 failed schema replay or data check (`Failed to restore database <database>:
 <reason>`).
+
+### IAM policies at startup
+
+IAM policies are restored after every instance, database, instance partition,
+custom instance config, backup and backup schedule:
+
+- A policy on an unavailable database is restored like any other.
+- A policy whose resource no longer exists (for example a hand-edited
+  `metadata.json`, or a resource removed while the emulator was stopped) is
+  dropped. The emulator logs `Dropping the persisted IAM policy for
+  <resource> because the resource no longer exists` at `WARNING` level,
+  starts normally, and removes the policy from `metadata.json` at the next
+  save.
+- A policy whose resource name is malformed stops the emulator (see
+  [Startup errors](#startup-errors-that-stop-the-emulator)).
 
 ### Quarantine
 
@@ -269,7 +286,7 @@ whole emulator:
 | Old-layout data that matches databases in more than one instance | `Legacy database storage ... is ambiguous` |
 | A recorded DDL change for a database that isn't in the metadata | `Pending DDL operation references missing database` |
 | An instance, custom instance config, or instance partition that can't be restored | `Failed to restore instance`, `Failed to restore instance config`, `Failed to restore instance partition`, `Persisted instance partition is not READY` |
-| An IAM policy whose resource is missing or unavailable | `Persisted IAM policy references an invalid or missing resource` |
+| An IAM policy whose resource name is malformed | `Persisted IAM policy references an invalid or missing resource` |
 | An operation that can't be restored | `Failed to restore operation` |
 
 ## Upgrades and compatibility
@@ -322,11 +339,6 @@ whole emulator:
   `GET_INTERNAL_SEQUENCE_STATE` shows the jump. Cloud Spanner sequences can
   also skip values. Databases persisted before this was added (2026-09-24)
   have no saved counter; their sequences start over once, as before.
-- **IAM policy on an unavailable database stops startup.** Restoring an IAM
-  policy checks that its resource exists. An `UNAVAILABLE` database fails that
-  check, so a database-level policy on it turns an isolated failure into
-  `Persisted IAM policy references an invalid or missing resource`, and the
-  emulator exits. (From reading the code, not reproduced.)
 - **`DropDatabase` on an unavailable database.** It deletes the database's
   data and metadata permanently, with no quarantine copy. The database stays
   listed as `CREATING` until the next restart. A database created with the

@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -82,7 +83,8 @@ class ServerEnv {
   BackupCatalog* backup_catalog() { return backup_catalog_.get(); }
 
   // Validates a canonical IAM resource name and requires the referenced
-  // emulator resource to exist.
+  // emulator resource to exist. A database that failed to restore still
+  // exists: it's listed as CREATING and keeps its IAM policy.
   absl::Status ValidateIamResource(const std::string& resource) {
     absl::string_view project_id;
     absl::string_view instance_id;
@@ -95,7 +97,12 @@ class ServerEnv {
             .ok() &&
         MakeDatabaseUri(MakeInstanceUri(project_id, instance_id), resource_id) ==
             resource) {
-      return database_manager_->GetDatabase(resource).status();
+      absl::Status status = database_manager_->GetDatabase(resource).status();
+      if (!status.ok() &&
+          database_manager_->UnavailableReason(resource).has_value()) {
+        return absl::OkStatus();
+      }
+      return status;
     }
     if (ParseInstancePartitionUri(resource, &project_id, &instance_id,
                                   &resource_id)
@@ -135,6 +142,33 @@ class ServerEnv {
     }
     return absl::InvalidArgumentError(
         absl::StrCat("Unsupported or malformed IAM resource: ", resource));
+  }
+
+  // Loads the IAM policies saved in metadata.json at startup, after every
+  // resource they can refer to has been restored. A policy whose resource no
+  // longer exists is dropped with a warning, and the next metadata save
+  // removes it from disk. A malformed resource name is DATA_LOSS. Returns how
+  // many policies were loaded.
+  absl::StatusOr<int> RestoreIamPoliciesFromMetadata() {
+    int restored = 0;
+    for (const auto& [resource, policy] : metadata_store_->AllIamPolicies()) {
+      absl::Status resource_status = ValidateIamResource(resource);
+      if (absl::IsNotFound(resource_status)) {
+        ABSL_LOG(WARNING) << "Dropping the persisted IAM policy for "
+                          << resource << " because the resource no longer "
+                          << "exists: " << resource_status.message();
+        metadata_store_->RemoveIamPolicy(resource);
+        continue;
+      }
+      if (!resource_status.ok()) {
+        return absl::DataLossError(absl::StrCat(
+            "Persisted IAM policy references an invalid or missing resource ",
+            resource, ": ", resource_status.message()));
+      }
+      SetIamPolicy(resource, policy);
+      ++restored;
+    }
+    return restored;
   }
 
   void SetIamPolicy(const std::string& resource,

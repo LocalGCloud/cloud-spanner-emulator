@@ -289,6 +289,67 @@ TEST(PolicyPersistenceTest, PoliciesHydrateIntoNewEnvironment) {
   }
 }
 
+TEST(PolicyPersistenceTest,
+     RestoreKeepsUnavailableDatabasePoliciesAndDropsMissingOnes) {
+  PolicyPersistentDataDirectory data_dir;
+  const std::string instance = "projects/p/instances/i1";
+  const std::string unavailable = instance + "/databases/broken";
+  const std::string missing = instance + "/databases/gone";
+
+  iam_api::Policy policy;
+  policy.set_version(1);
+  policy.set_etag("broken-etag");
+  auto* binding = policy.add_bindings();
+  binding->set_role("roles/spanner.databaseUser");
+  binding->add_members("user:database@example.com");
+
+  {
+    test::TestEnv first;
+    CreatePolicyResource(&first, "projects/p", "i1", "broken");
+    iam_api::SetIamPolicyRequest request;
+    request.set_resource(unavailable);
+    *request.mutable_policy() = policy;
+    iam_api::Policy response;
+    grpc::ClientContext context;
+    ASSERT_TRUE(first.database_admin_client()
+                    ->SetIamPolicy(&context, request, &response)
+                    .ok());
+    // A policy whose resource no longer exists, as older or hand-edited
+    // metadata can hold.
+    MetadataStore* metadata = first.server()->env()->metadata_store();
+    metadata->SetIamPolicy(missing, policy);
+    GOOGLESQL_ASSERT_OK(metadata->Save());
+  }
+
+  test::TestEnv restored;
+  ServerEnv* env = restored.server()->env();
+  MetadataStore* metadata = env->metadata_store();
+  GOOGLESQL_ASSERT_OK(metadata->Load());
+  CreatePolicyResource(&restored, "projects/p", "i1");
+  // The database failed to restore at this startup.
+  env->database_manager()->MarkDatabaseUnavailable(unavailable,
+                                                   "injected restore failure");
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(const int restored_policies,
+                                 env->RestoreIamPoliciesFromMetadata());
+  EXPECT_EQ(restored_policies, 1);
+
+  // The unavailable database keeps its policy, and the API still serves it.
+  iam_api::GetIamPolicyRequest get_request;
+  get_request.set_resource(unavailable);
+  iam_api::Policy get_response;
+  grpc::ClientContext get_context;
+  grpc::Status get_status = restored.database_admin_client()->GetIamPolicy(
+      &get_context, get_request, &get_response);
+  ASSERT_TRUE(get_status.ok()) << get_status.error_message();
+  EXPECT_EQ(get_response.SerializeAsString(), policy.SerializeAsString());
+  EXPECT_TRUE(metadata->GetIamPolicy(unavailable).has_value());
+
+  // The missing resource's policy is dropped, from memory and from metadata.
+  EXPECT_FALSE(env->GetIamPolicy(missing).has_value());
+  EXPECT_FALSE(metadata->GetIamPolicy(missing).has_value());
+}
+
 TEST(PolicyPersistenceTest, ResourceDeletionRemovesPolicies) {
   PolicyPersistentDataDirectory data_dir;
   test::TestEnv env;

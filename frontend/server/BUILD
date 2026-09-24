@@ -133,6 +133,7 @@ cc_library(
         "//frontend/persistence:backup_catalog",
         "//frontend/persistence:metadata_store",
         "@com_github_grpc_grpc//:grpc++",
+        "@com_google_absl//absl/log",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",

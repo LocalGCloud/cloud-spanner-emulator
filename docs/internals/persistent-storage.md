@@ -211,16 +211,18 @@ server starts. Any error it returns exits the process with `EXIT_FAILURE`.
       removes the metadata entry and IAM policies. Otherwise
       `DatabaseManager::MarkDatabaseUnavailable` records the reason.
 14. Restore instance partitions.
-15. Restore IAM policies. `Environment::ValidateIamResource` must find each
-    resource.
+15. Restore IAM policies (`ServerEnv::RestoreIamPoliciesFromMetadata` in
+    `frontend/server/environment.h`). `ServerEnv::ValidateIamResource` counts
+    a database marked unavailable in step 13 as existing, so its policy is
+    restored. A policy whose resource is `NOT_FOUND` is logged, skipped and
+    removed from the in-memory `MetadataStore`, so the next save drops it. A
+    malformed resource name is `DATA_LOSS`.
 
-Only step 13 is isolated per database. Every other failure is fatal.
+Only step 13 is isolated per database, and step 15 skips policies whose
+resource is gone. Every other failure is fatal.
 
 Known interactions, found by reading the code and not reproduced:
 
-- Step 15 calls `DatabaseManager::GetDatabase`, which returns
-  `FAILED_PRECONDITION` for a database marked unavailable in step 13. An IAM
-  policy on such a database therefore fails the whole startup.
 - `DatabaseManager` never clears `unavailable_databases_`. `DropDatabase` on an
   unavailable database removes its metadata and root, but the name stays in
   that map, and `GetDatabase` keeps rejecting it until a restart.

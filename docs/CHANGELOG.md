@@ -4,6 +4,31 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] IAM Policies No Longer Stop Startup
+
+### Fixed
+- With `--data_dir`, if a database failed to restore and had an IAM policy,
+  startup stopped with `Persisted IAM policy references an invalid or missing
+  resource`, which defeated per-database fault isolation. Restoring a policy
+  checked its resource with `DatabaseManager::GetDatabase`, which rejects
+  unavailable databases. An unavailable database now counts as an existing
+  resource for IAM, so its policy is restored, and `GetIamPolicy`,
+  `SetIamPolicy` and `TestIamPermissions` work on it.
+
+### Changed
+- A persisted IAM policy whose resource no longer exists is dropped with a
+  `WARNING` (`Dropping the persisted IAM policy for <resource> ...`) instead
+  of stopping the emulator, and the next metadata save removes it from disk.
+  A malformed resource name still stops startup.
+- The restore loop moved from `emulator_main` into
+  `ServerEnv::RestoreIamPoliciesFromMetadata` so it can be tested.
+- Tests: `PolicyPersistenceTest.RestoreKeepsUnavailableDatabasePoliciesAndDropsMissingOnes`
+  in `frontend/handlers:policies_test` (fails before the fix with the
+  `DATA_LOSS` above). Checked end to end over REST: a corrupted database with a
+  policy, plus a hand-added policy for a database that doesn't exist, no
+  longer stop startup; the corrupted database's policy is served and the
+  orphaned one is removed from `metadata.json`.
+
 ## [2026-09-24] Quarantine No Longer Blocks the Next Start
 
 ### Fixed

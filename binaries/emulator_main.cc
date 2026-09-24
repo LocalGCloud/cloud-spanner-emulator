@@ -631,17 +631,8 @@ static absl::Status RestoreFromMetadata(Server* server) {
     ++restored_partitions;
   }
 
-  int restored_policies = 0;
-  for (const auto& [resource, policy] : ms->AllIamPolicies()) {
-    absl::Status resource_status = env->ValidateIamResource(resource);
-    if (!resource_status.ok()) {
-      return absl::DataLossError(absl::StrCat(
-          "Persisted IAM policy references an invalid or missing resource ",
-          resource, ": ", resource_status.message()));
-    }
-    env->SetIamPolicy(resource, policy);
-    ++restored_policies;
-  }
+  GOOGLESQL_ASSIGN_OR_RETURN(const int restored_policies,
+                             env->RestoreIamPoliciesFromMetadata());
 
   ABSL_LOG(INFO) << "Restored " << restored_instances << " instance(s), "
                  << restored_databases << " database(s), "
