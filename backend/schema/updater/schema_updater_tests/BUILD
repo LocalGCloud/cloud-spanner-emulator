@@ -78,6 +78,7 @@ cc_library(
         "model_test.cc",
         "named_schema.cc",
         "oid_assignment.cc",
+        "placement.cc",
         "property_graph_test.cc",
         "sequence.cc",
         "table.cc",
@@ -86,6 +87,7 @@ cc_library(
     ],
     deps = [
         ":base",
+        "//backend/datamodel:key",
         "//backend/schema/catalog:schema",
         "//backend/schema/graph:schema_node",
         "//backend/schema/printer:print_ddl",

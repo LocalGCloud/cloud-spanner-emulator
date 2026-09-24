@@ -80,6 +80,7 @@
 #include "backend/query/insert_on_conflict_dml_execution.h"
 #include "backend/query/partitionability_validator.h"
 #include "backend/query/partitioned_dml_validator.h"
+#include "backend/query/placement_dml_validator.h"
 #include "backend/query/query_context.h"
 #include "backend/query/query_engine_options.h"
 #include "backend/query/query_engine_util.h"
@@ -1192,6 +1193,34 @@ absl::StatusOr<std::string> QueryEngine::GetDmlTargetTable(
   return *visitor.target_table();
 }
 
+absl::StatusOr<std::optional<std::string>>
+QueryEngine::GetPlacementInsertOrDeleteTable(const Query& query,
+                                             const Schema* schema) const {
+  if (!HasPlacementTables(schema)) {
+    return std::nullopt;
+  }
+  Query normalized_query;
+  NormalizeParameterNames(schema, query, &normalized_query);
+  GOOGLESQL_ASSIGN_OR_RETURN(auto analyzer_options,
+                   MakeAnalyzerOptionsWithParameters(
+                       normalized_query.declared_params,
+                       GetTimeZone(function_catalog_.GetLatestSchema())));
+  analyzer_options.set_prune_unused_columns(true);
+  Catalog catalog(schema, &function_catalog_, type_factory_, analyzer_options);
+  std::unique_ptr<const googlesql::AnalyzerOutput> analyzer_output;
+  if (schema->dialect() == database_api::DatabaseDialect::POSTGRESQL) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        analyzer_output,
+        AnalyzePostgreSQL(normalized_query.sql, &catalog, analyzer_options,
+                          type_factory_, &function_catalog_));
+  } else {
+    GOOGLESQL_ASSIGN_OR_RETURN(analyzer_output,
+                     Analyze(normalized_query.sql, &catalog, analyzer_options,
+                             type_factory_));
+  }
+  return PlacementInsertOrDeleteTable(analyzer_output->resolved_statement());
+}
+
 absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
     const Query& query, const QueryContext& context) const {
   return ExecuteSql(query, context, v1::ExecuteSqlRequest::NORMAL);
@@ -1425,6 +1454,24 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
     return error::ChangeStreamQueriesMustBeStreaming();
   }
 
+  // Enforce the geo-partitioning (placement) limits of read-write
+  // transactions before the statement has any effect.
+  std::optional<std::string> placement_sole_statement_table;
+  if (context.placement_dml_restrictions.has_value() &&
+      HasPlacementTables(context.schema)) {
+    PlacementDmlValidator placement_validator;
+    GOOGLESQL_RETURN_IF_ERROR(placement_validator.Validate(resolved_statement.get()));
+    if (query_mode != v1::ExecuteSqlRequest::PLAN) {
+      placement_sole_statement_table =
+          placement_validator.insert_or_delete_table();
+    }
+    if (placement_sole_statement_table.has_value() &&
+        context.placement_dml_restrictions->other_statements_in_transaction) {
+      return error::PlacementDmlMustBeOnlyStatement(
+          *placement_sole_statement_table);
+    }
+  }
+
   QueryResult result;
   if (!IsDMLStmt(analyzer_output->resolved_statement()->node_kind())) {
     GOOGLESQL_ASSIGN_OR_RETURN(
@@ -1503,6 +1550,8 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
   for (auto const& param : normalized_query.declared_params) {
     result.parameter_types.insert({param.first, param.second.type()});
   }
+  result.placement_sole_statement_table =
+      std::move(placement_sole_statement_table);
   result.elapsed_time = absl::Now() - start_time;
   return result;
 }

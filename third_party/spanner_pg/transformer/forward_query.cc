@@ -3643,6 +3643,7 @@ ForwardTransformer::BuildGsqlResolvedStatement(const Query& query) {
         case T_CreateSearchIndexStmt:
         case T_AlterSearchIndexStmt:
         case T_CreateLocalityGroupStmt:
+        case T_CreatePlacementStmt:
         // TODO: expose when queue is implemented.
         case T_AlterLocalityGroupStmt:
         case T_AlterColumnLocalityGroupStmt:

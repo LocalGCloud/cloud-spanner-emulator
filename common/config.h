@@ -45,6 +45,14 @@ bool fault_injection_enabled();
 // once.
 bool disable_query_null_filtered_index_check();
 
+// If true, read-write transactions enforce the production geo-partitioning
+// (placement) DML limits: an INSERT or DELETE on a placement table must be the
+// only statement in its transaction, and WHERE clauses may reference only the
+// primary key columns of placement tables.
+bool enforce_placement_dml_restrictions();
+
+void set_enforce_placement_dml_restrictions(bool enforce);
+
 // The probability that the emulator will try to abort the current transaction
 // if a new transaction is requested. A higher value gives higher priority to
 // new transactions. A lower value gives higher priority to the current

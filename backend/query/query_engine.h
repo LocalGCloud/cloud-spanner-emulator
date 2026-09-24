@@ -88,6 +88,11 @@ struct QueryResult {
 
   // Query execution elapsed time.
   absl::Duration elapsed_time;
+
+  // Set when placement DML restrictions apply and the statement inserted into
+  // or deleted from this placement table. Such a statement must be the only
+  // statement in its transaction.
+  std::optional<std::string> placement_sole_statement_table;
 };
 
 // QueryEngine handles SQL-related requests.
@@ -124,6 +129,13 @@ class QueryEngine {
   // Returns OK if query is partitionable.
   absl::Status IsPartitionable(const Query& query,
                                const QueryContext& context) const;
+
+  // Returns the name of the placement table that `query` inserts into or
+  // deletes from, or nullopt if it is not an INSERT or DELETE on a placement
+  // table. Such a statement must be the only statement in a read-write
+  // transaction.
+  absl::StatusOr<std::optional<std::string>> GetPlacementInsertOrDeleteTable(
+      const Query& query, const Schema* schema) const;
 
   // Returns OK if the 'query' is a DML statement that can be executed through
   // partitioned DML.

@@ -119,6 +119,7 @@ cc_library(
         ":insert_on_conflict_dml_execution",
         ":partitionability_validator",
         ":partitioned_dml_validator",
+        ":placement_dml_validator",
         ":query_context",
         ":query_engine_options",
         ":query_engine_util",
@@ -520,11 +521,18 @@ cc_test(
         ":info_schema_columns_metadata_values",
         ":information_schema_catalog",
         ":spanner_sys_catalog",
+        "//backend/schema/catalog:schema",
         "//tests/common:proto_matchers",
+        "//tests/common:test_schema_constructor",
         "//third_party/spanner_pg/src/backend:backend_with_shims",
         "@com_github_google_benchmark//:benchmark",
         "@com_github_grpc_grpc//:grpc++",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/strings",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googlesql//googlesql/public:evaluator_table_iterator",
+        "@com_google_googlesql//googlesql/public:type",
+        "@com_google_googlesql//googlesql/public:value",
         "@com_google_googletest//:gtest_main",
     ],
 )
@@ -953,6 +961,22 @@ cc_library(
 )
 
 cc_library(
+    name = "placement_dml_validator",
+    srcs = ["placement_dml_validator.cc"],
+    hdrs = ["placement_dml_validator.h"],
+    deps = [
+        ":queryable_table",
+        "//backend/schema/catalog:schema",
+        "//common:errors",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_googlesql//googlesql/base:status",
+        "@com_google_googlesql//googlesql/public:catalog",
+        "@com_google_googlesql//googlesql/resolved_ast",
+    ],
+)
+
+cc_library(
     name = "queryable_model",
     srcs = ["queryable_model.cc"],
     hdrs = ["queryable_model.h"],
@@ -1020,6 +1044,35 @@ cc_library(
         "@com_google_googlesql//googlesql/public:type",
         "@com_google_googlesql//googlesql/public:value",
         "@com_google_googlesql//googlesql/resolved_ast",
+    ],
+)
+
+cc_test(
+    name = "placement_dml_validator_test",
+    srcs = ["placement_dml_validator_test.cc"],
+    args = [
+        "--spangres_use_emulator_jsonb_type=true",
+        "--spangres_use_emulator_numeric_type=true",
+        "--spangres_use_emulator_oid_type=true",
+    ],
+    deps = [
+        ":placement_dml_validator",
+        ":query_context",
+        ":query_engine",
+        "//backend/access:read",
+        "//backend/access:write",
+        "//backend/schema/catalog:schema",
+        "//common:errors",
+        "//tests/common:test_row_reader",
+        "//tests/common:test_schema_constructor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
+        "@com_google_googleapis//google/spanner/v1:spanner_cc_proto",
+        "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googlesql//googlesql/public:type",
+        "@com_google_googlesql//googlesql/public:value",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

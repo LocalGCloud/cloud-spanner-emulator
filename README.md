@@ -267,6 +267,64 @@ with "invalid hint" on the emulator.
 STRING and INT64 values, silently ignored (emulator has no optimizer
 versioning). No more errors on production queries.
 
+### Geo-Partitioning: Placements and Placement Keys
+
+**Upstream gap**: Upstream parses only basic GoogleSQL placement DDL. Three
+`ALTER COLUMN ... PLACEMENT KEY` forms crash the emulator process. It rejects
+the documented `default` placement key value and lets `DROP PLACEMENT` orphan
+rows. It has no PostgreSQL syntax, no `INFORMATION_SCHEMA` views, and none of
+production's placement DML limits.
+
+**This fork**: Geo-partitioning behaves like production Cloud Spanner, in both
+dialects, as far as a single-process emulator can:
+
+```sql
+-- GoogleSQL
+CREATE PLACEMENT europe OPTIONS (instance_partition = 'eu-partition');
+CREATE TABLE Singers (
+  SingerId INT64 NOT NULL,
+  Location STRING(MAX) NOT NULL PLACEMENT KEY
+) PRIMARY KEY (SingerId);
+
+-- PostgreSQL
+CREATE PLACEMENT europe WITH (instance_partition = 'eu-partition');
+CREATE TABLE singers (
+  singerid bigint PRIMARY KEY,
+  location varchar(1024) NOT NULL PLACEMENT KEY
+);
+```
+
+- **Placements**: `CREATE`, `ALTER` (GoogleSQL), and `DROP PLACEMENT`, with
+  `IF [NOT] EXISTS` and the `instance_partition`, `default_leader`, and
+  `read_lease_regions` options. The instance partition must exist; create it
+  first with the instance admin API. `ALTER PLACEMENT` changes only the
+  options it names.
+- **Placement keys**: one `NOT NULL STRING` column per table, defined only in
+  `CREATE TABLE`. It can't be added, dropped, or loosened later.
+- **Writes**: a placement key must name a placement in the database or be
+  `default`, the implicit default placement.
+- **Safety checks**: `DROP PLACEMENT` fails while any row uses the placement.
+  `DROP TABLE` fails on a placement table that still has rows. An instance
+  partition can't be deleted while a placement uses it.
+- **Routing metadata**: `per_placement_routing_metadata` database option.
+  It can't change once placements exist.
+- **Metadata**: `INFORMATION_SCHEMA.PLACEMENTS` (including `default`),
+  `PLACEMENT_OPTIONS`, `PLACEMENT KEY` constraints in `TABLE_CONSTRAINTS`,
+  and `GetDatabaseDdl` output that can be replayed.
+- **DML limits** (production Preview behavior, on by default): in read-write
+  transactions, an `INSERT` or `DELETE` on a placement table must be the only
+  statement in its transaction, and `WHERE` clauses may reference only the
+  primary key columns of placement tables. Partitioned DML, read-only
+  transactions, and mutations are unaffected. Disable with
+  `--enforce_placement_dml_restrictions=false` (a flag of both `emulator_main`
+  and `gateway_main`).
+- **Persistence**: databases persisted with `--data_dir`, and backups, keep
+  loading. Replayed DDL skips checks that didn't exist when it was first
+  applied.
+
+Every row is stored locally, whatever its placement. Physical placement,
+routing latency, and row-move throughput aren't emulated.
+
 ### Full-Text Search: `remove_diacritics` Parameter
 
 **Upstream gap**: `TOKENIZE_FULLTEXT` does not support the `remove_diacritics`

@@ -4219,6 +4219,90 @@ TEST(CreatePlacement, CanParseDropPlacement) {
                 drop_placement { placement_name: "p1" })pb")));
 }
 
+TEST(CreatePlacement, CanParseDropPlacementIfExists) {
+  EXPECT_THAT(ParseDDLStatement(R"sql(DROP PLACEMENT IF EXISTS p1)sql"),
+              IsOkAndHolds(test::EqualsProto(R"pb(
+                drop_placement {
+                  placement_name: "p1"
+                  existence_modifier: IF_EXISTS
+                })pb")));
+}
+
+TEST(CreatePlacement, CanParseCreatePlacementWithReadLeaseRegions) {
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(CREATE PLACEMENT p1 OPTIONS (instance_partition = 'p', read_lease_regions = 'us-east1,us-west1'))sql"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        create_placement {
+          placement_name: "p1"
+          set_options { option_name: "instance_partition" string_value: "p" }
+          set_options {
+            option_name: "read_lease_regions"
+            string_value: "us-east1,us-west1"
+          }
+        })pb")));
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(ALTER PLACEMENT p1 SET OPTIONS (read_lease_regions = NULL))sql"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        alter_placement {
+          placement_name: "p1"
+          set_options { option_name: "read_lease_regions" null_value: true }
+        })pb")));
+}
+
+TEST(CreatePlacement, CanParsePerPlacementRoutingMetadataOption) {
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(ALTER DATABASE db SET OPTIONS (per_placement_routing_metadata = true))sql"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        alter_database {
+          db_name: "db"
+          set_options {
+            options {
+              option_name: "per_placement_routing_metadata"
+              bool_value: true
+            }
+          }
+        })pb")));
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(ALTER DATABASE db SET OPTIONS (per_placement_routing_metadata = 'yes'))sql"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Supported option values are booleans and NULL")));
+}
+
+TEST(CreatePlacement, CanParseAlterColumnWithPlacementKey) {
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(ALTER TABLE Singers ALTER COLUMN Location STRING(MAX) NOT NULL PLACEMENT KEY)sql"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        alter_table {
+          table_name: "Singers"
+          alter_column {
+            column {
+              column_name: "Location"
+              type: STRING
+              not_null: true
+              placement_key: true
+            }
+          }
+        })pb")));
+}
+
+TEST(CreatePlacement, SetOrDropPlacementKeyIsAnError) {
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(ALTER TABLE Singers ALTER COLUMN Name SET PLACEMENT KEY)sql"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Cannot make column Singers.Name a placement key")));
+  EXPECT_THAT(
+      ParseDDLStatement(
+          R"sql(ALTER TABLE Singers ALTER COLUMN Location DROP PLACEMENT KEY)sql"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Cannot drop placement key column Singers.Location")));
+}
+
 TEST(CreateChangeStream, CanParseCreateChangeStreamForExplicitTablePkOnly) {
   EXPECT_THAT(ParseDDLStatement(R"sql(CREATE CHANGE STREAM ChangeStream FOR
       TestTable())sql"),

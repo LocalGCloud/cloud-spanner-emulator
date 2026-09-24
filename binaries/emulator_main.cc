@@ -418,7 +418,8 @@ static absl::Status RestoreFromMetadata(Server* server) {
             {.statements = statement_batches.back(),
              .proto_descriptor_bytes = batch.proto_descriptor_bytes,
              .database_dialect = dialect,
-             .schema_change_timestamp = batch_timestamp});
+             .schema_change_timestamp = batch_timestamp,
+             .replaying_committed_ddl = true});
       }
       google::spanner::emulator::backend::Database::IdCounterValues counters{
           .table_id = db_info.id_counters.table_id,

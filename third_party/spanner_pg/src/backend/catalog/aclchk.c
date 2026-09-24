@@ -2813,6 +2813,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					// TODO: expose when queue is implemented.
 					// SPANGRES END
 					case OBJECT_LOCALITY_GROUP:
+					case OBJECT_PLACEMENT:
             elog(ERROR, "unsupported object type: %d", objtype);
 				}
 
@@ -2958,6 +2959,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					// TODO: expose when queue is implemented.
 					// SPANGRES END
 					case OBJECT_LOCALITY_GROUP:
+					case OBJECT_PLACEMENT:
             elog(ERROR, "unsupported object type: %d", objtype);
 				}
 

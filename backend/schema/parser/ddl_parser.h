@@ -64,6 +64,7 @@ extern const char kVersionRetentionPeriodOptionName[];
 extern const char kDefaultSequenceKindOptionName[];
 extern const char kDefaultTimeZoneOptionName[];
 extern const char kColumnarPolicyOptionName[];
+extern const char kPerPlacementRoutingMetadataOptionName[];
 extern const char kFulltextDictionaryTableOptionName[];
 
 extern const char kLocalityGroupOptionName[];
@@ -77,6 +78,7 @@ extern const char kDefaultLocalityGroupName[];
 
 extern const char kPlacementDefaultLeaderOptionName[];
 extern const char kPlacementInstancePartitionOptionName[];
+extern const char kPlacementReadLeaseRegionsOptionName[];
 
 extern const char kCassandraTypeOptionName[];
 

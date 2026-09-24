@@ -36,6 +36,7 @@
 #include "backend/access/read.h"
 #include "backend/query/change_stream/change_stream_query_validator.h"
 #include "backend/query/query_engine.h"
+#include "common/config.h"
 #include "common/constants.h"
 #include "common/errors.h"
 #include "frontend/common/protos.h"
@@ -180,6 +181,35 @@ absl::StatusOr<backend::QueryResult> ExecuteQuery(
                      txn->query_engine()->type_factory(),
                      txn->schema()->proto_bundle(), secure_context));
   return txn->ExecuteSql(query);
+}
+
+// An INSERT or DELETE on a placement table must be the only statement in its
+// read-write transaction (a geo-partitioning limit), so a batch that combines
+// one with other statements fails before any statement runs.
+absl::Status ValidatePlacementDmlBatch(
+    const spanner_api::ExecuteBatchDmlRequest& request, Transaction* txn) {
+  if (request.statements_size() < 2 || !txn->IsReadWrite() ||
+      !config::enforce_placement_dml_restrictions()) {
+    return absl::OkStatus();
+  }
+  for (const auto& statement : request.statements()) {
+    // Statements that can't be converted or analyzed report their errors when
+    // they run.
+    absl::StatusOr<backend::Query> query = QueryFromProto(
+        statement.sql(), statement.params(), statement.param_types(),
+        txn->query_engine()->type_factory(), txn->schema()->proto_bundle(),
+        request.request_options().client_context().secure_context());
+    if (!query.ok()) {
+      continue;
+    }
+    absl::StatusOr<std::optional<std::string>> table =
+        txn->query_engine()->GetPlacementInsertOrDeleteTable(*query,
+                                                              txn->schema());
+    if (table.ok() && table->has_value()) {
+      return error::PlacementDmlMustBeOnlyStatement(**table);
+    }
+  }
+  return absl::OkStatus();
 }
 
 template <typename Request>
@@ -646,6 +676,20 @@ absl::Status ExecuteBatchDml(RequestContext* ctx,
     }
     if (txn->IsCommitted() || txn->IsRolledback()) {
       return error::CannotReadOrQueryAfterCommitOrRollback();
+    }
+
+    if (absl::Status placement_status =
+            ValidatePlacementDmlBatch(*request, txn.get());
+        !placement_status.ok()) {
+      *response->mutable_status() = StatusToProto(placement_status);
+      txn->SetDmlReplayOutcome(*response);
+      if (ShouldReturnTransaction(request->transaction())) {
+        // The transaction ID has not been returned to the user yet, so we
+        // must rollback the transaction to avoid leaving it in an active
+        // state.
+        txn->Rollback().IgnoreError();
+      }
+      return absl::OkStatus();
     }
 
     for (int index = 0; index < request->statements_size(); ++index) {

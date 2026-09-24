@@ -857,6 +857,41 @@
       "notes": "Baseline classification for User-defined functions; conservative where production semantics are broader than emulator evidence."
     },
     {
+      "id": "schema.placements",
+      "category": "Schema and DDL",
+      "feature": "Geo-partitioning placements and placement keys",
+      "status": "supported",
+      "applicability": "local-development",
+      "dialects": [
+        "googlesql",
+        "postgresql"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/geo-partitioning",
+        "https://cloud.google.com/spanner/docs/create-manage-data-placements"
+      ],
+      "evidence": {
+        "documentation": [
+          "README.md"
+        ],
+        "implementation": [
+          "backend/schema/updater/schema_updater.cc",
+          "backend/schema/verifiers/placement_verifiers.cc",
+          "backend/actions/column_value.cc",
+          "backend/query/placement_dml_validator.cc",
+          "backend/query/information_schema_catalog.cc",
+          "third_party/spanner_pg/ddl/pg_to_spanner_ddl_translator.cc"
+        ],
+        "tests": [
+          "backend/schema/updater/schema_updater_tests/placement.cc",
+          "backend/query/placement_dml_validator_test.cc",
+          "tests/conformance/cases/placements.cc"
+        ]
+      },
+      "verification": "tested",
+      "notes": "CREATE/ALTER/DROP PLACEMENT and PLACEMENT KEY columns in GoogleSQL and PostgreSQL, instance partition existence checks, the implicit default placement, placement key rules, DROP PLACEMENT/DROP TABLE safety checks, per_placement_routing_metadata and read_lease_regions options, INFORMATION_SCHEMA.PLACEMENTS/PLACEMENT_OPTIONS and PLACEMENT KEY constraints, and production's Preview read-write DML limits (--enforce_placement_dml_restrictions). Every row is stored locally: physical placement, routing latency, and row-move throughput have no local equivalent."
+    },
+    {
       "id": "types.bool_int_float",
       "category": "Types and values",
       "feature": "BOOL, INT64, FLOAT64",

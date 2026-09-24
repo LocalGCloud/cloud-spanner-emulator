@@ -73,6 +73,24 @@ cc_test(
 )
 
 cc_library(
+    name = "placement_verifiers",
+    srcs = ["placement_verifiers.cc"],
+    hdrs = ["placement_verifiers.h"],
+    deps = [
+        "//backend/datamodel:key_range",
+        "//backend/schema/catalog:schema",
+        "//backend/storage",
+        "//backend/storage:iterator",
+        "//common:errors",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_googlesql//googlesql/base:status",
+        "@com_google_googlesql//googlesql/public:value",
+    ],
+)
+
+cc_library(
     name = "check_constraint_verifiers",
     srcs = ["check_constraint_verifiers.cc"],
     hdrs = ["check_constraint_verifiers.h"],

@@ -2212,6 +2212,7 @@ typedef enum ObjectType
 	OBJECT_VIEW,
   OBJECT_CHANGE_STREAM,
   OBJECT_LOCALITY_GROUP,
+  OBJECT_PLACEMENT,
 	// SPANGRES BEGIN
 	// TODO: expose when queue is implemented.
   OBJECT_SEARCH_INDEX,
@@ -2662,6 +2663,7 @@ typedef enum ConstrType			/* types of constraints */
 	// SPANGRES BEGIN
 	CONSTR_VECTOR_LENGTH,
 	CONSTR_HIDDEN,
+	CONSTR_PLACEMENT_KEY,
 	// SPANGRES END
 	CONSTR_ATTR_DEFERRABLE,		/* attributes for previous constraint node */
 	CONSTR_ATTR_NOT_DEFERRABLE,
@@ -4290,6 +4292,20 @@ typedef struct AlterLocalityGroupStmt
   LocalityGroupOption *ssd_to_hdd_spill_timespan; /* SSD to HDD spill timespan */
   bool if_exists;              		 /* skip error if locality group is missing */
 } AlterLocalityGroupStmt;
+
+/* ----------------------
+ *		Create Placement Statement
+ *
+ * CREATE PLACEMENT [IF NOT EXISTS] name [WITH ( option = value [, ...] )]
+ * ----------------------
+ */
+typedef struct CreatePlacementStmt
+{
+  NodeTag type;
+  char *placement_name;  /* Name of the placement */
+  List *options;         /* List of DefElem nodes, or NIL */
+  bool if_not_exists;    /* do nothing if placement already exists */
+} CreatePlacementStmt;
 
 // SPANGRES BEGIN
 /* ----------------------

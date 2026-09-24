@@ -34,6 +34,11 @@ namespace spanner {
 namespace emulator {
 namespace backend {
 
+// Name of the implicit placement that stores rows in the default instance
+// partition. It is not a schema object, can't be created or dropped, and is a
+// valid placement key value in every database.
+inline constexpr char kDefaultPlacementName[] = "default";
+
 class Table;
 class Column;
 class Placement : public SchemaNode {

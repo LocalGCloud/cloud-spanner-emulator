@@ -137,6 +137,8 @@ static auto kSupportedStatements =
     google::spanner::emulator::backend::ddl::DDLStatement::kCreateLocalityGroup,
     google::spanner::emulator::backend::ddl::DDLStatement::kAlterLocalityGroup,
     google::spanner::emulator::backend::ddl::DDLStatement::kDropLocalityGroup,
+    google::spanner::emulator::backend::ddl::DDLStatement::kCreatePlacement,
+    google::spanner::emulator::backend::ddl::DDLStatement::kDropPlacement,
 });
 // LINT.ThenChange(:print_sdl_statement)
 
@@ -277,6 +279,10 @@ class SpangresSchemaPrinterImpl : public SpangresSchemaPrinter {
       const google::spanner::emulator::backend::ddl::SetColumnOptions& statement) const;
   absl::StatusOr<std::string> PrintRenameTable(
       const google::spanner::emulator::backend::ddl::RenameTable& statement) const;
+  absl::StatusOr<std::string> PrintCreatePlacement(
+      const google::spanner::emulator::backend::ddl::CreatePlacement& statement) const;
+  std::string PrintDropPlacement(
+      const google::spanner::emulator::backend::ddl::DropPlacement& statement) const;
 
   // TODO: expose when queue is implemented.
 
@@ -385,6 +391,10 @@ SpangresSchemaPrinterImpl::PrintDDLStatement(
     case google::spanner::emulator::backend::ddl::DDLStatement::kDropLocalityGroup:
       return WrapOutput(
           PrintDropLocalityGroup(statement.drop_locality_group()));
+    case google::spanner::emulator::backend::ddl::DDLStatement::kCreatePlacement:
+      return WrapOutput(PrintCreatePlacement(statement.create_placement()));
+    case google::spanner::emulator::backend::ddl::DDLStatement::kDropPlacement:
+      return WrapOutput(PrintDropPlacement(statement.drop_placement()));
 
     // TODO: expose when queue is implemented.
     default:
@@ -1864,6 +1874,7 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintColumn(
   }
 
   StrAppend(&constraint, column.not_null() ? " NOT NULL" : "");
+  StrAppend(&constraint, column.placement_key() ? " PLACEMENT KEY" : "");
   StrAppend(&constraint, column.hidden() ? " HIDDEN" : "");
   for (const google::spanner::emulator::backend::ddl::SetOption& option : column.set_options()) {
     if (option.option_name() == "locality_group") {
@@ -2034,6 +2045,8 @@ SpangresSchemaPrinterImpl::PrintAlterDatabaseSetOptions(
         value = QuoteStringLiteral(option.string_value());
       } else if (option.has_int64_value()) {
         value = std::to_string(option.int64_value());
+      } else if (option.has_bool_value()) {
+        value = option.bool_value() ? "true" : "false";
       } else if (!option.string_list_value().empty()) {
         std::vector<std::string> option_list_value;
         option_list_value.reserve(option.string_list_value().size());
@@ -2048,6 +2061,46 @@ SpangresSchemaPrinterImpl::PrintAlterDatabaseSetOptions(
                               " = ", value));
     }
   }
+  return output;
+}
+
+absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintCreatePlacement(
+    const google::spanner::emulator::backend::ddl::CreatePlacement& statement) const {
+  std::string output = "CREATE PLACEMENT ";
+  if (statement.existence_modifier() ==
+      google::spanner::emulator::backend::ddl::IF_NOT_EXISTS) {
+    StrAppend(&output, "IF NOT EXISTS ");
+  }
+  StrAppend(&output, QuoteIdentifier(statement.placement_name()));
+
+  std::vector<std::string> printed_options;
+  for (const google::spanner::emulator::backend::ddl::SetOption& option :
+       statement.set_options()) {
+    if (option.has_null_value()) {
+      printed_options.push_back(StrCat(option.option_name(), " = DEFAULT"));
+    } else if (option.has_string_value()) {
+      printed_options.push_back(StrCat(option.option_name(), " = ",
+                                       QuoteStringLiteral(option.string_value())));
+    } else {
+      return StatementTranslationError(
+          StrCat("Unsupported value for placement option ", option.option_name(),
+                 "."));
+    }
+  }
+  if (!printed_options.empty()) {
+    StrAppend(&output, " WITH (", absl::StrJoin(printed_options, ", "), ")");
+  }
+  return output;
+}
+
+std::string SpangresSchemaPrinterImpl::PrintDropPlacement(
+    const google::spanner::emulator::backend::ddl::DropPlacement& statement) const {
+  std::string output = "DROP PLACEMENT ";
+  if (statement.existence_modifier() ==
+      google::spanner::emulator::backend::ddl::IF_EXISTS) {
+    StrAppend(&output, "IF EXISTS ");
+  }
+  StrAppend(&output, QuoteIdentifier(statement.placement_name()));
   return output;
 }
 

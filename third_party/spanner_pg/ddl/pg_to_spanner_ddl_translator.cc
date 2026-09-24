@@ -435,6 +435,15 @@ class PostgreSQLToSpannerDDLTranslatorImpl
       const TranslationOptions& options,
       google::spanner::emulator::backend::ddl::DropLocalityGroup& out) const;
 
+  absl::Status TranslateCreatePlacement(
+      const CreatePlacementStmt& create_placement_stmt,
+      const TranslationOptions& options,
+      google::spanner::emulator::backend::ddl::CreatePlacement& out) const;
+  absl::Status TranslateDropPlacement(
+      const DropStmt& drop_placement_statement,
+      const TranslationOptions& options,
+      google::spanner::emulator::backend::ddl::DropPlacement& out) const;
+
   // Updates table translation <context> with the information about translated
   // table <constraint>. If constraint is defined on column level, the
   // pointer to this column is given in <target_column>. Otherwise (constraint
@@ -925,6 +934,13 @@ PostgreSQLToSpannerDDLTranslatorImpl::TranslateOption(
         absl::StrCat("Database option <", option_name, "> is not supported."));
   }
 
+  if (option->PGName() == internal::PostgreSQLConstants::
+                              kSpangresPerPlacementRoutingMetadataOptionName &&
+      !options.enable_placements) {
+    return UnsupportedTranslationError(
+        absl::StrCat("Database option <", option_name, "> is not supported."));
+  }
+
   return *option;
 }
 
@@ -1139,6 +1155,22 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::ProcessTableConstraint(
       GOOGLESQL_RET_CHECK_NE(target_column, nullptr);
       GOOGLESQL_RET_CHECK(target_column->has_column_name());
       target_column->set_hidden(true);
+      return absl::OkStatus();
+    }
+
+    case CONSTR_PLACEMENT_KEY: {
+      if (!options.enable_placements) {
+        return UnsupportedTranslationError(
+            "<PLACEMENT KEY> constraint type is not supported.");
+      }
+      if (constraint.conname != nullptr) {
+        return UnsupportedTranslationError(
+            "Setting a name of a <PLACEMENT KEY> constraint is not supported.");
+      }
+      // PLACEMENT KEY can be defined only as column constraint.
+      GOOGLESQL_RET_CHECK_NE(target_column, nullptr);
+      GOOGLESQL_RET_CHECK(target_column->has_column_name());
+      target_column->set_placement_key(true);
       return absl::OkStatus();
     }
 
@@ -2670,6 +2702,10 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateDropStatement(
       return TranslateDropLocalityGroup(drop_statement, options,
                                         *out.mutable_drop_locality_group());
 
+    case OBJECT_PLACEMENT:
+      return TranslateDropPlacement(drop_statement, options,
+                                    *out.mutable_drop_placement());
+
     case OBJECT_SEQUENCE:
       return TranslateDropSequence(drop_statement, options,
                                    *out.mutable_drop_sequence());
@@ -2772,6 +2808,27 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateDropLocalityGroup(
                    GetLocalityGroupName(*locality_group_to_drop_node,
                                         "DROP LOCALITY GROUP"));
   out.set_locality_group_name(locality_group_name);
+  return absl::OkStatus();
+}
+
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateDropPlacement(
+    const DropStmt& drop_placement_statement,
+    const TranslationOptions& options,
+    google::spanner::emulator::backend::ddl::DropPlacement& out) const {
+  if (!options.enable_placements) {
+    return UnsupportedTranslationError(
+        "<DROP PLACEMENT> statement is not supported.");
+  }
+  GOOGLESQL_RET_CHECK_EQ(drop_placement_statement.removeType, OBJECT_PLACEMENT);
+  if (drop_placement_statement.missing_ok) {
+    out.set_existence_modifier(google::spanner::emulator::backend::ddl::IF_EXISTS);
+  }
+  GOOGLESQL_ASSIGN_OR_RETURN(const String* placement_to_drop_node,
+                   (SingleItemListAsNode<String, T_String>(
+                       drop_placement_statement.objects)));
+  GOOGLESQL_RET_CHECK(placement_to_drop_node->sval != nullptr &&
+            *placement_to_drop_node->sval != '\0');
+  out.set_placement_name(placement_to_drop_node->sval);
   return absl::OkStatus();
 }
 
@@ -3041,7 +3098,21 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateAlterDatabase(
           }
 
           case T_String: {
-              opt->set_string_value(arg->val.sval.sval);
+            if (option.SpannerType() == T_Boolean) {
+              const std::string value =
+                  absl::AsciiStrToLower(arg->val.sval.sval);
+              if (value == "true" || value == "on") {
+                opt->set_bool_value(true);
+              } else if (value == "false" || value == "off") {
+                opt->set_bool_value(false);
+              } else {
+                return UnsupportedTranslationError(absl::StrCat(
+                    "Unsupported option value for <", option.PGName(),
+                    "> in <ALTER DATABASE> statement. Expected a boolean."));
+              }
+              break;
+            }
+            opt->set_string_value(arg->val.sval.sval);
             break;
           }
 
@@ -4010,6 +4081,95 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateCreateLocalityGroup(
   return absl::OkStatus();
 }
 
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateCreatePlacement(
+    const CreatePlacementStmt& create_placement_stmt,
+    const TranslationOptions& options,
+    google::spanner::emulator::backend::ddl::CreatePlacement& out) const {
+  if (!options.enable_placements) {
+    return UnsupportedTranslationError(
+        "<CREATE PLACEMENT> statement is not supported.");
+  }
+  GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(create_placement_stmt));
+  if (create_placement_stmt.if_not_exists) {
+    out.set_existence_modifier(google::spanner::emulator::backend::ddl::IF_NOT_EXISTS);
+  }
+  out.set_placement_name(create_placement_stmt.placement_name);
+
+  bool has_instance_partition = false;
+  absl::flat_hash_set<std::string> seen_options;
+  for (DefElem* def_elem :
+       StructList<DefElem*>(create_placement_stmt.options)) {
+    if (def_elem == nullptr || def_elem->defname == nullptr ||
+        *def_elem->defname == '\0') {
+      return absl::InvalidArgumentError(
+          "Failed to parse placement option correctly in <CREATE PLACEMENT> "
+          "statement.");
+    }
+    const std::string option_name = def_elem->defname;
+    if (!seen_options.insert(option_name).second) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Duplicate option: ", option_name));
+    }
+    const bool is_read_lease_regions =
+        option_name ==
+        internal::PostgreSQLConstants::kPlacementReadLeaseRegionsOptionName;
+    if (option_name != internal::PostgreSQLConstants::
+                           kPlacementInstancePartitionOptionName &&
+        option_name !=
+            internal::PostgreSQLConstants::kPlacementDefaultLeaderOptionName &&
+        !is_read_lease_regions) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Option: ", option_name, " is unknown."));
+    }
+    // Option values must be string literals, or the DEFAULT/NULL keywords,
+    // which the grammar hands over as lowercase strings.
+    if (def_elem->arg == nullptr || def_elem->arg->type != T_String) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unexpected value for option: ", option_name,
+          ". Supported option values are strings and ",
+          is_read_lease_regions ? "DEFAULT." : "NULL."));
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(const String* arg_value,
+                     (DowncastNode<String, T_String>(def_elem->arg)));
+    const std::string value =
+        arg_value->sval == nullptr ? "" : std::string(arg_value->sval);
+    const std::string lower_value = absl::AsciiStrToLower(value);
+    const bool is_null = lower_value == "null" || lower_value == "default";
+
+    google::spanner::emulator::backend::ddl::SetOption* option_out =
+        out.add_set_options();
+    option_out->set_option_name(option_name);
+    if (option_name == internal::PostgreSQLConstants::
+                           kPlacementInstancePartitionOptionName) {
+      if (is_null) {
+        return absl::InvalidArgumentError(
+            "Placements must have a non-NULL instance_partition.");
+      }
+      if (value.empty()) {
+        return absl::InvalidArgumentError(
+            "Empty string is an invalid value for instance_partition.");
+      }
+      has_instance_partition = true;
+      option_out->set_string_value(value);
+    } else if (is_null) {
+      option_out->set_null_value(true);
+    } else if (value.empty()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Empty string is an invalid value for ", option_name,
+                       ". If you'd like to clear a previously set value, use ",
+                       is_read_lease_regions ? "DEFAULT." : "NULL."));
+    } else {
+      option_out->set_string_value(value);
+    }
+  }
+  if (!has_instance_partition) {
+    return absl::InvalidArgumentError(
+        "CREATE PLACEMENT statements require option `instance_partition` to "
+        "be set");
+  }
+  return absl::OkStatus();
+}
+
 absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateAlterLocalityGroup(
     const AlterLocalityGroupStmt& alter_locality_group_stmt,
     const TranslationOptions& options,
@@ -4305,6 +4465,16 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::Visitor::Visit(
       GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateAlterLocalityGroup(
           *statement, options_,
           *result_statement.mutable_alter_locality_group()));
+      break;
+    }
+
+    case T_CreatePlacementStmt: {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          const CreatePlacementStmt* statement,
+          (DowncastNode<CreatePlacementStmt, T_CreatePlacementStmt>(
+              raw_statement.stmt)));
+      GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateCreatePlacement(
+          *statement, options_, *result_statement.mutable_create_placement()));
       break;
     }
 

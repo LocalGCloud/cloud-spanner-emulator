@@ -51,6 +51,7 @@
 #include "backend/schema/catalog/foreign_key.h"
 #include "backend/schema/catalog/locality_group.h"
 #include "backend/schema/catalog/model.h"
+#include "backend/schema/catalog/placement.h"
 #include "backend/schema/catalog/property_graph.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/sequence.h"
@@ -224,6 +225,12 @@ static constexpr char kModelColumnOptions[] = "MODEL_COLUMN_OPTIONS";
 static constexpr char kLocalityGroupOptions[] = "LOCALITY_GROUP_OPTIONS";
 static constexpr char kLocalityGroup[] = "locality_group";
 static constexpr char kPropertyGraphs[] = "PROPERTY_GRAPHS";
+static constexpr char kPlacements[] = "PLACEMENTS";
+static constexpr char kPlacementOptions[] = "PLACEMENT_OPTIONS";
+static constexpr char kPlacementName[] = "PLACEMENT_NAME";
+static constexpr char kIsDefault[] = "IS_DEFAULT";
+static constexpr char kPlacementKey[] = "PLACEMENT KEY";
+static constexpr char kStringMax[] = "STRING(MAX)";
 
 static int kFloatNumericPrecision = 24;
 static int kDoubleNumericPrecision = 53;
@@ -257,6 +264,8 @@ static const absl::NoDestructor<absl::flat_hash_set<std::string>>
         kModelOptions,
         kModelColumns,
         kModelColumnOptions,
+        kPlacements,
+        kPlacementOptions,
         kReferentialConstraints,
         kSchemata,
         kSequences,
@@ -287,6 +296,8 @@ static const absl::NoDestructor<absl::flat_hash_set<std::string>>
         absl::AsciiStrToLower(kIndexes),
         absl::AsciiStrToLower(kIndexColumns),
         absl::AsciiStrToLower(kKeyColumnUsage),
+        absl::AsciiStrToLower(kPlacements),
+        absl::AsciiStrToLower(kPlacementOptions),
         absl::AsciiStrToLower(kReferentialConstraints),
         absl::AsciiStrToLower(kLocalityGroupOptions),
         absl::AsciiStrToLower(kSchemata),
@@ -376,6 +387,37 @@ const IndexColumnsMetaEntry* FindKeyColumnMetadata(
 template <typename T>
 std::string PrimaryKeyName(const T* table) {
   return absl::StrCat("PK_", SDLObjectName::GetInSchemaName(table->Name()));
+}
+
+// Name of the constraint that marks a table's placement key column. The name
+// production uses is not documented; this follows the PK_<table> scheme.
+std::string PlacementKeyName(const Table* table) {
+  return absl::StrCat("PLACEMENT_KEY_",
+                      SDLObjectName::GetInSchemaName(table->Name()));
+}
+
+// Returns true if the table has a placement key column.
+bool HasPlacementKey(const Table* table) {
+  for (const Column* column : table->columns()) {
+    if (column->is_placement_key()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Formats a placement option value for PLACEMENT_OPTIONS.OPTION_VALUE.
+std::string PlacementOptionValue(const ddl::SetOption& option) {
+  if (option.has_string_value()) {
+    return option.string_value();
+  }
+  if (option.has_bool_value()) {
+    return option.bool_value() ? "TRUE" : "FALSE";
+  }
+  if (option.has_int64_value()) {
+    return absl::StrCat(option.int64_value());
+  }
+  return absl::StrJoin(option.string_list_value(), ",");
 }
 
 template <typename T, typename C>
@@ -618,6 +660,8 @@ InformationSchemaCatalog::InformationSchemaCatalog(
   FillSequencesTable();
   FillSequenceOptionsTable();
   FillLocalityGroupOptionsTable();
+  FillPlacementsTable();
+  FillPlacementOptionsTable();
   FillModelsTable();
   FillModelOptionsTable();
   FillModelColumnsTable();
@@ -804,6 +848,24 @@ void InformationSchemaCatalog::FillDatabaseOptionsTable() {
     specific_kvs[kOptionName] = String(ddl::kColumnarPolicyOptionName);
     specific_kvs[kOptionValue] =
         String(default_schema_->options()->columnar_policy().value());
+    rows.push_back(GetRowFromRowKVs(table, specific_kvs));
+  }
+
+  if (default_schema_->options() != nullptr &&
+      default_schema_->options()
+          ->per_placement_routing_metadata()
+          .has_value()) {
+    specific_kvs.clear();
+    specific_kvs[kCatalogName] = DialectTableCatalog();
+    specific_kvs[kSchemaName] = DialectDefaultSchema();
+    specific_kvs[kOptionType] =
+        String(dialect_ == DatabaseDialect::POSTGRESQL ? kBoolean : kBool);
+    specific_kvs[kOptionName] =
+        String(ddl::kPerPlacementRoutingMetadataOptionName);
+    specific_kvs[kOptionValue] = String(
+        default_schema_->options()->per_placement_routing_metadata().value()
+            ? kTrue
+            : kFalse);
     rows.push_back(GetRowFromRowKVs(table, specific_kvs));
   }
 
@@ -1758,6 +1820,32 @@ void InformationSchemaCatalog::FillTableConstraintsTable() {
           String(table_name_part),
           // constraint_type,
           String(kCheck),
+          // is_deferrable,
+          String(kNo),
+          // initially_deferred,
+          String(kNo),
+          // enforced,
+          String(kYes),
+      });
+    }
+
+    // Add the placement key.
+    if (HasPlacementKey(table)) {
+      rows.push_back({
+          // constraint_catalog
+          DialectTableCatalog(),
+          // constraint_schema
+          String(table_schema_part),
+          // constraint_name
+          String(PlacementKeyName(table)),
+          // table_catalog
+          DialectTableCatalog(),
+          // table_schema
+          String(table_schema_part),
+          // table_name
+          String(table_name_part),
+          // constraint_type,
+          String(kPlacementKey),
           // is_deferrable,
           String(kNo),
           // initially_deferred,
@@ -3149,6 +3237,47 @@ void InformationSchemaCatalog::FillLocalityGroupOptionsTable() {
   }
   tables_by_name_.at(GetNameForDialect(kLocalityGroupOptions))
       ->SetContents(rows);
+}
+
+// Fills the "information_schema.placements" table. Every database has the
+// implicit default placement; user placements follow in DDL order.
+void InformationSchemaCatalog::FillPlacementsTable() {
+  auto table = tables_by_name_.at(GetNameForDialect(kPlacements)).get();
+  std::vector<std::vector<googlesql::Value>> rows;
+  absl::flat_hash_map<std::string, googlesql::Value> specific_kvs;
+  specific_kvs[kPlacementName] = String(kDefaultPlacementName);
+  specific_kvs[kIsDefault] = DialectBoolValue(true);
+  rows.push_back(GetRowFromRowKVs(table, specific_kvs));
+  for (const Placement* placement : default_schema_->placements()) {
+    specific_kvs.clear();
+    specific_kvs[kPlacementName] = String(placement->PlacementName());
+    specific_kvs[kIsDefault] = DialectBoolValue(false);
+    rows.push_back(GetRowFromRowKVs(table, specific_kvs));
+  }
+  table->SetContents(rows);
+}
+
+// Fills the "information_schema.placement_options" table with one row for
+// each option set on a user placement.
+void InformationSchemaCatalog::FillPlacementOptionsTable() {
+  auto table = tables_by_name_.at(GetNameForDialect(kPlacementOptions)).get();
+  std::vector<std::vector<googlesql::Value>> rows;
+  for (const Placement* placement : default_schema_->placements()) {
+    for (const ddl::SetOption& option : placement->options()) {
+      if (option.has_null_value()) {
+        continue;
+      }
+      absl::flat_hash_map<std::string, googlesql::Value> specific_kvs;
+      specific_kvs[kPlacementName] = String(placement->PlacementName());
+      specific_kvs[kOptionName] = String(option.option_name());
+      specific_kvs[kOptionType] = String(
+          dialect_ == DatabaseDialect::POSTGRESQL ? kCharacterVarying
+                                                  : kStringMax);
+      specific_kvs[kOptionValue] = String(PlacementOptionValue(option));
+      rows.push_back(GetRowFromRowKVs(table, specific_kvs));
+    }
+  }
+  table->SetContents(rows);
 }
 
 void InformationSchemaCatalog::FillPropertyGraphsTable() {

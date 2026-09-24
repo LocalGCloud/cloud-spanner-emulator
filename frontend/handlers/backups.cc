@@ -825,13 +825,15 @@ absl::Status RestoreDatabase(
     schema_change_operations.push_back(
         {.statements = entry.ddl_statements,
          .proto_descriptor_bytes = entry.proto_descriptor_bytes,
-         .database_dialect = entry.dialect});
+         .database_dialect = entry.dialect,
+         .replaying_committed_ddl = true});
   } else {
     for (const auto& batch : entry.schema_change_batches) {
       schema_change_operations.push_back(
           {.statements = batch.statements,
            .proto_descriptor_bytes = batch.proto_descriptor_bytes,
-           .database_dialect = entry.dialect});
+           .database_dialect = entry.dialect,
+           .replaying_committed_ddl = true});
     }
   }
   GOOGLESQL_ASSIGN_OR_RETURN(

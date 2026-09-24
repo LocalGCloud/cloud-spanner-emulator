@@ -150,6 +150,10 @@ static std::vector<PGAlterOption> GetOptionList() {
       PGAlterOption(
           PostgreSQLConstants::kSpangresColumnarPolicyOptionName, T_String,
           PostgreSQLConstants::kInternalColumnarPolicyOptionName, T_String),
+      PGAlterOption(
+          PostgreSQLConstants::kSpangresPerPlacementRoutingMetadataOptionName,
+          T_String, PostgreSQLConstants::kPerPlacementRoutingMetadataOptionName,
+          T_Boolean),
   };
 
   return options;
@@ -316,6 +320,8 @@ absl::StatusOr<std::string> ObjectTypeToString(ObjectType object_type) {
       return "OPERATOR FAMILY";
     case OBJECT_LOCALITY_GROUP:
       return "LOCALITY GROUP";
+    case OBJECT_PLACEMENT:
+      return "PLACEMENT";
     // TODO: expose when queue is implemented.
     case OBJECT_SEARCH_INDEX:
       return "SEARCH INDEX";

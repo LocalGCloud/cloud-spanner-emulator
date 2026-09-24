@@ -170,6 +170,7 @@ cc_library(
         "//backend/schema/verifiers:check_constraint_verifiers",
         "//backend/schema/verifiers:foreign_key_verifiers",
         "//backend/schema/verifiers:interleaving_verifiers",
+        "//backend/schema/verifiers:placement_verifiers",
         "//backend/storage",
         "//common:constants",
         "//common:errors",

@@ -50,6 +50,7 @@ type Options struct {
 	LogRequests                                    bool
 	EnableFaultInjection                           bool
 	DisableQueryNullFilteredIndexCheck             bool
+	EnforcePlacementDmlRestrictions                bool
 	OverrideMaxDatabasesPerInstance                int
 	OverrideChangeStreamPartitionTokenAliveSeconds int
 	DataDir                                        string
@@ -83,6 +84,9 @@ func (gw *Gateway) Run() {
 	if gw.opts.DisableQueryNullFilteredIndexCheck {
 		emulatorArgs = append(emulatorArgs, "--disable_query_null_filtered_index_check")
 	}
+	emulatorArgs = append(emulatorArgs,
+		fmt.Sprintf("--enforce_placement_dml_restrictions=%t",
+			gw.opts.EnforcePlacementDmlRestrictions))
 	emulatorArgs = append(emulatorArgs,
 		fmt.Sprintf("--override_max_databases_per_instance=%d",
 			gw.opts.OverrideMaxDatabasesPerInstance))

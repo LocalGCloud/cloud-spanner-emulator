@@ -148,6 +148,10 @@ struct TranslationOptions {
   bool enable_interval_type = false;
   // enable_hidden_column allows translation of the <HIDDEN> constraint.
   bool enable_hidden_column = true;
+  // enable_placements allows translation of <CREATE PLACEMENT>,
+  // <DROP PLACEMENT>, the <PLACEMENT KEY> column constraint and the
+  // spanner.per_placement_routing_metadata database option.
+  bool enable_placements = true;
   bool enable_serial_types = false;
   // enable_uuid_type allows translation of UUID type.
   bool enable_uuid_type = false;

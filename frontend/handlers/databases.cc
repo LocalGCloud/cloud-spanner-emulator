@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/absl_log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -36,10 +37,12 @@
 #include "common/errors.h"
 #include "common/feature_flags.h"
 #include "frontend/collections/database_manager.h"
+#include "frontend/collections/instance_partition_manager.h"
 #include "frontend/common/uris.h"
 #include "frontend/converters/time.h"
 #include "frontend/persistence/backup_catalog.h"
 #include "frontend/entities/database.h"
+#include "frontend/entities/instance_partition.h"
 #include "frontend/server/handler.h"
 #include "google/longrunning/operations.pb.h"
 #include "google/protobuf/empty.pb.h"
@@ -58,6 +61,24 @@ namespace {
 namespace database_api = ::google::spanner::admin::database::v1;
 namespace operations_api = ::google::longrunning;
 namespace protobuf_api = ::google::protobuf;
+
+// Returns the instance partitions of `instance_uri` by id and by full resource
+// name: the instance_partition option of a placement may use either form.
+absl::flat_hash_set<std::string> GetInstancePartitionNames(
+    ServerEnv* env, const std::string& instance_uri) {
+  absl::flat_hash_set<std::string> names;
+  auto partitions =
+      env->instance_partition_manager()->ListInstancePartitions(instance_uri);
+  if (!partitions.ok()) {
+    return names;
+  }
+  for (const std::shared_ptr<InstancePartition>& partition : *partitions) {
+    const std::string& partition_uri = partition->partition_uri();
+    names.insert(partition_uri);
+    names.insert(partition_uri.substr(partition_uri.rfind('/') + 1));
+  }
+  return names;
+}
 
 }  // namespace
 
@@ -190,6 +211,8 @@ absl::Status CreateDatabase(RequestContext* ctx,
           .statements = create_statements,
           .proto_descriptor_bytes = request->proto_descriptors(),
           .database_dialect = dialect,
+          .instance_partitions =
+              GetInstancePartitionNames(ctx->env(), request->parent()),
       });
   if (!database_or.ok()) {
     ctx->env()->operation_manager()->DeleteOperation(response->name())
@@ -500,7 +523,9 @@ absl::Status UpdateDatabaseDdl(
   const backend::SchemaChangeOperation schema_change_operation{
       .statements = statements,
       .proto_descriptor_bytes = request->proto_descriptors(),
-      .database_dialect = backend_database->dialect()};
+      .database_dialect = backend_database->dialect(),
+      .instance_partitions = GetInstancePartitionNames(
+          ctx->env(), MakeInstanceUri(project_id, instance_id))};
   auto populate_operation = [&]() -> absl::Status {
     database_api::UpdateDatabaseDdlMetadata update_md;
     update_md.set_database(request->database());

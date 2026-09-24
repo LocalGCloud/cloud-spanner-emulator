@@ -29,6 +29,14 @@ namespace spanner {
 namespace emulator {
 namespace backend {
 
+// Geo-partitioning (placement) limits that production Cloud Spanner applies to
+// statements in read-write transactions.
+struct PlacementDmlRestrictions {
+  // True if other SQL statements already ran in the transaction. An INSERT or
+  // DELETE on a placement table must be the only statement in its transaction.
+  bool other_statements_in_transaction = false;
+};
+
 // QueryContext provides resources required to execute a query.
 struct QueryContext {
   // The database schema.
@@ -52,6 +60,11 @@ struct QueryContext {
   // context of a read-only transaction and false if the query is executed in
   // the context of a read-write transaction.
   std::optional<bool> is_read_only_txn = std::nullopt;
+
+  // Set for statements in read-write transactions that enforce the production
+  // geo-partitioning (placement) DML restrictions.
+  std::optional<PlacementDmlRestrictions> placement_dml_restrictions =
+      std::nullopt;
 };
 
 }  // namespace backend

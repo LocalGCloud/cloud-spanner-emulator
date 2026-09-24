@@ -93,6 +93,8 @@ const char kVersionRetentionPeriodOptionName[] = "version_retention_period";
 const char kDefaultSequenceKindOptionName[] = "default_sequence_kind";
 const char kDefaultTimeZoneOptionName[] = "default_time_zone";
 const char kColumnarPolicyOptionName[] = "columnar_policy";
+const char kPerPlacementRoutingMetadataOptionName[] =
+    "per_placement_routing_metadata";
 const char kFulltextDictionaryTableOptionName[] = "fulltext_dictionary_table";
 const char kVectorIndexTreeDepth[] = "tree_depth";
 const char kVectorIndexNumberOfLeaves[] = "num_leaves";
@@ -104,6 +106,7 @@ const char kVectorIndexMinLeafSplits[] = "min_leaf_splits";
 
 const char kPlacementDefaultLeaderOptionName[] = "default_leader";
 const char kPlacementInstancePartitionOptionName[] = "instance_partition";
+const char kPlacementReadLeaseRegionsOptionName[] = "read_lease_regions";
 
 const char kCassandraTypeOptionName[] = "cassandra_type";
 
@@ -1161,6 +1164,9 @@ void VisitColumnNodeAlterAttrs(const SimpleNode* node,
       case JJTIDENTITY_COLUMN_CLAUSE:
         VisitIdentityColumnClauseNode(child, column, errors);
         break;
+      case JJTPLACEMENT_KEY:
+        column->set_placement_key(true);
+        break;
       default:
         ABSL_LOG(FATAL) << "Unexpected column info: " << child->toString();
     }
@@ -1254,6 +1260,16 @@ void VisitColumnNodeAlter(const std::string& table_name,
     case JJTDROP_NOT_NULL: {
       errors->push_back(
           "ALTER COLUMN DROP NOT NULL not supported without a column type");
+      break;
+    }
+    case JJTSET_PLACEMENT_KEY: {
+      errors->push_back(std::string(
+          error::CannotAddPlacementKey(table_name, column_name).message()));
+      break;
+    }
+    case JJTDROP_PLACEMENT_KEY: {
+      errors->push_back(std::string(
+          error::CannotDropPlacementKey(table_name, column_name).message()));
       break;
     }
     case JJTRESTART_COUNTER: {
@@ -2249,6 +2265,10 @@ void VisitDatabaseOptionKeyValNode(const SimpleNode* node, OptionList* options,
     SetOption* option = options->Add();
     option->set_option_name(kColumnarPolicyOptionName);
     VisitStringOrNullOptionValNode(value_node, option, errors);
+  } else if (option_name == kPerPlacementRoutingMetadataOptionName) {
+    SetOption* option = options->Add();
+    option->set_option_name(kPerPlacementRoutingMetadataOptionName);
+    VisitBoolOrNullOptionValNode(value_node, option, errors);
   } else {
     errors->push_back(absl::StrCat("Option: ", option_name, " is unknown."));
   }
@@ -3363,6 +3383,10 @@ void VisitPlacementOptionKeyValNode(
     SetOption* option = options->Add();
     option->set_option_name(name);
     VisitDefaultLeaderPlacementOptionValNode(value_node, option, errors);
+  } else if (name == kPlacementReadLeaseRegionsOptionName) {
+    SetOption* option = options->Add();
+    option->set_option_name(name);
+    VisitReadLeaseRegionsDatabaseOptionValNode(value_node, option, errors);
   } else {
     errors->push_back(absl::StrCat("Option: ", name, " is unknown."));
   }
@@ -3641,6 +3665,10 @@ void BuildCloudDDLStatement(const SimpleNode* root, absl::string_view ddl_text,
               name);
           break;
         case JJTPLACEMENT:
+          if (GetFirstChildNode(stmt, JJTIF_EXISTS) != nullptr) {
+            statement->mutable_drop_placement()->set_existence_modifier(
+                IF_EXISTS);
+          }
           statement->mutable_drop_placement()->set_placement_name(name);
           break;
         default:

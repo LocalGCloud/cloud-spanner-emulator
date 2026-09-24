@@ -1211,6 +1211,41 @@ TEST_F(SchemaTest, PostgreSQLPrintDDLStatementsTestInterleaving) {
 ) INTERLEAVE IN PARENT parent ON DELETE NO ACTION)")));
 }
 
+TEST_F(SchemaTest, PostgreSQLPrintDDLStatementsTestPlacements) {
+  SetPostgresqlDialect();
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<const Schema> schema,
+      test::CreateSchemaFromDDL(
+          {
+              "CREATE PLACEMENT europe WITH (instance_partition = "
+              "'europe-partition', default_leader = 'us-west1')",
+              "CREATE TABLE singers (singerid bigint PRIMARY KEY, location "
+              "varchar(1024) NOT NULL PLACEMENT KEY)",
+          },
+          type_factory_.get(), /*proto_descriptor_bytes=*/"",
+          database_api::DatabaseDialect::POSTGRESQL));
+
+  const std::vector<std::string> expected = {
+      "CREATE PLACEMENT europe WITH (instance_partition = "
+      "'europe-partition', default_leader = 'us-west1')",
+      R"(CREATE TABLE singers (
+  singerid bigint NOT NULL,
+  location character varying(1024) NOT NULL PLACEMENT KEY,
+  PRIMARY KEY(singerid)
+))"};
+  EXPECT_THAT(PrintDDLStatements(schema.get()),
+              IsOkAndHolds(::testing::ElementsAreArray(expected)));
+
+  // The printed DDL recreates the same schema.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<const Schema> recreated,
+      test::CreateSchemaFromDDL(expected, type_factory_.get(),
+                                /*proto_descriptor_bytes=*/"",
+                                database_api::DatabaseDialect::POSTGRESQL));
+  EXPECT_THAT(PrintDDLStatements(recreated.get()),
+              IsOkAndHolds(::testing::ElementsAreArray(expected)));
+}
+
 TEST_F(SchemaTest, PrintDDLStatementsTestNonParentInterleaving) {
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       std::unique_ptr<const Schema> schema,

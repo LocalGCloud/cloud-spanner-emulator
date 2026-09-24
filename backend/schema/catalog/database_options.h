@@ -59,6 +59,12 @@ class DatabaseOptions : public SchemaNode {
     return version_retention_period_;
   }
 
+  // Whether placement routing metadata is stored with each placement. Unset
+  // when the option was never set explicitly.
+  std::optional<bool> per_placement_routing_metadata() const {
+    return per_placement_routing_metadata_;
+  }
+
   // SchemaNode interface implementation.
   // ------------------------------------
   std::optional<SchemaNameInfo> GetSchemaNameInfo() const override {
@@ -109,6 +115,8 @@ class DatabaseOptions : public SchemaNode {
   std::optional<std::string> columnar_policy_;
   // Version retention period for the database.
   std::optional<std::string> version_retention_period_;
+  // Where placement routing metadata is stored.
+  std::optional<bool> per_placement_routing_metadata_;
 };
 }  // namespace backend
 }  // namespace emulator

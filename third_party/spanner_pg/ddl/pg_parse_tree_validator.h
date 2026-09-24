@@ -132,6 +132,7 @@ absl::Status ValidateParseTreeNode(const TableChainedRenameStmt& node,
                                    const TranslationOptions& options);
 absl::Status ValidateParseTreeNode(const TableRenameOp& node);
 absl::Status ValidateParseTreeNode(const CreateLocalityGroupStmt& node);
+absl::Status ValidateParseTreeNode(const CreatePlacementStmt& node);
 absl::Status ValidateParseTreeNode(const AlterLocalityGroupStmt& node);
 absl::Status ValidateParseTreeNode(const AlterColumnLocalityGroupStmt& node);
 

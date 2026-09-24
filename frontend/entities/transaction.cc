@@ -43,6 +43,7 @@
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_only_transaction.h"
 #include "backend/transaction/read_write_transaction.h"
+#include "common/config.h"
 #include "common/constants.h"
 #include "common/errors.h"
 #include "frontend/converters/time.h"
@@ -224,16 +225,37 @@ absl::StatusOr<backend::QueryResult> Transaction::ExecuteSql(
           query_mode);
     }
     case kReadWrite: {
-      return query_engine_->ExecuteSql(
+      std::optional<backend::PlacementDmlRestrictions> placement_restrictions;
+      if (config::enforce_placement_dml_restrictions()) {
+        // An INSERT or DELETE on a placement table must be the only statement
+        // in its transaction.
+        if (placement_sole_statement_table_.has_value()) {
+          return error::PlacementDmlMustBeOnlyStatement(
+              *placement_sole_statement_table_);
+        }
+        placement_restrictions = backend::PlacementDmlRestrictions{
+            .other_statements_in_transaction = executed_sql_statements_ > 0};
+      }
+      absl::StatusOr<backend::QueryResult> result = query_engine_->ExecuteSql(
           query,
-          backend::QueryContext{.schema = schema(),
-                                .reader = read_write(),
-                                .writer = read_write(),
-                                .commit_timestamp_tracker =
-                                    read_write()->commit_timestamp_tracker(),
-                                .allow_read_write_only_functions = true,
-                                .is_read_only_txn = false},
+          backend::QueryContext{
+              .schema = schema(),
+              .reader = read_write(),
+              .writer = read_write(),
+              .commit_timestamp_tracker =
+                  read_write()->commit_timestamp_tracker(),
+              .allow_read_write_only_functions = true,
+              .is_read_only_txn = false,
+              .placement_dml_restrictions = placement_restrictions},
           query_mode);
+      if (result.ok() && query_mode != v1::ExecuteSqlRequest::PLAN) {
+        ++executed_sql_statements_;
+        if (result->placement_sole_statement_table.has_value()) {
+          placement_sole_statement_table_ =
+              result->placement_sole_statement_table;
+        }
+      }
+      return result;
     }
     case kPartitionedDml: {
       auto context = backend::QueryContext{

@@ -133,6 +133,9 @@ class InformationSchemaCatalog : public googlesql::SimpleCatalog {
   googlesql::Value ParseLocalityGroupOptions(ddl::SetOption option);
   void FillLocalityGroupOptionsTable();
 
+  void FillPlacementsTable();
+  void FillPlacementOptionsTable();
+
   void FillPropertyGraphsTable();
 };
 

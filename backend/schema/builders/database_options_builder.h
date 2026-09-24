@@ -76,6 +76,12 @@ class DatabaseOptions::Builder {
     return *this;
   }
 
+  Builder& set_per_placement_routing_metadata(
+      std::optional<bool> per_placement_routing_metadata) {
+    instance_->per_placement_routing_metadata_ = per_placement_routing_metadata;
+    return *this;
+  }
+
  private:
   std::unique_ptr<DatabaseOptions> instance_;
 };
@@ -111,6 +117,12 @@ class DatabaseOptions::Editor {
   Editor& set_version_retention_period(
       std::optional<std::string> version_retention_period) {
     instance_->version_retention_period_ = version_retention_period;
+    return *this;
+  }
+
+  Editor& set_per_placement_routing_metadata(
+      std::optional<bool> per_placement_routing_metadata) {
+    instance_->per_placement_routing_metadata_ = per_placement_routing_metadata;
     return *this;
   }
 

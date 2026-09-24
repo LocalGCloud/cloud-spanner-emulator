@@ -2333,6 +2333,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_SEARCH_INDEX:
 		// SPANGRES END
 		case OBJECT_LOCALITY_GROUP:
+		case OBJECT_PLACEMENT:
 			objnode = (Node *) name;
 			break;
 		// SPANGRES BEGIN

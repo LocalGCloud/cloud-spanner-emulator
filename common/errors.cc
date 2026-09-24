@@ -2252,6 +2252,119 @@ absl::Status PlacementNotFound(absl::string_view placement_name) {
                       absl::StrCat("Placement not found: ", placement_name));
 }
 
+absl::Status PlacementKeyColumnMustBeString(absl::string_view table_name,
+                                            absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Placement key column $0.$1 must be of type STRING.",
+                       table_name, column_name));
+}
+
+absl::Status PlacementKeyColumnMustBeNotNull(absl::string_view table_name,
+                                             absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Placement key column $0.$1 must be NOT NULL.",
+                       table_name, column_name));
+}
+
+absl::Status MultiplePlacementKeyColumns(absl::string_view table_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Table $0 has more than one placement key column. A "
+                       "table can have at most one placement key.",
+                       table_name));
+}
+
+absl::Status CannotAddPlacementKey(absl::string_view table_name,
+                                   absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute(
+          "Cannot make column $0.$1 a placement key. A placement key can only "
+          "be defined when the table is created.",
+          table_name, column_name));
+}
+
+absl::Status CannotDropPlacementKey(absl::string_view table_name,
+                                    absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Cannot drop placement key column $0.$1. A placement "
+                       "key cannot be dropped from a table.",
+                       table_name, column_name));
+}
+
+absl::Status CannotAlterPlacementKeyColumn(absl::string_view table_name,
+                                           absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Cannot alter placement key column $0.$1. A placement "
+                       "key column must remain a NOT NULL STRING column.",
+                       table_name, column_name));
+}
+
+absl::Status PlacementInUse(absl::string_view placement_name,
+                            absl::string_view table_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Placement $0 can't be dropped because it is in use by "
+                       "placement table $1.",
+                       placement_name, table_name));
+}
+
+absl::Status DropNonEmptyPlacementTable(absl::string_view table_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Cannot drop placement table $0 because it contains "
+                       "rows. Delete all rows in the table before dropping it.",
+                       table_name));
+}
+
+absl::Status PlacementInstancePartitionNotFound(
+    absl::string_view placement_name, absl::string_view instance_partition) {
+  return absl::Status(
+      absl::StatusCode::kNotFound,
+      absl::Substitute("Instance partition $0 referenced by placement $1 does "
+                       "not exist.",
+                       instance_partition, placement_name));
+}
+
+absl::Status ReservedPlacementName(absl::string_view placement_name) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::Substitute("Placement name $0 is reserved for the default "
+                       "placement.",
+                       placement_name));
+}
+
+absl::Status PerPlacementRoutingMetadataWithExistingPlacements() {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      "The per_placement_routing_metadata option can't be changed after "
+      "placements have been created.");
+}
+
+absl::Status PlacementDmlMustBeOnlyStatement(absl::string_view table_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("An INSERT or DELETE statement on placement table $0 "
+                       "must be the only statement in the transaction.",
+                       table_name));
+}
+
+absl::Status PlacementTableNonKeyColumnInWhereClause(
+    absl::string_view table_name, absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::Substitute(
+          "Read-write transactions can reference only primary key columns of "
+          "placement table $0 in the WHERE clause, but the WHERE clause "
+          "references $1. Use a read-only transaction or partitioned DML "
+          "instead.",
+          table_name, column_name));
+}
+
 absl::Status ModelNotFound(absl::string_view model_name) {
   return absl::Status(absl::StatusCode::kNotFound,
                       absl::StrCat("Model `", model_name, "` not found."));

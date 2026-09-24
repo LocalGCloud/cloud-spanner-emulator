@@ -54,6 +54,11 @@ var (
 			"requests to allow testing application abort-retry behavior).")
 	disableQueryNullFilteredIndexCheck = flag.Bool("disable_query_null_filtered_index_check", false,
 		"If true, then queries that use NULL_FILTERED indexes will be answered.")
+	enforcePlacementDmlRestrictions = flag.Bool("enforce_placement_dml_restrictions", true,
+		"If true, read-write transactions enforce the geo-partitioning (placement) DML limits of "+
+			"production Cloud Spanner: an INSERT or DELETE on a placement table must be the only "+
+			"statement in its transaction, and WHERE clauses may reference only the primary key "+
+			"columns of placement tables.")
 	overrideMaxDatabasesPerInstance = flag.Int("override_max_databases_per_instance", 100,
 		"If set at a value greater than the default limit of Spanner, overrides the allowed "+
 			"maximum number of databases per instance. If the "+
@@ -160,6 +165,7 @@ func main() {
 		LogRequests:                        *logRequests,
 		EnableFaultInjection:               *enableFaultInjection,
 		DisableQueryNullFilteredIndexCheck: *disableQueryNullFilteredIndexCheck,
+		EnforcePlacementDmlRestrictions:    *enforcePlacementDmlRestrictions,
 		OverrideMaxDatabasesPerInstance:    instanceDbs,
 		OverrideChangeStreamPartitionTokenAliveSeconds: overrideChangeStreamPartitionTokenAliveSeconds,
 		DataDir:                                        *dataDir,

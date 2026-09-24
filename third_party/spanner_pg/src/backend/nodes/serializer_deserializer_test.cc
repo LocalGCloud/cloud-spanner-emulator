@@ -940,6 +940,25 @@ TEST_F(SerializationDeserializationTest, AlterLocalityGroupStmt) {
   EXPECT_THAT(alter_locality_group_stmt, CanSerializeAndDeserialize());
 }
 
+TEST_F(SerializationDeserializationTest, CreatePlacementStmt) {
+  CreatePlacementStmt* create_placement_stmt = makeNode(CreatePlacementStmt);
+  create_placement_stmt->placement_name = pstrdup("europe");
+  create_placement_stmt->options = list_make1(
+      makeDefElem(pstrdup("instance_partition"),
+                  (Node*)makeString(pstrdup("europe-partition")),
+                  /*location=*/1));
+  create_placement_stmt->if_not_exists = true;
+  EXPECT_THAT(create_placement_stmt, CanSerializeAndDeserialize());
+}
+
+TEST_F(SerializationDeserializationTest, DropPlacementStmt) {
+  DropStmt* drop_placement_stmt = makeNode(DropStmt);
+  drop_placement_stmt->missing_ok = true;
+  drop_placement_stmt->objects = list_make1(makeString(pstrdup("europe")));
+  drop_placement_stmt->removeType = OBJECT_PLACEMENT;
+  EXPECT_THAT(drop_placement_stmt, CanSerializeAndDeserialize());
+}
+
 TEST_F(SerializationDeserializationTest, AlterColumnLocalityGroupStmt) {
   AlterColumnLocalityGroupStmt* alter_column_locality_group_stmt =
       makeNode(AlterColumnLocalityGroupStmt);

@@ -117,6 +117,7 @@
 #include "backend/schema/verifiers/check_constraint_verifiers.h"
 #include "backend/schema/verifiers/foreign_key_verifiers.h"
 #include "backend/schema/verifiers/interleaving_verifiers.h"
+#include "backend/schema/verifiers/placement_verifiers.h"
 #include "backend/storage/storage.h"
 #include "common/constants.h"
 #include "common/errors.h"
@@ -396,7 +397,16 @@ class SchemaUpdaterImpl {
   template <typename PlacementModifier>
   absl::Status SetPlacementOptions(
       const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& set_options,
+      const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& existing_options,
       PlacementModifier* modifier);
+  // Checks that the instance partition named in `set_options`, if any,
+  // exists in the database's instance.
+  absl::Status ValidatePlacementInstancePartition(
+      absl::string_view placement_name,
+      const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& set_options);
+  // Checks the placement key column rules of a new table: at most one
+  // placement key, which must be a NOT NULL STRING column.
+  absl::Status ValidatePlacementKeyColumns(const Table* table);
   template <typename ChangeStreamModifier>
   absl::Status SetChangeStreamOptions(
       const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& set_options,
@@ -764,6 +774,14 @@ class SchemaUpdaterImpl {
 
   std::vector<TableID> dropped_tables_;
   std::vector<std::pair<TableID, ColumnID>> dropped_columns_;
+
+  // Whether the statements being applied were already accepted earlier (see
+  // SchemaChangeOperation::replaying_committed_ddl). Checks added after those
+  // statements were accepted are skipped.
+  bool replaying_committed_ddl_ = false;
+
+  // Instance partitions of the database's instance, when known.
+  std::optional<absl::flat_hash_set<std::string>> instance_partitions_;
 };
 
 absl::Status SchemaUpdaterImpl::Init() {
@@ -1118,52 +1136,84 @@ SchemaUpdaterImpl::ApplyDDLStatement(
       GOOGLESQL_RETURN_IF_ERROR(DropPropertyGraph(ddl_statement->drop_property_graph()));
       break;
     case ddl::DDLStatement::kCreatePlacement: {
-      const Placement* placement = latest_schema_->FindPlacement(
-          ddl_statement->create_placement().placement_name());
-      if (placement != nullptr) {
-        return error::SchemaObjectAlreadyExists(
-            "Placement", ddl_statement->create_placement().placement_name());
+      const ddl::CreatePlacement& create_placement =
+          ddl_statement->create_placement();
+      if (!replaying_committed_ddl_ &&
+          absl::EqualsIgnoreCase(create_placement.placement_name(),
+                                 kDefaultPlacementName)) {
+        return error::ReservedPlacementName(create_placement.placement_name());
       }
+      const Placement* placement =
+          latest_schema_->FindPlacement(create_placement.placement_name());
+      if (placement != nullptr) {
+        if (create_placement.existence_modifier() == ddl::IF_NOT_EXISTS) {
+          // A placement with the same name already exists, and we have the
+          // IF NOT EXISTS clause in the statement, so return it as a no-op.
+          return nullptr;
+        }
+        return error::SchemaObjectAlreadyExists(
+            "Placement", create_placement.placement_name());
+      }
+      GOOGLESQL_RETURN_IF_ERROR(ValidatePlacementInstancePartition(
+          create_placement.placement_name(), create_placement.set_options()));
       Placement::Builder placement_builder;
-      placement_builder.set_name(
-          ddl_statement->create_placement().placement_name());
+      placement_builder.set_name(create_placement.placement_name());
 
-      const auto& set_options = ddl_statement->create_placement().set_options();
+      const auto& set_options = create_placement.set_options();
       if (!set_options.empty()) {
         GOOGLESQL_RETURN_IF_ERROR(AlterNode<Placement>(
             placement_builder.get(),
             [this, set_options](Placement::Editor* editor) -> absl::Status {
               // Set placement options
-              return SetPlacementOptions(set_options, editor);
+              return SetPlacementOptions(
+                  set_options,
+                  ::google::protobuf::RepeatedPtrField<ddl::SetOption>(),
+                  editor);
             }));
       }
       GOOGLESQL_RETURN_IF_ERROR(AddNode(placement_builder.build()));
       break;
     }
     case ddl::DDLStatement::kAlterPlacement: {
-      const Placement* placement = latest_schema_->FindPlacement(
-          ddl_statement->alter_placement().placement_name());
+      const ddl::AlterPlacement& alter_placement =
+          ddl_statement->alter_placement();
+      const Placement* placement =
+          latest_schema_->FindPlacement(alter_placement.placement_name());
       if (placement == nullptr) {
-        return error::PlacementNotFound(
-            ddl_statement->alter_placement().placement_name());
+        if (alter_placement.existence_modifier() == ddl::IF_EXISTS) {
+          return nullptr;
+        }
+        return error::PlacementNotFound(alter_placement.placement_name());
       }
-      const auto& set_options = ddl_statement->alter_placement().set_options();
+      GOOGLESQL_RETURN_IF_ERROR(ValidatePlacementInstancePartition(
+          placement->PlacementName(), alter_placement.set_options()));
+      const auto& set_options = alter_placement.set_options();
       if (!set_options.empty()) {
         GOOGLESQL_RETURN_IF_ERROR(AlterNode<Placement>(
             placement,
-            [this, set_options](Placement::Editor* editor) -> absl::Status {
-              // Set change stream options
-              return SetPlacementOptions(set_options, editor);
+            [this, set_options,
+             placement](Placement::Editor* editor) -> absl::Status {
+              // Only the named options change; NULL clears an option.
+              return SetPlacementOptions(set_options, placement->options(),
+                                         editor);
             }));
       }
       break;
     }
     case ddl::DDLStatement::kDropPlacement: {
-      const Placement* placement = latest_schema_->FindPlacement(
-          ddl_statement->drop_placement().placement_name());
+      const ddl::DropPlacement& drop_placement = ddl_statement->drop_placement();
+      const Placement* placement =
+          latest_schema_->FindPlacement(drop_placement.placement_name());
       if (placement == nullptr) {
-        return error::PlacementNotFound(
-            ddl_statement->drop_placement().placement_name());
+        if (drop_placement.existence_modifier() == ddl::IF_EXISTS) {
+          return nullptr;
+        }
+        return error::PlacementNotFound(drop_placement.placement_name());
+      }
+      if (!replaying_committed_ddl_ && storage_ != nullptr) {
+        GOOGLESQL_RETURN_IF_ERROR(VerifyPlacementNotInUse(
+            storage_, schema_change_timestamp_, latest_schema_,
+            placement->PlacementName()));
       }
       GOOGLESQL_RETURN_IF_ERROR(DropNode(placement));
       break;
@@ -1207,6 +1257,8 @@ SchemaUpdaterImpl::ApplyDDLStatements(
     const SchemaChangeOperation& schema_change_operation) {
   std::vector<SchemaValidationContext> pending_work;
   int statement_index = 0;
+  replaying_committed_ddl_ = schema_change_operation.replaying_committed_ddl;
+  instance_partitions_ = schema_change_operation.instance_partitions;
 
   for (const auto& statement : schema_change_operation.statements) {
     GOOGLESQL_VLOG(2) << "Applying statement " << statement;
@@ -1409,6 +1461,15 @@ absl::Status SchemaUpdaterImpl::SetDatabaseOptions(
         modifier->set_version_retention_period(std::nullopt);
       }
     }
+    if (absl::StripPrefix(
+            absl::StripPrefix(option.option_name(), "spanner.internal.cloud_"),
+            "spanner.internal.") == ddl::kPerPlacementRoutingMetadataOptionName) {
+      if (option.has_bool_value()) {
+        modifier->set_per_placement_routing_metadata(option.bool_value());
+      } else if (option.has_null_value()) {
+        modifier->set_per_placement_routing_metadata(std::nullopt);
+      }
+    }
   }
   return absl::OkStatus();
 }
@@ -1446,19 +1507,91 @@ absl::Status SchemaUpdaterImpl::SetChangeStreamOptions(
 template <typename PlacementModifier>
 absl::Status SchemaUpdaterImpl::SetPlacementOptions(
     const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& set_options,
+    const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& existing_options,
     PlacementModifier* modifier) {
-  modifier->set_options(set_options);
-  for (const ddl::SetOption& option : set_options) {
-    if (option.has_null_value()) {
-      continue;
+  // Options not named in `set_options` keep their values, and an option set
+  // to NULL is removed.
+  auto find_option = [](const ::google::protobuf::RepeatedPtrField<ddl::SetOption>&
+                            options,
+                        absl::string_view name) -> const ddl::SetOption* {
+    for (const ddl::SetOption& option : options) {
+      if (option.option_name() == name) {
+        return &option;
+      }
     }
+    return nullptr;
+  };
+  ::google::protobuf::RepeatedPtrField<ddl::SetOption> merged_options;
+  for (const ddl::SetOption& option : existing_options) {
+    const ddl::SetOption* new_option =
+        find_option(set_options, option.option_name());
+    if (new_option == nullptr) {
+      *merged_options.Add() = option;
+    } else if (!new_option->has_null_value()) {
+      *merged_options.Add() = *new_option;
+    }
+  }
+  for (const ddl::SetOption& option : set_options) {
+    if (!option.has_null_value() &&
+        find_option(existing_options, option.option_name()) == nullptr) {
+      *merged_options.Add() = option;
+    }
+  }
+
+  std::optional<std::string> default_leader;
+  std::optional<std::string> instance_partition;
+  for (const ddl::SetOption& option : merged_options) {
     if (option.option_name() == ddl::kPlacementDefaultLeaderOptionName) {
-      std::optional<std::string> default_leader = option.string_value();
-      modifier->set_default_leader(default_leader);
+      default_leader = option.string_value();
     } else if (option.option_name() ==
                ddl::kPlacementInstancePartitionOptionName) {
-      std::optional<std::string> instance_partition = option.string_value();
-      modifier->set_instance_partition(instance_partition);
+      instance_partition = option.string_value();
+    }
+  }
+  modifier->set_options(merged_options);
+  modifier->set_default_leader(default_leader);
+  modifier->set_instance_partition(instance_partition);
+  return absl::OkStatus();
+}
+
+absl::Status SchemaUpdaterImpl::ValidatePlacementInstancePartition(
+    absl::string_view placement_name,
+    const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& set_options) {
+  if (replaying_committed_ddl_ || !instance_partitions_.has_value()) {
+    return absl::OkStatus();
+  }
+  for (const ddl::SetOption& option : set_options) {
+    if (option.option_name() == ddl::kPlacementInstancePartitionOptionName &&
+        option.has_string_value() &&
+        !instance_partitions_->contains(option.string_value())) {
+      return error::PlacementInstancePartitionNotFound(placement_name,
+                                                       option.string_value());
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status SchemaUpdaterImpl::ValidatePlacementKeyColumns(
+    const Table* table) {
+  if (replaying_committed_ddl_) {
+    return absl::OkStatus();
+  }
+  bool has_placement_key = false;
+  for (const Column* column : table->columns()) {
+    if (!column->is_placement_key()) {
+      continue;
+    }
+    if (has_placement_key) {
+      return error::MultiplePlacementKeyColumns(table->Name());
+    }
+    has_placement_key = true;
+    if (!column->GetType()->IsString()) {
+      return error::PlacementKeyColumnMustBeString(table->Name(),
+                                                   column->Name());
+    }
+    if (column->is_nullable()) {
+      return error::PlacementKeyColumnMustBeNotNull(table->Name(),
+                                                    column->Name());
     }
   }
   return absl::OkStatus();
@@ -3191,6 +3324,7 @@ absl::Status SchemaUpdaterImpl::CreateTable(
         CreateColumn(ddl_column, builder.get(), &ddl_table, dialect));
     builder.add_column(column);
   }
+  GOOGLESQL_RETURN_IF_ERROR(ValidatePlacementKeyColumns(builder.get()));
 
   for (const Column* column : builder.get()->columns()) {
     if (column->is_generated()) {
@@ -5124,6 +5258,11 @@ absl::Status SchemaUpdaterImpl::ValidateAlterDatabaseOptions(
         continue;
       }
       return error::UnsupportedVersionRetentionPeriodOptionValues();
+    } else if (option_name == ddl::kPerPlacementRoutingMetadataOptionName) {
+      // Routing metadata placement can't change once placements exist.
+      if (!replaying_committed_ddl_ && !latest_schema_->placements().empty()) {
+        return error::PerPlacementRoutingMetadataWithExistingPlacements();
+      }
     } else {
       return error::UnsupportedAlterDatabaseOption(option_name);
     }
@@ -5445,6 +5584,10 @@ absl::Status SchemaUpdaterImpl::AlterTable(
           alter_table.add_column().existence_modifier() == ddl::IF_NOT_EXISTS) {
         return absl::OkStatus();
       }
+      if (!replaying_committed_ddl_ && column_def.placement_key()) {
+        return error::CannotAddPlacementKey(table->Name(),
+                                            column_def.column_name());
+      }
       GOOGLESQL_ASSIGN_OR_RETURN(const Column* new_column,
                        CreateColumn(column_def, table, /*ddl_table=*/
                                     nullptr, dialect));
@@ -5492,6 +5635,25 @@ absl::Status SchemaUpdaterImpl::AlterTable(
         return error::ColumnNotFound(table->Name(), column_name);
       }
       const auto& alter_column = alter_table.alter_column();
+      if (!replaying_committed_ddl_) {
+        if (column->is_placement_key()) {
+          // A placement key column must remain a NOT NULL STRING column.
+          const bool drops_not_null =
+              alter_column.has_operation()
+                  ? alter_column.operation() ==
+                        ddl::AlterTable::AlterColumn::DROP_NOT_NULL
+                  : (alter_column.column().type() !=
+                         ddl::ColumnDefinition::STRING ||
+                     !alter_column.column().not_null());
+          if (drops_not_null) {
+            return error::CannotAlterPlacementKeyColumn(table->Name(),
+                                                        column->Name());
+          }
+        } else if (!alter_column.has_operation() &&
+                   alter_column.column().placement_key()) {
+          return error::CannotAddPlacementKey(table->Name(), column->Name());
+        }
+      }
       if (alter_column.has_operation()) {
         if (alter_column.operation() ==
             ddl::AlterTable::AlterColumn::ALTER_IDENTITY) {
@@ -5564,6 +5726,9 @@ absl::Status SchemaUpdaterImpl::AlterTable(
       const Column* column = table->FindColumn(alter_table.drop_column());
       if (column == nullptr) {
         return error::ColumnNotFound(table->Name(), alter_table.drop_column());
+      }
+      if (!replaying_committed_ddl_ && column->is_placement_key()) {
+        return error::CannotDropPlacementKey(table->Name(), column->Name());
       }
       if (!column->change_streams_explicitly_tracking_column().empty()) {
         std::vector<std::string> change_stream_names_list;
@@ -6135,6 +6300,10 @@ absl::Status SchemaUpdaterImpl::DropTable(const ddl::DropTable& drop_table) {
     return error::DropTableWithChangeStream(
         table->Name(), change_streams_explicitly_tracking_table.size(),
         change_stream_names);
+  }
+  if (!replaying_committed_ddl_ && storage_ != nullptr) {
+    GOOGLESQL_RETURN_IF_ERROR(VerifyPlacementTableIsEmpty(
+        storage_, schema_change_timestamp_, table));
   }
 
   if (table->locality_group() != nullptr) {

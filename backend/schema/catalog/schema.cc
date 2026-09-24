@@ -548,7 +548,19 @@ void DumpDatabaseOptions(const DatabaseOptions* database_option,
     ddl::SetOption* set_option =
         alter_database.mutable_set_options()->add_options();
     set_option->set_option_name(option.option_name());
-    set_option->set_string_value(option.string_value());
+    if (option.has_bool_value()) {
+      set_option->set_bool_value(option.bool_value());
+    } else {
+      set_option->set_string_value(option.string_value());
+    }
+  }
+}
+
+void DumpPlacement(const Placement* placement,
+                   ddl::CreatePlacement& create_placement) {
+  create_placement.set_placement_name(placement->PlacementName());
+  for (const ddl::SetOption& option : placement->options()) {
+    *create_placement.add_set_options() = option;
   }
 }
 
@@ -595,6 +607,13 @@ ddl::DDLStatementList Schema::Dump() const {
     }
     DumpSequence(sequence,
                  *ddl_statements.add_statement()->mutable_create_sequence());
+  }
+
+  // Placements come before tables so that the output reads in the order the
+  // objects are created, with placement tables after their placements.
+  for (const Placement* placement : placements_) {
+    DumpPlacement(placement,
+                  *ddl_statements.add_statement()->mutable_create_placement());
   }
 
   for (const Table* table : tables_) {

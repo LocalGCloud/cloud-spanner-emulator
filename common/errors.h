@@ -510,6 +510,29 @@ absl::Status IndexNotFound(absl::string_view index_name);
 absl::Status ChangeStreamNotFound(absl::string_view change_stream_name);
 absl::Status UnknownPlacement(absl::string_view placement_name);
 absl::Status PlacementNotFound(absl::string_view placement_name);
+
+// Placement (geo-partitioning) errors.
+absl::Status PlacementKeyColumnMustBeString(absl::string_view table_name,
+                                            absl::string_view column_name);
+absl::Status PlacementKeyColumnMustBeNotNull(absl::string_view table_name,
+                                             absl::string_view column_name);
+absl::Status MultiplePlacementKeyColumns(absl::string_view table_name);
+absl::Status CannotAddPlacementKey(absl::string_view table_name,
+                                   absl::string_view column_name);
+absl::Status CannotDropPlacementKey(absl::string_view table_name,
+                                    absl::string_view column_name);
+absl::Status CannotAlterPlacementKeyColumn(absl::string_view table_name,
+                                           absl::string_view column_name);
+absl::Status PlacementInUse(absl::string_view placement_name,
+                            absl::string_view table_name);
+absl::Status DropNonEmptyPlacementTable(absl::string_view table_name);
+absl::Status PlacementInstancePartitionNotFound(
+    absl::string_view placement_name, absl::string_view instance_partition);
+absl::Status ReservedPlacementName(absl::string_view placement_name);
+absl::Status PerPlacementRoutingMetadataWithExistingPlacements();
+absl::Status PlacementDmlMustBeOnlyStatement(absl::string_view table_name);
+absl::Status PlacementTableNonKeyColumnInWhereClause(
+    absl::string_view table_name, absl::string_view column_name);
 absl::Status ModelNotFound(absl::string_view model_name);
 absl::Status TableValuedFunctionNotFound(absl::string_view tvf_name);
 absl::Status SequenceNotFound(absl::string_view sequence_name);

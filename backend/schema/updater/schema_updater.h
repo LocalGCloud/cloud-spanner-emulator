@@ -18,11 +18,13 @@
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_SCHEMA_UPDATER_SCHEMA_UPDATER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "googlesql/public/type.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -52,6 +54,15 @@ struct SchemaChangeOperation {
   // replay uses this to restore time-based schema state such as change stream
   // creation times.
   absl::Time schema_change_timestamp = absl::InfinitePast();
+  // True when re-applying statements that were already accepted earlier, such
+  // as persisted DDL history replayed at startup or a backup being restored.
+  // Validations introduced after those statements were accepted are skipped
+  // so that previously committed schemas keep loading.
+  bool replaying_committed_ddl = false;
+  // Instance partitions that exist in the database's instance, listed both by
+  // id and by full resource name. When unset, placements are not checked
+  // against existing instance partitions.
+  std::optional<absl::flat_hash_set<std::string>> instance_partitions;
 };
 
 // Database context within which a schema change is processed.

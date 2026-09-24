@@ -1056,5 +1056,363 @@ TEST_F(DdlTest, AlterTableIfExistsDisabled) {
                "<IF [NOT] EXISTS> is not supported in <ALTER> statement."));
 }
 
+
+// Placement (geo-partitioning) DDL.
+
+absl::StatusOr<google::spanner::emulator::backend::ddl::DDLStatementList>
+TranslatePlacementDdl(DdlTestHelper& helper, const std::string& input,
+                      const TranslationOptions& options = {
+                          .enable_if_not_exists = true}) {
+  interfaces::ParserBatchOutput parsed_statements = helper.Parser()->ParseBatch(
+      interfaces::ParserParamsBuilder(input).Build());
+  if (!parsed_statements.global_status().ok()) {
+    return parsed_statements.global_status();
+  }
+  return helper.Translator()->Translate(parsed_statements, options);
+}
+
+TEST_F(DdlTest, CreatePlacement) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      TranslatePlacementDdl(
+          base_helper_,
+          "CREATE PLACEMENT europe WITH (instance_partition = "
+          "'europe-partition', default_leader = 'us-west1', "
+          "read_lease_regions = 'us-east1,us-west1')"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  ASSERT_TRUE(statements.statement(0).has_create_placement());
+  const google::spanner::emulator::backend::ddl::CreatePlacement& placement =
+      statements.statement(0).create_placement();
+  EXPECT_EQ(placement.placement_name(), "europe");
+  EXPECT_FALSE(placement.has_existence_modifier());
+  ASSERT_THAT(placement.set_options(), SizeIs(3));
+  EXPECT_EQ(placement.set_options(0).option_name(), "instance_partition");
+  EXPECT_EQ(placement.set_options(0).string_value(), "europe-partition");
+  EXPECT_EQ(placement.set_options(1).option_name(), "default_leader");
+  EXPECT_EQ(placement.set_options(1).string_value(), "us-west1");
+  EXPECT_EQ(placement.set_options(2).option_name(), "read_lease_regions");
+  EXPECT_EQ(placement.set_options(2).string_value(), "us-east1,us-west1");
+}
+
+TEST_F(DdlTest, CreatePlacementIfNotExistsWithDefaultReadLeaseRegions) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      TranslatePlacementDdl(base_helper_,
+                            "CREATE PLACEMENT IF NOT EXISTS europe WITH "
+                            "(instance_partition = 'europe-partition', "
+                            "read_lease_regions = DEFAULT)"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  const google::spanner::emulator::backend::ddl::CreatePlacement& placement =
+      statements.statement(0).create_placement();
+  EXPECT_EQ(placement.placement_name(), "europe");
+  EXPECT_EQ(placement.existence_modifier(),
+            google::spanner::emulator::backend::ddl::IF_NOT_EXISTS);
+  ASSERT_THAT(placement.set_options(), SizeIs(2));
+  EXPECT_EQ(placement.set_options(1).option_name(), "read_lease_regions");
+  EXPECT_TRUE(placement.set_options(1).null_value());
+}
+
+TEST_F(DdlTest, CreatePlacementRequiresInstancePartition) {
+  EXPECT_THAT(TranslatePlacementDdl(base_helper_, "CREATE PLACEMENT europe"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "CREATE PLACEMENT statements require option "
+                       "`instance_partition` to be set"));
+  EXPECT_THAT(
+      TranslatePlacementDdl(
+          base_helper_,
+          "CREATE PLACEMENT europe WITH (default_leader = 'us-west1')"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "CREATE PLACEMENT statements require option "
+               "`instance_partition` to be set"));
+  EXPECT_THAT(TranslatePlacementDdl(
+                  base_helper_,
+                  "CREATE PLACEMENT europe WITH (instance_partition = NULL)"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Placements must have a non-NULL instance_partition."));
+  EXPECT_THAT(TranslatePlacementDdl(
+                  base_helper_,
+                  "CREATE PLACEMENT europe WITH (instance_partition = '')"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Empty string is an invalid value for "
+                       "instance_partition."));
+}
+
+TEST_F(DdlTest, CreatePlacementInvalidOptions) {
+  EXPECT_THAT(TranslatePlacementDdl(base_helper_,
+                                    "CREATE PLACEMENT europe WITH "
+                                    "(instance_partition = 'p', foo = 'bar')"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Option: foo is unknown."));
+  EXPECT_THAT(
+      TranslatePlacementDdl(base_helper_,
+                            "CREATE PLACEMENT europe WITH (instance_partition "
+                            "= 'p', instance_partition = 'q')"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               "Duplicate option: instance_partition"));
+  EXPECT_THAT(TranslatePlacementDdl(
+                  base_helper_,
+                  "CREATE PLACEMENT europe WITH (instance_partition = 1)"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       testing::HasSubstr("Unexpected value for option: "
+                                          "instance_partition")));
+}
+
+TEST_F(DdlTest, DropPlacement) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      TranslatePlacementDdl(base_helper_, "DROP PLACEMENT europe"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  ASSERT_TRUE(statements.statement(0).has_drop_placement());
+  EXPECT_EQ(statements.statement(0).drop_placement().placement_name(),
+            "europe");
+  EXPECT_FALSE(
+      statements.statement(0).drop_placement().has_existence_modifier());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      statements,
+      TranslatePlacementDdl(base_helper_, "DROP PLACEMENT IF EXISTS europe"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  EXPECT_EQ(statements.statement(0).drop_placement().placement_name(),
+            "europe");
+  EXPECT_EQ(statements.statement(0).drop_placement().existence_modifier(),
+            google::spanner::emulator::backend::ddl::IF_EXISTS);
+}
+
+TEST_F(DdlTest, PlacementKeyColumn) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      TranslatePlacementDdl(
+          base_helper_,
+          "CREATE TABLE singers (singerid bigint PRIMARY KEY, "
+          "singername varchar(1024), "
+          "location varchar(1024) NOT NULL PLACEMENT KEY)"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  const google::spanner::emulator::backend::ddl::CreateTable& table =
+      statements.statement(0).create_table();
+  ASSERT_THAT(table.column(), SizeIs(3));
+  EXPECT_FALSE(table.column(0).placement_key());
+  EXPECT_FALSE(table.column(1).placement_key());
+  EXPECT_EQ(table.column(2).column_name(), "location");
+  EXPECT_TRUE(table.column(2).placement_key());
+  EXPECT_TRUE(table.column(2).not_null());
+}
+
+TEST_F(DdlTest, AddColumnPlacementKeyIsTranslated) {
+  // The backend rejects adding a placement key to an existing table; the
+  // translator only reports what was written.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      TranslatePlacementDdl(base_helper_,
+                            "ALTER TABLE singers ADD COLUMN location "
+                            "varchar NOT NULL PLACEMENT KEY"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  ASSERT_TRUE(statements.statement(0).alter_table().has_add_column());
+  EXPECT_TRUE(statements.statement(0)
+                  .alter_table()
+                  .add_column()
+                  .column()
+                  .placement_key());
+}
+
+TEST_F(DdlTest, NamedPlacementKeyConstraintIsNotSupported) {
+  EXPECT_THAT(
+      TranslatePlacementDdl(base_helper_,
+                            "CREATE TABLE singers (singerid bigint PRIMARY "
+                            "KEY, location varchar NOT NULL CONSTRAINT "
+                            "loc_key PLACEMENT KEY)"),
+      StatusIs(absl::StatusCode::kFailedPrecondition,
+               "Setting a name of a <PLACEMENT KEY> constraint is not "
+               "supported."));
+}
+
+TEST_F(DdlTest, PlacementIsAnUnreservedKeyword) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      TranslatePlacementDdl(base_helper_,
+                            "CREATE TABLE placement (placement bigint "
+                            "PRIMARY KEY, key varchar)"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  EXPECT_EQ(statements.statement(0).create_table().table_name(), "placement");
+  EXPECT_EQ(statements.statement(0).create_table().column(0).column_name(),
+            "placement");
+}
+
+TEST_F(DdlTest, PerPlacementRoutingMetadataDatabaseOption) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      TranslatePlacementDdl(base_helper_,
+                            "ALTER DATABASE db SET "
+                            "spanner.per_placement_routing_metadata = true"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  const auto& options =
+      statements.statement(0).alter_database().set_options().options();
+  ASSERT_THAT(options, SizeIs(1));
+  EXPECT_EQ(options.Get(0).option_name(), "per_placement_routing_metadata");
+  ASSERT_TRUE(options.Get(0).has_bool_value());
+  EXPECT_TRUE(options.Get(0).bool_value());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      statements,
+      TranslatePlacementDdl(base_helper_,
+                            "ALTER DATABASE db SET "
+                            "spanner.per_placement_routing_metadata = false"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  EXPECT_FALSE(statements.statement(0)
+                   .alter_database()
+                   .set_options()
+                   .options(0)
+                   .bool_value());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      statements,
+      TranslatePlacementDdl(
+          base_helper_,
+          "ALTER DATABASE db RESET spanner.per_placement_routing_metadata"));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  EXPECT_TRUE(statements.statement(0)
+                  .alter_database()
+                  .set_options()
+                  .options(0)
+                  .null_value());
+
+  EXPECT_THAT(
+      TranslatePlacementDdl(base_helper_,
+                            "ALTER DATABASE db SET "
+                            "spanner.per_placement_routing_metadata = 'maybe'"),
+      StatusIs(absl::StatusCode::kFailedPrecondition,
+               testing::HasSubstr("Expected a boolean.")));
+}
+
+TEST_F(DdlTest, DisablePlacements) {
+  const TranslationOptions disabled = {.enable_if_not_exists = true,
+                                       .enable_placements = false};
+  EXPECT_THAT(TranslatePlacementDdl(
+                  base_helper_,
+                  "CREATE PLACEMENT europe WITH (instance_partition = 'p')",
+                  disabled),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       "<CREATE PLACEMENT> statement is not supported."));
+  EXPECT_THAT(
+      TranslatePlacementDdl(base_helper_, "DROP PLACEMENT europe", disabled),
+      StatusIs(absl::StatusCode::kFailedPrecondition,
+               "<DROP PLACEMENT> statement is not supported."));
+  EXPECT_THAT(
+      TranslatePlacementDdl(base_helper_,
+                            "CREATE TABLE singers (singerid bigint PRIMARY "
+                            "KEY, location varchar NOT NULL PLACEMENT KEY)",
+                            disabled),
+      StatusIs(absl::StatusCode::kFailedPrecondition,
+               "<PLACEMENT KEY> constraint type is not supported."));
+  EXPECT_THAT(
+      TranslatePlacementDdl(base_helper_,
+                            "ALTER DATABASE db SET "
+                            "spanner.per_placement_routing_metadata = true",
+                            disabled),
+      StatusIs(absl::StatusCode::kFailedPrecondition,
+               "Database option <spanner.per_placement_routing_metadata> is "
+               "not supported."));
+}
+
+TEST_F(DdlTest, PrintPlacementStatements) {
+  google::protobuf::TextFormat::Parser parser;
+  google::spanner::emulator::backend::ddl::DDLStatementList input;
+  ASSERT_TRUE(parser.ParseFromString(
+      R"pb(
+        statement {
+          create_placement {
+            placement_name: "europe"
+            set_options {
+              option_name: "instance_partition"
+              string_value: "europe-partition"
+            }
+            set_options { option_name: "default_leader" string_value: "us-west1" }
+            set_options { option_name: "read_lease_regions" null_value: true }
+          }
+        }
+        statement {
+          create_placement {
+            placement_name: "Asia"
+            existence_modifier: IF_NOT_EXISTS
+            set_options { option_name: "instance_partition" string_value: "it's" }
+          }
+        }
+        statement { drop_placement { placement_name: "europe" } }
+        statement {
+          drop_placement { placement_name: "Asia" existence_modifier: IF_EXISTS }
+        }
+        statement {
+          create_table {
+            table_name: "singers"
+            column { column_name: "singerid" type: INT64 not_null: true }
+            column {
+              column_name: "location"
+              type: STRING
+              length: 1024
+              not_null: true
+              placement_key: true
+            }
+            primary_key { key_name: "singerid" }
+          }
+        }
+        statement {
+          alter_database {
+            db_name: "db"
+            set_options {
+              options {
+                option_name: "per_placement_routing_metadata"
+                bool_value: true
+              }
+            }
+          }
+        }
+      )pb",
+      &input));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::vector<std::string> printed,
+                       base_helper_.SchemaPrinter()->PrintDDLStatements(input));
+  EXPECT_THAT(
+      printed,
+      ElementsAre(
+          "CREATE PLACEMENT europe WITH (instance_partition = "
+          "'europe-partition', default_leader = 'us-west1', "
+          "read_lease_regions = DEFAULT)",
+          "CREATE PLACEMENT IF NOT EXISTS \"Asia\" WITH (instance_partition = "
+          "'it''s')",
+          "DROP PLACEMENT europe", "DROP PLACEMENT IF EXISTS \"Asia\"",
+          "CREATE TABLE singers (\n"
+          "  singerid bigint NOT NULL,\n"
+          "  location character varying(1024) NOT NULL PLACEMENT KEY,\n"
+          "  PRIMARY KEY(singerid)\n"
+          ")",
+          "ALTER DATABASE db SET "
+          "\"spanner.per_placement_routing_metadata\" = true"));
+}
+
+TEST_F(DdlTest, PlacementStatementsRoundTrip) {
+  const std::vector<std::string> inputs = {
+      "CREATE PLACEMENT europe WITH (instance_partition = 'europe-partition', "
+      "default_leader = 'us-west1', read_lease_regions = 'us-east1')",
+      "CREATE PLACEMENT IF NOT EXISTS \"Asia\" WITH (instance_partition = "
+      "'asia-partition', read_lease_regions = DEFAULT)",
+      "DROP PLACEMENT IF EXISTS europe",
+      "CREATE TABLE singers (singerid bigint PRIMARY KEY, location "
+      "varchar(1024) NOT NULL PLACEMENT KEY)",
+      "ALTER DATABASE db SET spanner.per_placement_routing_metadata = false",
+  };
+  for (const std::string& input : inputs) {
+    SCOPED_TRACE(input);
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(DDLStatementList translated,
+                         TranslatePlacementDdl(base_helper_, input));
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        std::vector<std::string> printed,
+        base_helper_.SchemaPrinter()->PrintDDLStatements(translated));
+    ASSERT_THAT(printed, SizeIs(1));
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(DDLStatementList retranslated,
+                         TranslatePlacementDdl(base_helper_, printed[0]));
+    EXPECT_EQ(retranslated.DebugString(), translated.DebugString())
+        << "Printed statement: " << printed[0];
+  }
+}
+
 }  // namespace
 }  // namespace postgres_translator::spangres

@@ -27,6 +27,7 @@
 #include "backend/actions/ops.h"
 #include "backend/datamodel/key.h"
 #include "backend/schema/catalog/column.h"
+#include "backend/schema/catalog/placement.h"
 #include "backend/schema/catalog/table.h"
 #include "common/clock.h"
 #include "common/constants.h"
@@ -94,6 +95,7 @@ absl::Status ColumnValueValidator::ValidateColumnStringValue(
     }
 
     if (column->is_placement_key() && !value.string_value().empty() &&
+        value.string_value() != kDefaultPlacementName &&
         !placements_.contains(value.string_value())) {
       return error::UnknownPlacement(value.string_value());
     }

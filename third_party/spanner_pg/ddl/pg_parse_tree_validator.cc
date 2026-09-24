@@ -606,6 +606,7 @@ absl::Status ValidateParseTreeNode(const Constraint& node, bool add_in_alter,
       case CONSTR_GENERATED:
       case CONSTR_DEFAULT:
       case CONSTR_HIDDEN:
+      case CONSTR_PLACEMENT_KEY:
       case CONSTR_IDENTITY:
       case CONSTR_ON_UPDATE:
         break;
@@ -959,7 +960,8 @@ absl::Status ValidateParseTreeNode(const DropStmt& node,
       node.removeType != OBJECT_SEQUENCE &&
       node.removeType != OBJECT_FUNCTION
       && node.removeType != OBJECT_SEARCH_INDEX &&
-      node.removeType != OBJECT_LOCALITY_GROUP
+      node.removeType != OBJECT_LOCALITY_GROUP &&
+      node.removeType != OBJECT_PLACEMENT
       // TODO: expose when queue is implemented.
   ) {
     auto object_type = internal::ObjectTypeToString(node.removeType);
@@ -967,7 +969,7 @@ absl::Status ValidateParseTreeNode(const DropStmt& node,
         "Only <DROP TABLE>, <DROP INDEX>, <DROP SCHEMA>, <DROP VIEW>, "
         "<DROP SEQUENCE>, <DROP FUNCTION>, "
         "<DROP SEARCH INDEX>, "
-        "<DROP LOCALITY GROUP>, "
+        "<DROP LOCALITY GROUP>, <DROP PLACEMENT>, "
         // TODO: expose when queue is implemented.
         "and <DROP CHANGE STREAM> statements are supported.";
     if (!object_type.ok()) {
@@ -1012,7 +1014,8 @@ absl::Status ValidateParseTreeNode(const DropStmt& node,
     GOOGLESQL_RET_CHECK(locality_group_to_drop_node->relname &&
               *locality_group_to_drop_node->relname != '\0');
   // TODO: expose when queue is implemented.
-  } else if (node.removeType != OBJECT_SCHEMA) {
+  } else if (node.removeType != OBJECT_SCHEMA &&
+             node.removeType != OBJECT_PLACEMENT) {
     const List* object_to_drop_list;
     if (node.removeType == OBJECT_FUNCTION) {
       GOOGLESQL_ASSIGN_OR_RETURN(const ObjectWithArgs* object_with_args,
@@ -1088,7 +1091,8 @@ absl::Status ValidateParseTreeNode(const DropStmt& node,
           node.removeType == OBJECT_VIEW || node.removeType == OBJECT_SCHEMA ||
           node.removeType == OBJECT_CHANGE_STREAM
           || node.removeType == OBJECT_SEARCH_INDEX ||
-          node.removeType == OBJECT_LOCALITY_GROUP
+          node.removeType == OBJECT_LOCALITY_GROUP ||
+          node.removeType == OBJECT_PLACEMENT
           // TODO: expose when queue is implemented.
           )) {
       return UnsupportedTranslationError(
@@ -1915,6 +1919,20 @@ absl::Status ValidateParseTreeNode(const CreateLocalityGroupStmt& node) {
   }
   GOOGLESQL_RET_CHECK_NE(node.locality_group_name, nullptr);
 
+  return absl::OkStatus();
+}
+
+absl::Status ValidateParseTreeNode(const CreatePlacementStmt& node) {
+  GOOGLESQL_RET_CHECK_EQ(node.type, T_CreatePlacementStmt);
+
+  // Make sure that if CreatePlacementStmt structure changes we update the
+  // translator.
+  AssertPGNodeConsistsOf(node, FieldTypeChecker<char*>(node.placement_name),
+                         FieldTypeChecker<List*>(node.options),
+                         FieldTypeChecker<bool>(node.if_not_exists));
+
+  GOOGLESQL_RET_CHECK(node.placement_name != nullptr &&
+            *node.placement_name != '\0');
   return absl::OkStatus();
 }
 

@@ -58,6 +58,14 @@ ABSL_FLAG(bool, repair_corrupted_databases, false,
           "whether the corrupted database is left in place for inspection "
           "(default) or cleaned up automatically.");
 
+ABSL_FLAG(bool, enforce_placement_dml_restrictions, true,
+          "If true, read-write transactions enforce the geo-partitioning "
+          "(placement) DML limits of production Cloud Spanner: an INSERT or "
+          "DELETE on a placement table must be the only statement in its "
+          "transaction, and WHERE clauses may reference only the primary key "
+          "columns of placement tables. Partitioned DML and read-only "
+          "transactions are not affected.");
+
 ABSL_FLAG(
     int, abort_current_transaction_probability, 20,
     "The probability that the emulator will try to abort the current "
@@ -81,6 +89,14 @@ bool fault_injection_enabled() {
 
 bool disable_query_null_filtered_index_check() {
   return absl::GetFlag(FLAGS_disable_query_null_filtered_index_check);
+}
+
+bool enforce_placement_dml_restrictions() {
+  return absl::GetFlag(FLAGS_enforce_placement_dml_restrictions);
+}
+
+void set_enforce_placement_dml_restrictions(bool enforce) {
+  absl::SetFlag(&FLAGS_enforce_placement_dml_restrictions, enforce);
 }
 
 int abort_current_transaction_probability() {

@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,11 +27,13 @@
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "backend/datamodel/types.h"
+#include "common/config.h"
 #include "common/errors.h"
 #include "frontend/converters/partition.h"
 #include "frontend/converters/types.h"
@@ -50,6 +53,7 @@ namespace {
 
 namespace spanner_api = ::google::spanner::v1;
 namespace database_api = ::google::spanner::admin::database::v1;
+namespace instance_api = ::google::spanner::admin::instance::v1;
 namespace operations_api = ::google::longrunning;
 
 using testing::ElementsAre;
@@ -1349,6 +1353,268 @@ TEST_P(QueryApiTest, DirectedReadsWithRWTxnFails) {
     EXPECT_THAT(ExecuteStreamingSql(request, &unused_response),
                 StatusIs(absl::StatusCode::kFailedPrecondition));
   }
+}
+
+// Geo-partitioning (placement) limits on statements in read-write
+// transactions.
+class PlacementQueryApiTest : public QueryApiTest {
+ protected:
+  void SetUp() override {
+    QueryApiTest::SetUp();
+    for (absl::string_view partition : {"europe-partition", "asia-partition"}) {
+      GOOGLESQL_ASSERT_OK(CreateInstancePartition(partition));
+    }
+    GOOGLESQL_ASSERT_OK(UpdateDdl({
+        "CREATE PLACEMENT europe OPTIONS "
+        "(instance_partition = 'europe-partition')",
+        "CREATE PLACEMENT asia OPTIONS (instance_partition = 'asia-partition')",
+        "CREATE TABLE Singers (SingerId INT64 NOT NULL, Name STRING(MAX), "
+        "Location STRING(MAX) NOT NULL PLACEMENT KEY) PRIMARY KEY (SingerId)",
+    }));
+    spanner_api::CommitRequest commit_request = PARSE_TEXT_PROTO(R"pb(
+      single_use_transaction { read_write {} }
+      mutations {
+        insert {
+          table: "Singers"
+          columns: [ "SingerId", "Name", "Location" ]
+          values {
+            values { string_value: "1" }
+            values { string_value: "Marc" }
+            values { string_value: "europe" }
+          }
+          values {
+            values { string_value: "2" }
+            values { string_value: "Ana" }
+            values { string_value: "europe" }
+          }
+        }
+      }
+    )pb");
+    commit_request.set_session(test_session_uri_);
+    spanner_api::CommitResponse commit_response;
+    GOOGLESQL_ASSERT_OK(Commit(commit_request, &commit_response));
+  }
+
+  void TearDown() override {
+    config::set_enforce_placement_dml_restrictions(true);
+    QueryApiTest::TearDown();
+  }
+
+  absl::Status CreateInstancePartition(absl::string_view partition_id) {
+    instance_api::CreateInstancePartitionRequest request;
+    request.set_parent(test_instance_uri_);
+    request.set_instance_partition_id(std::string(partition_id));
+    request.mutable_instance_partition()->set_config(absl::StrCat(
+        "projects/", test_project_name_, "/instanceConfigs/emulator-config"));
+    request.mutable_instance_partition()->set_node_count(1);
+    grpc::ClientContext context;
+    operations_api::Operation operation;
+    GOOGLESQL_RETURN_IF_ERROR(
+        test_env()->instance_admin_client()->CreateInstancePartition(
+            &context, request, &operation));
+    return WaitForOperation(operation.name(), &operation);
+  }
+
+  absl::Status UpdateDdl(const std::vector<std::string>& statements) {
+    database_api::UpdateDatabaseDdlRequest request;
+    request.set_database(test_database_uri_);
+    for (const std::string& statement : statements) {
+      request.add_statements(statement);
+    }
+    grpc::ClientContext context;
+    operations_api::Operation operation;
+    GOOGLESQL_RETURN_IF_ERROR(test_env()->database_admin_client()->UpdateDatabaseDdl(
+        &context, request, &operation));
+    GOOGLESQL_RETURN_IF_ERROR(WaitForOperation(operation.name(), &operation));
+    return absl::Status(static_cast<absl::StatusCode>(operation.error().code()),
+                        operation.error().message());
+  }
+
+  absl::StatusOr<std::string> Begin(bool partitioned_dml = false) {
+    spanner_api::BeginTransactionRequest request;
+    request.set_session(test_session_uri_);
+    if (partitioned_dml) {
+      request.mutable_options()->mutable_partitioned_dml();
+    } else {
+      request.mutable_options()->mutable_read_write();
+    }
+    spanner_api::Transaction transaction;
+    GOOGLESQL_RETURN_IF_ERROR(BeginTransaction(request, &transaction));
+    return transaction.id();
+  }
+
+  absl::StatusOr<spanner_api::ResultSet> Execute(const std::string& txn_id,
+                                                 const std::string& sql,
+                                                 int64_t seqno) {
+    spanner_api::ExecuteSqlRequest request;
+    request.set_session(test_session_uri_);
+    request.mutable_transaction()->set_id(txn_id);
+    request.set_sql(sql);
+    request.set_seqno(seqno);
+    spanner_api::ResultSet response;
+    GOOGLESQL_RETURN_IF_ERROR(ExecuteSql(request, &response));
+    return response;
+  }
+
+  absl::StatusOr<spanner_api::ExecuteBatchDmlResponse> ExecuteBatch(
+      const std::string& txn_id, const std::vector<std::string>& statements,
+      int64_t seqno) {
+    spanner_api::ExecuteBatchDmlRequest request;
+    request.set_session(test_session_uri_);
+    request.mutable_transaction()->set_id(txn_id);
+    for (const std::string& sql : statements) {
+      request.add_statements()->set_sql(sql);
+    }
+    request.set_seqno(seqno);
+    spanner_api::ExecuteBatchDmlResponse response;
+    GOOGLESQL_RETURN_IF_ERROR(ExecuteBatchDml(request, &response));
+    return response;
+  }
+
+  absl::Status CommitTransaction(const std::string& txn_id) {
+    spanner_api::CommitRequest request;
+    request.set_session(test_session_uri_);
+    request.set_transaction_id(txn_id);
+    spanner_api::CommitResponse response;
+    return Commit(request, &response);
+  }
+
+  absl::StatusOr<spanner_api::ResultSet> QueryReadOnly(const std::string& sql) {
+    spanner_api::ExecuteSqlRequest request = PARSE_TEXT_PROTO(R"pb(
+      transaction { single_use { read_only { strong: true } } }
+    )pb");
+    request.set_session(test_session_uri_);
+    request.set_sql(sql);
+    spanner_api::ResultSet response;
+    GOOGLESQL_RETURN_IF_ERROR(ExecuteSql(request, &response));
+    return response;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(RegularSession, PlacementQueryApiTest,
+                         testing::Values(SessionType::kRegularSession));
+
+TEST_P(PlacementQueryApiTest, PlacementInsertMustBeOnlyStatementInTransaction) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string txn, Begin());
+  GOOGLESQL_EXPECT_OK(Execute(txn, "SELECT Name FROM Singers WHERE SingerId = 1", 1));
+  EXPECT_THAT(Execute(txn,
+                      "INSERT INTO Singers (SingerId, Name, Location) "
+                      "VALUES (3, 'Lea', 'asia')",
+                      2),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("must be the only statement")));
+}
+
+TEST_P(PlacementQueryApiTest, NoStatementMayFollowPlacementDelete) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string txn, Begin());
+  GOOGLESQL_EXPECT_OK(Execute(txn, "DELETE FROM Singers WHERE SingerId = 1", 1));
+  // Replaying the same request returns its saved outcome.
+  GOOGLESQL_EXPECT_OK(Execute(txn, "DELETE FROM Singers WHERE SingerId = 1", 1));
+  EXPECT_THAT(Execute(txn, "SELECT Name FROM Singers WHERE SingerId = 2", 2),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("Singers")));
+  EXPECT_THAT(
+      Execute(txn, "UPDATE test_table SET string_col = 'x' WHERE int64_col = 1",
+              3),
+      StatusIs(absl::StatusCode::kFailedPrecondition,
+               HasSubstr("must be the only statement")));
+  GOOGLESQL_EXPECT_OK(CommitTransaction(txn));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(spanner_api::ResultSet result,
+                       QueryReadOnly("SELECT SingerId FROM Singers"));
+  EXPECT_THAT(result, Partially(EqualsProto(R"pb(
+                rows { values { string_value: "2" } }
+              )pb")));
+}
+
+TEST_P(PlacementQueryApiTest, PlacementInsertAloneCommits) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string txn, Begin());
+  GOOGLESQL_EXPECT_OK(Execute(txn,
+                    "INSERT INTO Singers (SingerId, Name, Location) "
+                    "VALUES (3, 'Lea', 'asia')",
+                    1));
+  GOOGLESQL_EXPECT_OK(CommitTransaction(txn));
+
+  // Read-only transactions may filter on any column.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      spanner_api::ResultSet result,
+      QueryReadOnly("SELECT SingerId FROM Singers WHERE Location = 'asia'"));
+  EXPECT_THAT(result, Partially(EqualsProto(R"pb(
+                rows { values { string_value: "3" } }
+              )pb")));
+}
+
+TEST_P(PlacementQueryApiTest, WhereClauseLimitedToPrimaryKeyInReadWriteTxn) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string txn, Begin());
+  EXPECT_THAT(
+      Execute(txn, "UPDATE Singers SET Name = 'x' WHERE Location = 'europe'", 1),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("primary key columns of placement table Singers")));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(txn, Begin());
+  EXPECT_THAT(Execute(txn, "SELECT SingerId FROM Singers WHERE Name = 'Marc'", 1),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("references Name")));
+
+  // Updating a row by primary key, including moving it to another placement,
+  // is allowed.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(txn, Begin());
+  GOOGLESQL_EXPECT_OK(Execute(
+      txn, "UPDATE Singers SET Location = 'asia' WHERE SingerId = 1", 1));
+  GOOGLESQL_EXPECT_OK(
+      Execute(txn, "UPDATE Singers SET Name = 'y' WHERE SingerId = 2", 2));
+  GOOGLESQL_EXPECT_OK(CommitTransaction(txn));
+}
+
+TEST_P(PlacementQueryApiTest, PartitionedDmlMayFilterOnPlacementKey) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string txn, Begin(/*partitioned_dml=*/true));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      spanner_api::ResultSet result,
+      Execute(txn,
+              "UPDATE Singers SET Location = 'asia' WHERE Location = 'europe'",
+              1));
+  EXPECT_EQ(result.stats().row_count_lower_bound(), 2);
+}
+
+TEST_P(PlacementQueryApiTest, BatchWithPlacementInsertFailsBeforeRunning) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string txn, Begin());
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      spanner_api::ExecuteBatchDmlResponse response,
+      ExecuteBatch(txn,
+                   {"UPDATE test_table SET string_col = 'x' "
+                    "WHERE int64_col = 1",
+                    "INSERT INTO Singers (SingerId, Name, Location) "
+                    "VALUES (3, 'Lea', 'asia')"},
+                   1));
+  EXPECT_EQ(response.result_sets_size(), 0);
+  EXPECT_EQ(response.status().code(),
+            static_cast<int>(absl::StatusCode::kFailedPrecondition));
+  EXPECT_THAT(response.status().message(),
+              HasSubstr("must be the only statement"));
+
+  // A batch holding just the placement insert runs.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(txn, Begin());
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(response,
+                       ExecuteBatch(txn,
+                                    {"INSERT INTO Singers (SingerId, Name, "
+                                     "Location) VALUES (3, 'Lea', 'asia')"},
+                                    1));
+  EXPECT_EQ(response.result_sets_size(), 1);
+  EXPECT_EQ(response.status().code(), 0);
+  GOOGLESQL_EXPECT_OK(CommitTransaction(txn));
+}
+
+TEST_P(PlacementQueryApiTest, RestrictionsCanBeDisabled) {
+  config::set_enforce_placement_dml_restrictions(false);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string txn, Begin());
+  GOOGLESQL_EXPECT_OK(
+      Execute(txn, "SELECT SingerId FROM Singers WHERE Location = 'europe'", 1));
+  GOOGLESQL_EXPECT_OK(Execute(txn,
+                    "INSERT INTO Singers (SingerId, Name, Location) "
+                    "VALUES (3, 'Lea', 'asia')",
+                    2));
+  GOOGLESQL_EXPECT_OK(Execute(txn, "DELETE FROM Singers WHERE SingerId = 1", 3));
+  GOOGLESQL_EXPECT_OK(CommitTransaction(txn));
 }
 
 }  // namespace

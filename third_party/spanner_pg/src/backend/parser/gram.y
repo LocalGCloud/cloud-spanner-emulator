@@ -353,6 +353,7 @@ static void incrementTypeCastCount(int position, core_yyscan_t yyscanner);
 		CreateSearchIndexStmt AlterSearchIndexStmt
 		// SPANGRES END
 		CreateLocalityGroupStmt AlterLocalityGroupStmt
+		CreatePlacementStmt
     // SPANGRES BEGIN
 		// TODO: expose when queue is implemented.
     // SPANGRES END
@@ -812,7 +813,7 @@ static void incrementTypeCastCount(int position, core_yyscan_t yyscanner);
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
 	PARALLEL PARAMETER PARENT PARSER PARTIAL PARTITION PASSING PASSWORD
-	PLACING
+	PLACEMENT PLACING
 	PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
@@ -1139,6 +1140,7 @@ stmt:
 			// SPANGRES END
 			| CreateLocalityGroupStmt
 			| AlterLocalityGroupStmt
+			| CreatePlacementStmt
 			| CreateSeqStmt
 			| CreateStmt
 			| CreateSubscriptionStmt
@@ -4424,6 +4426,13 @@ ColConstraintElem:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
+			| PLACEMENT KEY
+				{
+					Constraint *n = makeNode(Constraint);
+					n->contype = CONSTR_PLACEMENT_KEY;
+					n->location = @1;
+					$$ = (Node *)n;
+				}
 			// SPANGRES END
 		;
 
@@ -7433,6 +7442,24 @@ DropStmt:	DROP object_type_any_name IF_P EXISTS any_name_list opt_drop_behavior
 					n->removeType = OBJECT_LOCALITY_GROUP;
 					n->missing_ok = true;
 					n->objects = list_make1($6);
+					$$ = (Node *)n;
+				}
+			| DROP PLACEMENT name
+				{
+					DropStmt *n = makeNode(DropStmt);
+					n->removeType = OBJECT_PLACEMENT;
+					n->missing_ok = false;
+					n->objects = list_make1(makeString($3));
+					n->behavior = DROP_RESTRICT;
+					$$ = (Node *)n;
+				}
+			| DROP PLACEMENT IF_P EXISTS name
+				{
+					DropStmt *n = makeNode(DropStmt);
+					n->removeType = OBJECT_PLACEMENT;
+					n->missing_ok = true;
+					n->objects = list_make1(makeString($5));
+					n->behavior = DROP_RESTRICT;
 					$$ = (Node *)n;
 				}
 			// SPANGRES BEGIN
@@ -11734,6 +11761,32 @@ AlterLocalityGroupStmt:
 					n->locality_group_name = $6;
 					n->storage = $7;
 					n->ssd_to_hdd_spill_timespan = $8;
+					$$ = (Node *)n;
+				}
+			;
+
+/*****************************************************************************
+ *
+ * CREATE PLACEMENT [IF NOT EXISTS] name
+ * [WITH ( instance_partition = 'partition' [, default_leader = 'region']
+ *         [, read_lease_regions = 'regions' | DEFAULT ] )]
+ *
+ *****************************************************************************/
+CreatePlacementStmt:
+			CREATE PLACEMENT name opt_definition
+				{
+					CreatePlacementStmt *n = makeNode(CreatePlacementStmt);
+					n->placement_name = $3;
+					n->options = $4;
+					n->if_not_exists = false;
+					$$ = (Node *)n;
+				}
+			| CREATE PLACEMENT IF_P NOT EXISTS name opt_definition
+				{
+					CreatePlacementStmt *n = makeNode(CreatePlacementStmt);
+					n->placement_name = $6;
+					n->options = $7;
+					n->if_not_exists = true;
 					$$ = (Node *)n;
 				}
 			;
@@ -18479,6 +18532,7 @@ unreserved_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PLACEMENT
 			| PLANS
 			| POLICY
 			| PRECEDING
@@ -19089,6 +19143,7 @@ bare_label_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PLACEMENT
 			| PLACING
 			| PLANS
 			| POLICY

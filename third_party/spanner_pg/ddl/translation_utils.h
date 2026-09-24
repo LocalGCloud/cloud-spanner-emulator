@@ -108,6 +108,17 @@ struct PostgreSQLConstants {
       kSpangresDatabaseWitnessLocationOptionName = "spanner.witness_location";
   static constexpr absl::string_view
       kSpangresDatabaseReadLeaseLabelsOptionName = "spanner.read_lease_regions";
+  static constexpr absl::string_view
+      kSpangresPerPlacementRoutingMetadataOptionName =
+          "spanner.per_placement_routing_metadata";
+  static constexpr absl::string_view kPerPlacementRoutingMetadataOptionName =
+      "per_placement_routing_metadata";
+  static constexpr absl::string_view kPlacementInstancePartitionOptionName =
+      "instance_partition";
+  static constexpr absl::string_view kPlacementDefaultLeaderOptionName =
+      "default_leader";
+  static constexpr absl::string_view kPlacementReadLeaseRegionsOptionName =
+      "read_lease_regions";
   static constexpr absl::string_view kSearchIndexDisableUidOptionName =
       "disable_automatic_uid_column";
   static constexpr absl::string_view kSearchIndexSortOrderOptionName =

@@ -579,6 +579,18 @@ TEST_F(PlacementKeyColumnValueTest, ValidatePlacementKeyColumn) {
                 StatusIs(absl::StatusCode::kInvalidArgument,
                          HasSubstr("Unknown placement")));
   }
+  {
+    Values values;
+    values.string_col = String("test");
+    GOOGLESQL_EXPECT_OK(ValidateInsert(values));
+  }
+  {
+    // The implicit default placement is always a valid placement key.
+    Values values;
+    values.string_col = String("default");
+    GOOGLESQL_EXPECT_OK(ValidateInsert(values));
+    GOOGLESQL_EXPECT_OK(ValidateUpdate(values));
+  }
 }
 
 }  // namespace

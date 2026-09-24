@@ -17,8 +17,10 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_ENTITIES_TRANSACTIONS_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_ENTITIES_TRANSACTIONS_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <variant>
 
 #include "google/protobuf/empty.pb.h"
@@ -292,6 +294,16 @@ class Transaction {
 
   // create timestamp
   absl::Time create_time_ ABSL_GUARDED_BY(mu_);
+
+  // Number of SQL statements that ran successfully in this read-write
+  // transaction. Used to enforce the geo-partitioning (placement) DML limits.
+  int64_t executed_sql_statements_ ABSL_GUARDED_BY(mu_) = 0;
+
+  // Placement table of an INSERT or DELETE that ran in this read-write
+  // transaction. Such a statement must be the only statement in the
+  // transaction, so no other SQL statement may run after it.
+  std::optional<std::string> placement_sole_statement_table_
+      ABSL_GUARDED_BY(mu_);
 };
 
 // Return true if the given transaction selector requires the transaction to be
