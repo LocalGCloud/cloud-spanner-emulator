@@ -101,7 +101,8 @@ startup deletes some entries it doesn't recognize.
     .delete-in-progress          marker: a DropDatabase hasn't finished
     .ddl-rollback/<op>/storage/  copy of the data taken before a DDL change
   backups/<encoded backup name>/storage/   a backup's full LevelDB copy
-  .quarantine/<database>-<micros>/         data moved aside by --repair_corrupted_databases
+  .quarantine/<database>-<micros>/         a database folder moved aside by --repair_corrupted_databases,
+                                           or by dropping an unavailable database
   .database-migrations/          staging area for the legacy layout migration
 ```
 
@@ -222,6 +223,13 @@ A database that fails to restore doesn't stop the emulator. The emulator logs
   every startup.
 - It keeps its IAM policies. `GetIamPolicy`, `SetIamPolicy` and
   `TestIamPermissions` work on it as on any other database.
+- Its name stays taken: `CreateDatabase` and `RestoreDatabase` with that name
+  fail with `ALREADY_EXISTS`.
+- `DropDatabase` removes it at once. Its folder is moved to
+  `<data_dir>/.quarantine/` (as with [Quarantine](#quarantine)) rather than
+  deleted, and the emulator logs `Dropped unavailable database <database>;
+  its data was moved to <path>` at `WARNING` level. Drop protection saved in
+  `metadata.json` still applies. The name can then be reused right away.
 
 Common reasons are a missing or unreadable `storage/` directory
 (`Persisted database storage is missing or unreadable for <database>`) and a
@@ -339,11 +347,6 @@ whole emulator:
   `GET_INTERNAL_SEQUENCE_STATE` shows the jump. Cloud Spanner sequences can
   also skip values. Databases persisted before this was added (2026-09-24)
   have no saved counter; their sequences start over once, as before.
-- **`DropDatabase` on an unavailable database.** It deletes the database's
-  data and metadata permanently, with no quarantine copy. The database stays
-  listed as `CREATING` until the next restart. A database created with the
-  same name during that run can't be used until a restart. (From reading the
-  code, not reproduced.)
 - **No directory lock.** Two processes on one directory can corrupt
   `metadata.json` and make databases unavailable.
 - **No sync on row writes, and commits span several LevelDB writes.** An OS

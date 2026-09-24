@@ -236,6 +236,43 @@ class PersistentDatabaseDdlTest : public ::testing::Test {
     ASSERT_TRUE(database_operation.done());
   }
 
+  // Unloads the database and marks it unavailable, as a failed restore at
+  // startup does. Its folder and metadata entry stay.
+  void MakeDatabaseUnavailable() {
+    DatabaseManager* manager = env_.server()->env()->database_manager();
+    GOOGLESQL_ASSERT_OK(manager->DeleteDatabase(database_name_));
+    manager->MarkDatabaseUnavailable(database_name_,
+                                     "injected restore failure");
+  }
+
+  std::vector<std::string> ListDatabaseNames() {
+    database_api::ListDatabasesRequest request;
+    request.set_parent(instance_name_);
+    database_api::ListDatabasesResponse response;
+    grpc::ClientContext context;
+    EXPECT_TRUE(env_.database_admin_client()
+                    ->ListDatabases(&context, request, &response)
+                    .ok());
+    std::vector<std::string> names;
+    for (const auto& database : response.databases()) {
+      names.push_back(database.name());
+    }
+    return names;
+  }
+
+  grpc::Status DropDatabase() {
+    database_api::DropDatabaseRequest request;
+    request.set_database(database_name_);
+    protobuf_api::Empty response;
+    grpc::ClientContext context;
+    return env_.database_admin_client()->DropDatabase(&context, request,
+                                                      &response);
+  }
+
+  std::filesystem::path DatabaseRoot() const {
+    return std::filesystem::path(data_dir_.path()) / database_name_;
+  }
+
   database_api::GetDatabaseDdlResponse GetDdl() {
     database_api::GetDatabaseDdlRequest request;
     request.set_database(database_name_);
@@ -347,6 +384,89 @@ TEST_F(PersistentDatabaseDdlTest,
   MetadataStore disk_state(data_dir_.path());
   GOOGLESQL_ASSERT_OK(disk_state.Load());
   EXPECT_TRUE(disk_state.AllPendingDdlOperations().contains(database_name_));
+}
+
+TEST_F(PersistentDatabaseDdlTest,
+       DropUnavailableDatabaseQuarantinesItAndFreesTheName) {
+  MakeDatabaseUnavailable();
+  ASSERT_THAT(ListDatabaseNames(), testing::Contains(database_name_));
+  ASSERT_TRUE(std::filesystem::exists(DatabaseRoot() / "storage"));
+
+  grpc::Status status = DropDatabase();
+  ASSERT_TRUE(status.ok()) << status.error_message();
+
+  // Gone from the API and from metadata.json.
+  EXPECT_THAT(ListDatabaseNames(), testing::Not(testing::Contains(
+                                       database_name_)));
+  database_api::GetDatabaseRequest get_request;
+  get_request.set_name(database_name_);
+  database_api::Database get_response;
+  grpc::ClientContext get_context;
+  EXPECT_EQ(env_.database_admin_client()
+                ->GetDatabase(&get_context, get_request, &get_response)
+                .error_code(),
+            grpc::StatusCode::NOT_FOUND);
+  MetadataStore disk_state(data_dir_.path());
+  GOOGLESQL_ASSERT_OK(disk_state.Load());
+  EXPECT_FALSE(disk_state.instances().at(instance_name_).databases.contains(
+      "database"));
+
+  // Its folder was moved into .quarantine/, not deleted.
+  EXPECT_FALSE(std::filesystem::exists(DatabaseRoot()));
+  std::vector<std::filesystem::path> quarantined;
+  for (const auto& entry : std::filesystem::directory_iterator(
+           std::filesystem::path(data_dir_.path()) / ".quarantine")) {
+    quarantined.push_back(entry.path());
+  }
+  ASSERT_EQ(quarantined.size(), 1);
+  EXPECT_THAT(quarantined[0].filename().string(),
+              testing::StartsWith(
+                  "projects_ddl-persistence_instances_instance_databases_"
+                  "database-"));
+  EXPECT_TRUE(std::filesystem::exists(quarantined[0] / "storage"));
+
+  // The name can be used again in the same run.
+  database_api::CreateDatabaseRequest create_request;
+  create_request.set_parent(instance_name_);
+  create_request.set_create_statement("CREATE DATABASE `database`");
+  create_request.add_extra_statements(
+      "CREATE TABLE U (K INT64) PRIMARY KEY (K)");
+  operations_api::Operation create_operation;
+  grpc::ClientContext create_context;
+  status = env_.database_admin_client()->CreateDatabase(
+      &create_context, create_request, &create_operation);
+  ASSERT_TRUE(status.ok()) << status.error_message();
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::shared_ptr<Database> recreated,
+      env_.server()->env()->database_manager()->GetDatabase(database_name_));
+  EXPECT_NE(recreated->backend()->GetLatestSchema()->FindTable("U"), nullptr);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<backend::ReadWriteTransaction> transaction,
+      recreated->backend()->CreateReadWriteTransaction(
+          backend::ReadWriteOptions(), backend::RetryState()));
+  backend::Mutation mutation;
+  mutation.AddWriteOp(backend::MutationOpType::kInsert, "U", {"K"},
+                      {{googlesql::values::Int64(1)}});
+  GOOGLESQL_EXPECT_OK(transaction->Write(mutation));
+  GOOGLESQL_EXPECT_OK(transaction->Commit());
+}
+
+TEST_F(PersistentDatabaseDdlTest, DropUnavailableDatabaseKeepsDropProtection) {
+  database_api::UpdateDatabaseRequest update_request;
+  update_request.mutable_database()->set_name(database_name_);
+  update_request.mutable_database()->set_enable_drop_protection(true);
+  update_request.mutable_update_mask()->add_paths("enable_drop_protection");
+  operations_api::Operation update_operation;
+  grpc::ClientContext update_context;
+  grpc::Status status = env_.database_admin_client()->UpdateDatabase(
+      &update_context, update_request, &update_operation);
+  ASSERT_TRUE(status.ok()) << status.error_message();
+  MakeDatabaseUnavailable();
+
+  EXPECT_EQ(DropDatabase().error_code(),
+            grpc::StatusCode::FAILED_PRECONDITION);
+  EXPECT_THAT(ListDatabaseNames(), testing::Contains(database_name_));
+  EXPECT_TRUE(std::filesystem::exists(DatabaseRoot() / "storage"));
 }
 
 TEST_F(PersistentDatabaseDdlTest,

@@ -4,6 +4,36 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] Dropping an Unavailable Database
+
+### Fixed
+- `DropDatabase` on a database that failed to restore (listed as `CREATING`)
+  deleted its data with no copy, ignored its drop protection, and left it
+  listed until a restart. A database created with the same name in that run
+  couldn't be used. The handler assumed the database was loaded, and nothing
+  ever cleared `DatabaseManager`'s unavailable mark. Now:
+  - the database's folder is moved to `<data_dir>/.quarantine/` instead of
+    being deleted (a maintainer decision, since nobody could inspect it
+    through the API), and the emulator logs where it went;
+  - drop protection saved in `metadata.json` is checked first;
+  - the database disappears from `ListDatabases` and `GetDatabase` at once,
+    and its name can be reused in the same run;
+  - while a database is unavailable, `CreateDatabase` and `RestoreDatabase`
+    with its name return `ALREADY_EXISTS`, since it's still a listed
+    resource. Before, the name could be taken, which produced the unusable
+    database above.
+- The folder moves before the metadata save, and moves back if the save
+  fails. If the emulator stops in between, the next start lists the
+  database as unavailable again, and dropping it again finishes the job.
+- Tests: `PersistentDatabaseDdlTest.DropUnavailableDatabaseQuarantinesItAndFreesTheName`
+  and `DropUnavailableDatabaseKeepsDropProtection` in
+  `frontend/handlers:databases_test`, and
+  `DatabaseManagerTest.UnavailableDatabaseNameIsTakenUntilDeleted`. All fail
+  before the fix. Checked end to end over REST: two corrupted databases, one
+  protected. The protected one can't be dropped, and its folder stays. The
+  other is quarantined, recreated under the same name, written to, and still
+  there after a restart.
+
 ## [2026-09-24] IAM Policies No Longer Stop Startup
 
 ### Fixed

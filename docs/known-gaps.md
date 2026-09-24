@@ -16,7 +16,6 @@ confirmed against a running emulator; the others come from reading the code.
 
 | Area | Bug | Impact | Status |
 |------|-----|--------|--------|
-| Persistence (fork) | `DropDatabase` on an unavailable database deletes its data without a quarantine copy, and the database stays listed as `CREATING` until restart. Recreating the same name in that run gives an unusable database. | Restart before recreating the database. | From code |
 | Persistence (fork) | A commit's rows and index entries are separate LevelDB writes. | A process crash in the middle of a commit can leave part of a transaction, or an inconsistent index, on disk. | From code |
 | Persistence (fork) | Results from the storage write queue aren't matched to the writer that submitted them. | Rarely, a write returns before its data is visible, or reports another write's error. The transaction lock serializes most writers. | From code |
 | Gateway | On SIGINT, `gateway_main` releases the `emulator_main` process handle before killing it. | Outside Docker, `emulator_main` can keep running with its databases open, and a quick restart finds them locked. | From code |
@@ -98,8 +97,9 @@ Details and workarounds are in [Persistence](persistence.md#known-limitations).
   without a commit marker. Don't store other files in the data directory.
 - Each schema change copies the whole database first, so DDL time and
   temporary disk space grow with database size.
-- `.quarantine/` is never cleaned up, and old row versions are pruned only
-  when a row is written again.
+- `.quarantine/` is never cleaned up: it keeps databases quarantined at
+  startup and unavailable databases that were dropped. Old row versions are
+  pruned only when a row is written again.
 
 ## Change streams
 

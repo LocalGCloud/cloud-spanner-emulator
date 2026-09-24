@@ -180,7 +180,7 @@ class DatabaseManager {
   GetDatabaseIncludingRecoveryRequired(
       const std::string& database_uri) const ABSL_LOCKS_EXCLUDED(mu_);
 
-  // Deletes a database with the given URI.
+  // Deletes a database with the given URI, including one marked unavailable.
   absl::Status DeleteDatabase(const std::string& database_uri)
       ABSL_LOCKS_EXCLUDED(mu_);
 

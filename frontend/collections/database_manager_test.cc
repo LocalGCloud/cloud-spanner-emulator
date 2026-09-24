@@ -664,6 +664,24 @@ TEST_F(DatabaseManagerTest, UnavailableDatabaseDoesNotAffectOtherDatabases) {
   EXPECT_EQ(fetched_other, other);
 }
 
+TEST_F(DatabaseManagerTest, UnavailableDatabaseNameIsTakenUntilDeleted) {
+  database_manager_.MarkDatabaseUnavailable(database_uri_,
+                                            "persisted data is corrupted");
+  EXPECT_THAT(database_manager_.ReserveDatabase(database_uri_),
+              googlesql_base::testing::StatusIs(
+                  absl::StatusCode::kAlreadyExists));
+
+  GOOGLESQL_ASSERT_OK(database_manager_.DeleteDatabase(database_uri_));
+  EXPECT_EQ(database_manager_.UnavailableReason(database_uri_), std::nullopt);
+  EXPECT_TRUE(database_manager_
+                  .ListUnavailableDatabases(
+                      "projects/test-p/instances/test-instance")
+                  .empty());
+  GOOGLESQL_ASSERT_OK(database_manager_.CreateDatabase(
+      database_uri_, empty_schema_operation_));
+  GOOGLESQL_EXPECT_OK(database_manager_.GetDatabase(database_uri_));
+}
+
 TEST_F(DatabaseManagerTest, ListUnavailableDatabasesScopedToInstance) {
   const std::string instance_uri = "projects/test-p/instances/test-instance";
   const std::string other_instance_uri =

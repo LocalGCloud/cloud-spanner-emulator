@@ -627,7 +627,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "DropDatabase deletes the database and its persisted storage; dropping a missing database succeeds. It fails with FAILED_PRECONDITION while enable_drop_protection is set."
+      "notes": "DropDatabase deletes the database and its persisted storage; dropping a missing database succeeds. It fails with FAILED_PRECONDITION while enable_drop_protection is set. A database that failed to restore from --data_dir (listed as CREATING) can be dropped too: its folder is moved to <data_dir>/.quarantine instead of deleted, drop protection from metadata.json still applies, and the name can be reused in the same run."
     },
     {
       "id": "database.update_ddl",
@@ -3893,14 +3893,15 @@
         ],
         "tests": [
           "frontend/collections/database_manager_test.cc",
-          "backend/database/database_test.cc"
+          "backend/database/database_test.cc",
+          "frontend/handlers/databases_test.cc"
         ],
         "documentation": [
           "docs/persistence.md"
         ]
       },
       "verification": "tested",
-      "notes": "If one database in --data_dir fails to restore at startup, the rest of the emulator still starts. The failed database is listed as CREATING and its reads, writes, and DDL return FAILED_PRECONDITION with the reason. --repair_corrupted_databases (accepted by gateway_main and emulator_main) moves its whole folder to <data_dir>/.quarantine and removes it from metadata, so later starts succeed without it."
+      "notes": "If one database in --data_dir fails to restore at startup, the rest of the emulator still starts. The failed database is listed as CREATING and its reads, writes, and DDL return FAILED_PRECONDITION with the reason. --repair_corrupted_databases (accepted by gateway_main and emulator_main) moves its whole folder to <data_dir>/.quarantine and removes it from metadata, so later starts succeed without it. DropDatabase on it also moves it to .quarantine and frees its name; until then, CreateDatabase with that name returns ALREADY_EXISTS."
     },
     {
       "id": "types.string_bytes_date_timestamp",

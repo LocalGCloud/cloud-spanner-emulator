@@ -16,6 +16,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -670,6 +671,74 @@ absl::Status UpdateDatabaseDdl(
 REGISTER_GRPC_HANDLER(DatabaseAdmin, UpdateDatabaseDdl);
 
 // Drops (aka deletes) a database.
+// Drops a database that failed to restore at startup. It isn't loaded, so its
+// drop protection comes from metadata. Its folder is moved into .quarantine/
+// instead of being deleted, since nobody could inspect it through the API. The
+// move happens before the metadata save: if the emulator stops in between,
+// the next startup finds the database with no storage and reports it as
+// unavailable again, and dropping it again finishes the job.
+absl::Status DropUnavailableDatabase(RequestContext* ctx,
+                                     const std::string& instance_uri,
+                                     const std::string& database_id,
+                                     const std::string& database_uri) {
+  MetadataStore* metadata = ctx->env()->metadata_store();
+  if (metadata != nullptr) {
+    const std::map<std::string, MetadataStore::InstanceInfo> instances =
+        metadata->instances();
+    if (auto instance = instances.find(instance_uri);
+        instance != instances.end()) {
+      if (auto database = instance->second.databases.find(database_id);
+          database != instance->second.databases.end() &&
+          database->second.enable_drop_protection) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "Database has drop protection enabled: ", database_uri));
+      }
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        const std::optional<std::string> quarantine_path,
+        DatabaseManager::QuarantineDatabaseDirectory(
+            config::data_dir(), database_uri, ctx->env()->clock()->Now()));
+    metadata->RemoveDatabase(instance_uri, database_id);
+    absl::Status save_status = metadata->Save();
+    if (!save_status.ok()) {
+      // Put the folder back so the database stays as it was.
+      absl::Status reload_status = metadata->Load();
+      std::error_code move_back_error;
+      if (quarantine_path.has_value()) {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            const std::string storage_directory,
+            backend::Database::PersistentStorageDirectory(config::data_dir(),
+                                                          database_uri));
+        std::filesystem::rename(
+            *quarantine_path,
+            std::filesystem::path(storage_directory).parent_path(),
+            move_back_error);
+      }
+      if (!reload_status.ok() || move_back_error) {
+        return absl::DataLossError(absl::StrCat(
+            save_status.message(),
+            reload_status.ok()
+                ? ""
+                : absl::StrCat("; failed to restore metadata snapshot: ",
+                               reload_status.message()),
+            move_back_error
+                ? absl::StrCat("; failed to move ", *quarantine_path,
+                               " back: ", move_back_error.message())
+                : ""));
+      }
+      return save_status;
+    }
+    if (quarantine_path.has_value()) {
+      ABSL_LOG(WARNING) << "Dropped unavailable database " << database_uri
+                        << "; its data was moved to " << *quarantine_path;
+    }
+  }
+  GOOGLESQL_RETURN_IF_ERROR(
+      ctx->env()->database_manager()->DeleteDatabase(database_uri));
+  ctx->env()->RemoveIamPolicies(database_uri);
+  return absl::OkStatus();
+}
+
 absl::Status DropDatabase(RequestContext* ctx,
                           const database_api::DropDatabaseRequest* request,
                           protobuf_api::Empty* response) {
@@ -699,6 +768,14 @@ absl::Status DropDatabase(RequestContext* ctx,
                             ->database_manager()
                             ->GetDatabaseIncludingRecoveryRequired(
                                 request->database());
+  if (!maybe_database.ok() && ctx->env()
+                                  ->database_manager()
+                                  ->UnavailableReason(request->database())
+                                  .has_value()) {
+    return DropUnavailableDatabase(
+        ctx, MakeInstanceUri(project_id, instance_id),
+        std::string(database_id), request->database());
+  }
   if (maybe_database.ok() && (*maybe_database)->enable_drop_protection()) {
     return absl::FailedPreconditionError(absl::StrCat(
         "Database has drop protection enabled: ", request->database()));

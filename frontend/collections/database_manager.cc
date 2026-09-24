@@ -1043,8 +1043,11 @@ DatabaseManager::ReserveDatabase(const std::string& database_uri) {
   const std::string instance_uri = MakeInstanceUri(project_id, instance_id);
 
   absl::MutexLock lock(mu_);
+  // An unavailable database is still listed, so its name stays taken until
+  // it's dropped.
   if (database_map_.contains(database_uri) ||
-      database_reservations_.contains(database_uri)) {
+      database_reservations_.contains(database_uri) ||
+      unavailable_databases_.contains(database_uri)) {
     return error::DatabaseAlreadyExists(database_uri);
   }
   const int max_databases =
@@ -1152,6 +1155,7 @@ absl::Status DatabaseManager::DeleteDatabase(const std::string& database_uri) {
     return absl::FailedPreconditionError(
         absl::StrCat("Database creation is in progress: ", database_uri));
   }
+  unavailable_databases_.erase(database_uri);
   if (database_map_.erase(database_uri) > 0) {
     absl::string_view project_id;
     absl::string_view instance_id;

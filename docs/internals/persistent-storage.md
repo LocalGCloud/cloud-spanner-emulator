@@ -146,7 +146,8 @@ admin RPCs, not only backup operations. At startup they are loaded into the
   projects/<p>/instances/<i>/databases/<d>.restoring/   RestoreDatabase staging
   backups/<percent-encoded backup name>/storage/   backup snapshot
   backups/<...>.deleting/                          DeleteBackup staging
-  .quarantine/<URI with / as _>-<unix micros>/     --repair_corrupted_databases
+  .quarantine/<URI with / as _>-<unix micros>/     a whole database root: --repair_corrupted_databases,
+                                                   or DropDatabase of an unavailable database
   .database-migrations/<p>/<i>/<d>/storage/        legacy migration staging
 ```
 
@@ -167,6 +168,7 @@ the contents match the path.
 | `CreateDatabase` | Build LevelDB in the root. Save `metadata.json` with the database and a pending operation. Write `.metadata-committed`. Save the operation to the catalog. Clear the pending operation. | A root that isn't in the metadata and has no `.metadata-committed` is an interrupted create or restore, and `CleanupOrphanedRestoreDirectories` deletes it. A root that isn't in the metadata but has the marker is `DATA_LOSS` (`Persistent database root has committed data but no metadata`). |
 | `RestoreDatabase` | Copy the snapshot into `<root>.restoring` with `.restore-in-progress`, then rename it to the root. Save the metadata. Write `.metadata-committed`. Save the operation. Publish. | `CompleteRecoveredRestoreDirectories` clears `.restore-in-progress` for databases in the metadata. The per-database restore also removes it. |
 | `DropDatabase`, `DeleteInstance` | Write `.delete-in-progress`. Save the metadata without the database. Remove the root. | `ReconcileDeletedDatabaseDirectories`: if the database is still in the metadata, the drop didn't commit and the marker is removed. Otherwise the root is deleted. |
+| `DropDatabase` of an unavailable database | Check drop protection in the metadata. Rename the root into `.quarantine/` (`QuarantineDatabaseDirectory`). Save the metadata without the database; if that fails, rename the root back. Clear the unavailable mark. | The rename happens first, so a crash leaves the database in the metadata with no root. The next startup marks it unavailable (storage missing), and a second drop removes it. |
 | `UpdateDatabaseDdl` | Checkpoint the storage to `.ddl-rollback/<op>/storage`. Save the intent in `pendingDdlOperations`. Apply the schema. Save the metadata with the new batch, counters, and pending operation, and remove the intent. Delete the checkpoint. Save the operation. Clear the pending operation. | If an intent with `hasRollbackCheckpoint` exists, `RestoreDdlRollbackCheckpoint` swaps the checkpoint back in, the database is rebuilt, the intent's statements are applied again, and the operation is recorded. Otherwise any leftover checkpoints are removed. |
 | `DeleteBackup`, `DeleteBackupSchedule` | In one metadata save, remove the resource's IAM policy and add its name to `pendingBackupDeletions`. Delete it from the catalog. Remove the name from the pending set and save. | `ReconcilePendingBackupDeletions` finishes each pending deletion. |
 | Backup snapshot delete | Rename the snapshot root to `.deleting`. Save the catalog. Remove the staged folder. | If the backup is still in the catalog, the `.deleting` folder is renamed back. `CleanupStaleSnapshotsLocked` removes every folder under `backups/` that the catalog doesn't reference. |
@@ -221,11 +223,10 @@ server starts. Any error it returns exits the process with `EXIT_FAILURE`.
 Only step 13 is isolated per database, and step 15 skips policies whose
 resource is gone. Every other failure is fatal.
 
-Known interactions, found by reading the code and not reproduced:
-
-- `DatabaseManager` never clears `unavailable_databases_`. `DropDatabase` on an
-  unavailable database removes its metadata and root, but the name stays in
-  that map, and `GetDatabase` keeps rejecting it until a restart.
+A database marked unavailable in step 13 stays in
+`DatabaseManager::unavailable_databases_` until it's dropped:
+`ReserveDatabase` rejects its name with `ALREADY_EXISTS`, and
+`DeleteDatabase` clears the mark.
 
 ## Schema replay
 
