@@ -118,6 +118,9 @@ Rules:
   A second process can't open databases the first has open, so it marks them
   `UNAVAILABLE`, and both processes write `metadata.json`. Make sure the
   previous `emulator_main` has exited before you start a new one.
+  `gateway_main` stops its `emulator_main` when it gets `SIGINT` or
+  `SIGTERM`; if you kill `gateway_main` with `SIGKILL`, stop `emulator_main`
+  yourself.
 - **To reset, delete the whole directory.** Deleting only `metadata.json`
   leaves database directories with no metadata, and startup then fails with
   `Persistent database root has committed data but no metadata`.

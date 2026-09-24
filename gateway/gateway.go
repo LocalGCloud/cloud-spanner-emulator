@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"syscall"
 	"time"
 
 	// We need this to make sure that the gateway can serialize the google.rpc.ErrorInfo proto.
@@ -100,6 +101,31 @@ func emulatorArgs(opts Options) []string {
 	return args
 }
 
+// emulatorStopTimeout is how long the gateway waits for the emulator grpc
+// server to exit after SIGTERM before killing it. It's shorter than the 10
+// seconds `docker stop` waits before killing the container.
+const emulatorStopTimeout = 5 * time.Second
+
+// stopEmulator stops the emulator grpc server process: it sends SIGTERM,
+// waits up to timeout for the process to exit, then kills it. exited must be
+// closed once the process has exited and been waited for.
+func stopEmulator(p *os.Process, exited <-chan struct{}, timeout time.Duration) {
+	if err := p.Signal(syscall.SIGTERM); err == nil {
+		select {
+		case <-exited:
+			return
+		case <-time.After(timeout):
+			log.Printf("Emulator grpc server did not exit within %v; killing it.", timeout)
+		}
+	}
+	p.Kill()
+	select {
+	case <-exited:
+	case <-time.After(timeout):
+		log.Println("Emulator grpc server is still running after being killed.")
+	}
+}
+
 // Run starts the emulator gateway server.
 func (gw *Gateway) Run() {
 	// Start the emulator grpc server and redirect its output.
@@ -119,24 +145,27 @@ func (gw *Gateway) Run() {
 		log.Fatal(err)
 	}
 
-	// Terminate the grpc server if the gateway server is terminated.
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	go func() {
-		<-c
-		// Release resources e.g., network ports associated with the process.
-		// This is required since gateway may receive an interrupt signal for
-		// shutdown before Wait() returns.
-		cmd.Process.Release()
-		cmd.Process.Kill()
-		os.Exit(0)
-	}()
-
-	// Terminate the gateway server if the grpc server is terminated.
+	// Stop the grpc server before exiting when the gateway is asked to stop
+	// (Ctrl-C, `docker stop`, process managers), so it doesn't keep running
+	// with its databases open. Exit the gateway if the grpc server exits.
+	// One goroutine handles both, so only one of them calls os.Exit.
+	exited := make(chan struct{})
 	go func() {
 		cmd.Wait()
-		log.Println("Shutting down gateway server since grpc server is terminated.")
-		os.Exit(cmd.ProcessState.ExitCode())
+		close(exited)
+	}()
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		select {
+		case sig := <-stop:
+			log.Printf("Received %v; stopping the emulator grpc server.", sig)
+			stopEmulator(cmd.Process, exited, emulatorStopTimeout)
+			os.Exit(0)
+		case <-exited:
+			log.Println("Shutting down gateway server since grpc server is terminated.")
+			os.Exit(cmd.ProcessState.ExitCode())
+		}
 	}()
 
 	// Wait for the grpc server to be up.

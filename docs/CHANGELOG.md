@@ -4,6 +4,31 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-24] Gateway Stops the Emulator on SIGINT and SIGTERM
+
+### Fixed
+- When `gateway_main` alone got `SIGINT` (for example from a process manager
+  or `kill -INT`), it exited but left `emulator_main` running with its
+  databases open. A restart on the same `--data_dir` then found them locked
+  and listed them as unavailable (`CREATING`). The handler called
+  `Process.Release()` before `Process.Kill()`, and Go refuses to signal a
+  released process ("os: process already released"). Release also made the
+  gateway's `cmd.Wait()` return at once, so two goroutines raced to
+  `os.Exit`. `SIGTERM` wasn't handled at all, so `gateway_main` died without
+  stopping `emulator_main`, and as PID 1 in Docker, `docker stop` waited out
+  its grace period before killing the container.
+- `gateway_main` now handles `SIGINT` and `SIGTERM` by sending `SIGTERM` to
+  `emulator_main`, waiting up to 5 seconds, killing it if needed, and then
+  exiting with status 0. A single goroutine handles both a signal and the
+  emulator exiting on its own.
+- Tests: `TestStopEmulatorStopsTheProcess` and
+  `TestStopEmulatorKillsAProcessThatIgnoresSigterm` in
+  `//gateway:gateway_test` (both fail with the old release-then-kill code).
+  Checked end to end, signalling only the gateway process: with the
+  previous build, `emulator_main` kept running after `SIGINT` and after
+  `SIGTERM`, and a restart listed the database as `CREATING`; with this
+  build, `emulator_main` is gone, and a restart lists it as `READY`.
+
 ## [2026-09-24] Dropping an Unavailable Database
 
 ### Fixed

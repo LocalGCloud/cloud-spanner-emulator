@@ -66,6 +66,12 @@ Environment variables read by `gateway_main`:
 If `emulator_main` exits, `gateway_main` exits with the same code. Both ports
 open only after the emulator has finished restoring persisted data.
 
+On `SIGINT` (Ctrl-C) or `SIGTERM` (`docker stop`, process managers),
+`gateway_main` sends `SIGTERM` to `emulator_main`, waits up to 5 seconds for
+it to exit, kills it if it hasn't, and then exits with status 0. `SIGKILL`
+can't be caught: killing `gateway_main` that way leaves `emulator_main`
+running.
+
 ## `emulator_main`-only flags
 
 These have no `gateway_main` equivalent. Run `emulator_main` directly to use

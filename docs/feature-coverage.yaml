@@ -3473,7 +3473,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "gateway_main starts emulator_main and the REST proxy (defaults: --hostname localhost, --grpc_port 9010, --http_port 9020) and forwards --data_dir, --repair_corrupted_databases, --log_requests, --enable_fault_injection, --disable_query_null_filtered_index_check, --enforce_placement_dml_restrictions, --override_max_databases_per_instance, and --override_change_stream_partition_token_alive_seconds. --abort_current_transaction_probability and the change stream tuning flags exist only on emulator_main."
+      "notes": "gateway_main starts emulator_main and the REST proxy (defaults: --hostname localhost, --grpc_port 9010, --http_port 9020) and forwards --data_dir, --repair_corrupted_databases, --log_requests, --enable_fault_injection, --disable_query_null_filtered_index_check, --enforce_placement_dml_restrictions, --override_max_databases_per_instance, and --override_change_stream_partition_token_alive_seconds. --abort_current_transaction_probability and the change stream tuning flags exist only on emulator_main. On SIGINT or SIGTERM, gateway_main stops emulator_main (SIGTERM, then a kill after 5 seconds) before exiting."
     },
     {
       "id": "emulator.packaging",

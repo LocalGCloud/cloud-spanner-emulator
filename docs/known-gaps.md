@@ -18,7 +18,6 @@ confirmed against a running emulator; the others come from reading the code.
 |------|-----|--------|--------|
 | Persistence (fork) | A commit's rows and index entries are separate LevelDB writes. | A process crash in the middle of a commit can leave part of a transaction, or an inconsistent index, on disk. | From code |
 | Persistence (fork) | Results from the storage write queue aren't matched to the writer that submitted them. | Rarely, a write returns before its data is visible, or reports another write's error. The transaction lock serializes most writers. | From code |
-| Gateway | On SIGINT, `gateway_main` releases the `emulator_main` process handle before killing it. | Outside Docker, `emulator_main` can keep running with its databases open, and a quick restart finds them locked. | From code |
 
 ## Transactions and concurrency
 
