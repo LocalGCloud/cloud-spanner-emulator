@@ -35,8 +35,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -63,6 +66,41 @@
 #include "third_party/spanner_pg/datatypes/extended/pg_numeric_type.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
+
+namespace postgres_translator::spangres::datatypes::common::jsonb {
+namespace {
+
+// The nlohmann JSON type used to parse JSONB. Floating-point numbers are read
+// into a long double, but PGJSONBParser only keeps their text.
+using JsonbParserJson =
+    nlohmann::basic_json<std::map, std::vector, std::string, bool,
+                         std::int64_t, std::uint64_t, long double>;
+
+// The input adapter nlohmann uses when parsing an absl::string_view.
+using JsonbParserInputAdapter = decltype(nlohmann::detail::input_adapter(
+    std::declval<absl::string_view&>()));
+
+}  // namespace
+}  // namespace postgres_translator::spangres::datatypes::common::jsonb
+
+// nlohmann rejects a floating-point number with "number overflow" when its
+// long double conversion is not finite. The long double range depends on the
+// platform: up to about 1.19e4932 on Linux (x86_64 and aarch64), but only about
+// 1.8e308 on Apple silicon, where long double is a double. PGJSONBParser uses
+// the number's text rather than its value, so clamp an overflow to a finite
+// value and let the parser apply kMaxPGJSONBNumericWholeDigits on every
+// platform.
+template <>
+void nlohmann::detail::lexer<
+    postgres_translator::spangres::datatypes::common::jsonb::JsonbParserJson,
+    postgres_translator::spangres::datatypes::common::jsonb::
+        JsonbParserInputAdapter>::strtof(long double& f, const char* str,
+                                         char** endptr) noexcept {
+  f = std::strtold(str, endptr);
+  if (!std::isfinite(f)) {
+    f = std::copysign(std::numeric_limits<long double>::max(), f);
+  }
+}
 
 namespace postgres_translator::spangres::datatypes::common::jsonb {
 
@@ -105,11 +143,12 @@ class PGJSONBParser {
   }
 
   // Currently, numbers are supported with up to 4,932 digits before the decimal
-  // point. This is in contrast to Postgres' support for 131,072 digits before
-  // the decimal point. This is a parser limitation since the nlohmann parser
-  // must be able to pase the value into a real type, and 'long double' can only
-  // accurately support numbers with that high of a value. The full 16,383
-  // digits after the decimal point is supported, as well as trailing zeros.
+  // point, matching Spanner. This is in contrast to Postgres' support for
+  // 131,072 digits before the decimal point. The limit is enforced on the
+  // number's text by ValidateIntegralPartForJsonB; the long double value is
+  // unused and is clamped when it overflows (see the lexer<>::strtof
+  // specialization above). The full 16,383 digits after the decimal point is
+  // supported, as well as trailing zeros.
   bool number_float(long double, const std::string& str_value) {
     absl::StatusOr<std::string> normalized =
         NormalizePgNumericForJsonB(str_value);
@@ -755,10 +794,7 @@ absl::StatusOr<PgJsonbValue> PgJsonbValue::Parse(
     absl::string_view jsonb,
     std::vector<std::unique_ptr<TreeNode>>* tree_nodes) {
   PGJSONBParser parser(tree_nodes);
-  using jsonb_parser =
-      nlohmann::basic_json<std::map, std::vector, std::string, bool,
-                           std::int64_t, std::uint64_t, long double>;
-  jsonb_parser::sax_parse(jsonb, &parser);
+  JsonbParserJson::sax_parse(jsonb, &parser);
   return std::move(parser).GetRepresentation();
 }
 

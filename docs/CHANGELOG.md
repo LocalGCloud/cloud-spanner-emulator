@@ -1,5 +1,38 @@
 # Changelog
 
+## [2026-09-23] REST Error Codes, Large JSONB Numbers on macOS, Test Fix
+
+### Fixed
+- **REST errors keep their status code**: constraint violations, duplicate
+  keys, partitioned DML errors, and query errors such as `Table not found`
+  used to reach REST clients as HTTP 500, code 13,
+  `failed to marshal error message`. `ToRpcStatus` in
+  `frontend/common/status.cc` now forwards only standard `google.rpc` error
+  details. It drops internal markers (`google.spanner.ConstraintError`,
+  `googlesql.ErrorMessageModeForPayload`) that the gateway can't encode.
+  REST clients now get the real code and message, such as HTTP 409
+  `ALREADY_EXISTS`. Tests: `frontend/common/status_test.cc`.
+- **JSONB numbers above about 1e308 on Apple silicon**: native macOS builds
+  rejected them with `number overflow` because `long double` is 8 bytes
+  there. `jsonb_value.cc` now caps an overflowing conversion at the largest
+  finite value, since the parser uses only the number's text. The 4,932-digit
+  limit applies on every platform, and larger numbers get the same
+  `whole component of NUMERIC ... too large` error everywhere. Tests: new
+  `jsonb_parse_test` cases. `PGFunctionsTest.ToJsonB` passes on macOS.
+- **`ChangeStreamQueryValidatorTest.ValidateStartTimestampTooOldBeforeRetentionNonValid`**:
+  the `CreateSchemaFromDDL` test helper now sets `schema_change_timestamp`.
+  Change streams take their creation time from it, and it defaulted to 1970.
+  Tests only; the database create and update paths already set it.
+
+### Documentation
+- `README.md`: new "REST Gateway: Accurate Error Responses" and "PostgreSQL
+  JSONB: Large Numbers on Every Platform" sections. Change stream creation
+  times added to the Data Persistence list.
+- `docs/change-streams.md`: creation times listed under What Persists.
+- `docs/feature-coverage.yaml`/`.md`: `clients.rest_gateway` is now `tested`,
+  `change_streams.read` notes cover creation-time validation, and a new
+  `postgresql.jsonb` entry.
+
 ## [2026-08-26] UNAVAILABLE Database State for Restore Failures
 
 Closes the "Known gaps" item from the 2026-08-18 entry below: a database

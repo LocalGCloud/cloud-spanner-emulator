@@ -43,6 +43,7 @@
 #include "googlesql/base/no_destructor.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/cord.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
@@ -223,6 +224,13 @@ INSTANTIATE_TEST_SUITE_P(
         TestCase{.input = "-0.000000000001400",
                  .expected_output = "-0.000000000001400"},
         TestCase{.input = "7.3e-12", .expected_output = "0.0000000000073"},
+        // Beyond the range of an 8-byte long double (Apple silicon).
+        TestCase{.input = "1e400",
+                 .expected_output = StrCat("1", std::string(400, '0'))},
+        TestCase{.input = "-15e1500",
+                 .expected_output = StrCat("-15", std::string(1500, '0'))},
+        TestCase{.input = StrCat("[", std::string(400, '9'), "]"),
+                 .expected_output = StrCat("[", std::string(400, '9'), "]")},
         TestCase{.input = "9e4931",
                  .expected_output = StrCat("9", std::string(4931, '0'))},
         TestCase{.input = "-9e4931",
@@ -376,6 +384,23 @@ TEST_P(ParsingErrorTest, ErrorTestValue) {
 }
 
 using JsonbParseTest = ValidMemoryContext;
+
+// Numbers beyond the range of every platform's long double are rejected by the
+// whole-digit limit rather than by the JSON parser's overflow check.
+TEST_F(JsonbParseTest, NumberBeyondLongDoubleRangeHitsDigitLimit) {
+  for (absl::string_view input : {"1e5000", "-1e5000", "[1, 1e5000]"}) {
+    std::vector<std::unique_ptr<TreeNode>> tree_nodes;
+    absl::StatusOr<PgJsonbValue> result =
+        PgJsonbValue::Parse(input, &tree_nodes);
+    ASSERT_FALSE(result.ok()) << input;
+    EXPECT_THAT(result.status().message(),
+                testing::Not(testing::HasSubstr("number overflow")))
+        << input;
+    EXPECT_THAT(result.status().message(),
+                testing::HasSubstr("whole component of NUMERIC"))
+        << input;
+  }
+}
 
 // Ensure that the parser is capable of parsing numbers up to the full 16,383
 // digits after the decimal point.

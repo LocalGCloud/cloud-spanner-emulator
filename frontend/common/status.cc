@@ -22,6 +22,8 @@
 #include "google/rpc/error_details.pb.h"
 #include "google/rpc/status.pb.h"
 #include "absl/strings/cord.h"
+#include "absl/strings/match.h"
+#include "absl/strings/string_view.h"
 #include "common/limits.h"
 #include "grpcpp/support/status.h"
 #include "third_party/spanner_pg/errors/errors.pb.h"
@@ -37,6 +39,14 @@ const char* kSpannerErrorDomainName = "spanner.googleapis.com";
 const char* kSpannerSqlErrorReason = "SQL_ERROR";
 const char* kSpannerPgSqlErrorCodeFieldName = "pg_sqlerrcode";
 
+// Only standard google.rpc error details (ResourceInfo, ErrorInfo, RetryInfo,
+// ...) are sent to clients. Other payloads are internal markers, such as
+// kConstraintError or GoogleSQL's ErrorMessageModeForPayload. Clients cannot
+// decode them, and the REST gateway fails the whole error when a detail has a
+// type it does not know.
+constexpr absl::string_view kRpcErrorDetailTypeUrlPrefix =
+    "type.googleapis.com/google.rpc.";
+
 google::rpc::Status ToRpcStatus(const absl::Status& status,
                                 const std::string& status_message) {
   google::rpc::Status result;
@@ -44,6 +54,9 @@ google::rpc::Status ToRpcStatus(const absl::Status& status,
   result.set_message(status_message);
   status.ForEachPayload(
       [&](absl::string_view type_url, const absl::Cord& payload) {
+        if (!absl::StartsWith(type_url, kRpcErrorDetailTypeUrlPrefix)) {
+          return;
+        }
         google::protobuf::Any* any = result.add_details();
         std::string type(type_url);
         any->set_type_url(type);

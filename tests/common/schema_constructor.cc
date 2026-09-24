@@ -26,6 +26,7 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
+#include "absl/time/clock.h"
 #include "absl/types/span.h"
 #include "backend/common/ids.h"
 #include "backend/database/pg_oid_assigner/pg_oid_assigner.h"
@@ -52,6 +53,10 @@ absl::StatusOr<std::unique_ptr<const backend::Schema>> CreateSchemaFromDDL(
       .type_factory = type_factory,
       .table_id_generator = &table_id_gen,
       .column_id_generator = &column_id_gen,
+      // Objects such as change streams take their creation time from the
+      // schema change timestamp, so use the current time as a real database
+      // would.
+      .schema_change_timestamp = absl::Now(),
       .pg_oid_assigner = &pg_oid_assigner,
       .database_id = std::string(database_id),
   };

@@ -231,6 +231,10 @@ What persists:
 - Database metadata (dialect, DDL statements)
 - ID generator counters (table_id, column_id, change_stream_id, sequence_id,
   named_schema_id) — prevents ID collisions after restart
+- Change stream creation times. Each schema change is replayed at its
+  original timestamp, so a change stream query can start from before a
+  restart or a backup restore. The creation time no longer resets to the
+  restart time.
 - Automatic recovery on startup from `metadata.json`
 
 When `--data_dir` is empty (default), emulator runs in-memory mode identical
@@ -332,6 +336,33 @@ boolean parameter.
 
 **This fork**: `remove_diacritics` parameter added to `TOKENIZE_FULLTEXT`
 function signature. Enables diacritic-insensitive full-text indexing.
+
+### REST Gateway: Accurate Error Responses
+
+**Upstream gap**: Over REST, most failed writes and many query errors come
+back as HTTP 500 with code 13 and the message
+`failed to marshal error message`. The real status code and message are lost.
+This hits constraint violations (NOT NULL, unique, foreign key, check,
+duplicate key), partitioned DML errors, and query errors such as
+`Table not found`. Internal markers attached to these errors reach the
+gateway, which can't encode them. gRPC clients aren't affected.
+
+**This fork**: REST errors keep their real status code and message. For
+example, a duplicate key returns HTTP 409 `ALREADY_EXISTS`, a NOT NULL
+violation returns HTTP 400 `FAILED_PRECONDITION`, and an unknown table returns
+HTTP 400 `INVALID_ARGUMENT`. Errors carry only standard `google.rpc` details,
+such as `ResourceInfo`, over both REST and gRPC.
+
+### PostgreSQL JSONB: Large Numbers on Every Platform
+
+**Gap**: On native macOS builds for Apple silicon, JSONB rejected any number
+above about 1e308 with `number overflow`. This covered `'1e400'::jsonb` and
+`to_jsonb()` of a large `numeric`. `long double` is only 8 bytes there. Linux
+builds and Docker images weren't affected.
+
+**This fork**: JSONB accepts numbers with up to 4,932 digits before the
+decimal point, the Spanner limit, on every platform. Larger numbers fail with
+the same `whole component of NUMERIC ... too large` error everywhere.
 
 ### GCC 12 Compiler
 

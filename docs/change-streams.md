@@ -372,6 +372,7 @@ When running with `--data_dir`, change streams survive emulator restarts:
 ✅ **Change stream options** - retention_period, value_capture_type, exclusions  
 ✅ **Change stream data** - Historical records within retention period  
 ✅ **Partition state** - Active and stale partitions  
+✅ **Creation times** - Each change stream keeps its original creation time, so `start_timestamp` can be before the restart (also kept by backup restores)  
 ✅ **ID counters** - Prevents change_stream_id collisions after restart  
 
 ### What Doesn't Persist
@@ -383,7 +384,8 @@ When running with `--data_dir`, change streams survive emulator restarts:
 
 On startup with `--data_dir`:
 1. Metadata loaded from `{data_dir}/metadata.json`
-2. Change stream schema reconstructed from DDL
+2. Change stream schema reconstructed by replaying each DDL batch at its
+   original timestamp
 3. Change stream data recovered from LevelDB
 4. Partition churner threads restarted
 5. ID generator seeded to prevent collisions

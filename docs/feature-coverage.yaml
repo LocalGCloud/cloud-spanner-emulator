@@ -1421,6 +1421,33 @@
       ]
     },
     {
+      "id": "postgresql.jsonb",
+      "category": "PostgreSQL dialect",
+      "feature": "PostgreSQL JSONB",
+      "status": "partial",
+      "applicability": "local-development",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/reference/postgresql/data-types"
+      ],
+      "evidence": {
+        "implementation": [
+          "third_party/spanner_pg/datatypes/common/jsonb/jsonb_value.cc"
+        ],
+        "tests": [
+          "third_party/spanner_pg/datatypes/common/jsonb/jsonb_parse_test.cc",
+          "tests/conformance/cases/pg_functions_test.cc"
+        ],
+        "documentation": [
+          "README.md"
+        ]
+      },
+      "verification": "tested",
+      "notes": "JSONB parsing, normalization, and functions are covered by tests. Numbers keep up to 4,932 digits before the decimal point on every platform, including native macOS builds on Apple silicon. Not every JSONB function was audited.",
+      "dialects": [
+        "postgresql"
+      ]
+    },
+    {
       "id": "writes.mutations_insert",
       "category": "DML, mutations, and batch operations",
       "feature": "Insert mutations",
@@ -1940,12 +1967,13 @@
           "frontend/handlers/change_streams.cc"
         ],
         "tests": [
-          "frontend/handlers/change_streams_test.cc"
+          "frontend/handlers/change_streams_test.cc",
+          "backend/query/change_stream/change_stream_query_validator_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Baseline classification for Read change stream; conservative where production semantics are broader than emulator evidence."
+      "notes": "Change stream queries are served with emulator partitioning. start_timestamp is validated against the retention period and the change stream's creation time, which is kept across restarts with --data_dir and across backup restores."
     },
     {
       "id": "change_streams.exclusions",
@@ -2730,15 +2758,18 @@
       ],
       "evidence": {
         "implementation": [
-          "README.md"
+          "gateway/gateway.go",
+          "frontend/common/status.cc"
         ],
-        "tests": [],
+        "tests": [
+          "frontend/common/status_test.cc"
+        ],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "unverified",
-      "notes": "Baseline classification for REST gateway compatibility; conservative where production semantics are broader than emulator evidence."
+      "verification": "tested",
+      "notes": "REST requests are served by the grpc-gateway proxy. Errors keep their gRPC status code and message, and carry only standard google.rpc error details; internal markers are never sent. REST-only behaviors beyond error mapping are not separately tested."
     },
     {
       "id": "clients.client_libraries",

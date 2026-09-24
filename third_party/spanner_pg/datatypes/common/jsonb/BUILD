@@ -100,6 +100,7 @@ cc_test(
         "//third_party/spanner_pg/util:valid_memory_context_fixture",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:cord",
         "@com_google_googlesql//googlesql/base:no_destructor",
