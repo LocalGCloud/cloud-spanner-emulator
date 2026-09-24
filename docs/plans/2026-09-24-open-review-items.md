@@ -1,5 +1,30 @@
 # Task brief: fix the open items from the 2026-09-24 review
 
+## Status
+
+All seven tasks were fixed on 2026-09-24, one commit each on
+`jay-spanner-extended` (not pushed). Every one was reproduced with a failing
+test before the fix; details are in each commit message and in the
+[changelog](../CHANGELOG.md).
+
+| Task | Commit | How it was reproduced |
+|------|--------|-----------------------|
+| 1. Database create time | `1a76ccc4` | End to end (`INTERNAL` after a restart) and `databases_test` |
+| 2. Restart after quarantine, gateway flag | `ae77daa6` | End to end (`DATA_LOSS` on the next start) and `database_manager_test` |
+| 3. IAM policy on an unavailable database | `4a8a3e7a` | `policies_test` (`DATA_LOSS` from the restore loop) |
+| 4. Dropping an unavailable database | `5956388f` | `databases_test` and `database_manager_test` |
+| 5. Gateway signal handling | `5444353a` | End to end (`emulator_main` left running) and `gateway_test` |
+| 6. Write-queue results | `e1681742` | `persistent_storage_test` (concurrent writers) |
+| 7. Atomic commits | `835d8b87` | `flush_test`, and end to end with `SIGKILL` (5 of 12 crashes left a partial commit) |
+
+Maintainer decisions: existing `metadata.json` files with a 1970 create time
+aren't repaired (no backward compatibility for now); a persisted IAM policy
+whose resource is missing is dropped with a warning; dropping an unavailable
+database moves it to `.quarantine/`.
+
+Found along the way and left open: a REST field mask in the URL isn't
+converted from camelCase (see [Known bugs](../known-gaps.md#known-bugs)).
+
 You are working in a fork of Google's Cloud Spanner Emulator (C++ with Bazel,
 plus a Go REST gateway). A documentation review on 2026-09-24 found the bugs
 and gaps below. Fix them one at a time, in the order given, with a test for

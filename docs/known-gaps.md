@@ -11,11 +11,13 @@ inherited from upstream. Reviewed 2026-09-24 against `jay-spanner-extended`.
 
 ## Known bugs
 
-Found during the 2026-09-24 review and not fixed yet. "Reproduced" bugs were
-confirmed against a running emulator; the others come from reading the code.
+Bugs that aren't fixed yet. "Reproduced" bugs were confirmed against a running
+emulator; the others come from reading the code. The seven bugs found in the
+2026-09-24 review are fixed; see the [changelog](CHANGELOG.md).
 
 | Area | Bug | Impact | Status |
 |------|-----|--------|--------|
+| REST gateway | A field mask passed in the URL (`?updateMask=...`) isn't converted from the JSON camelCase form, so `UpdateDatabase` with `updateMask=enableDropProtection` fails with `Unsupported database update field`. `UpdateBackup` (`expireTime`) and `UpdateBackupSchedule` (`retentionDuration`, `encryptionConfig`) take their mask the same way. Masks in a request body, as in `UpdateInstance`, work. | Use the snake_case path in the URL, for example `updateMask=enable_drop_protection`. gRPC clients aren't affected. | Reproduced for `UpdateDatabase`; from code for the others |
 
 ## Transactions and concurrency
 

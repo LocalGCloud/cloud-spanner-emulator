@@ -18,7 +18,7 @@ Reviewed 2026-09-24 against `jay-spanner-extended`.
 | Schema and DDL, both dialects | Supported | [Schema and DDL](#schema-and-ddl) |
 | GoogleSQL and PostgreSQL queries | Supported, with some functions stubbed | [Queries](#queries-and-functions) |
 | Instance and database admin | Supported; capacity is metadata only | [Admin API](#admin-api) |
-| Persistence with `--data_dir` (fork) | Supported, with known bugs | [Persistence](persistence.md) |
+| Persistence with `--data_dir` (fork) | Supported; row writes aren't synced to disk | [Persistence](persistence.md) |
 | Backups (fork) | Supported with `--data_dir`; schedules don't run | [Backups](#backups-fork) |
 | Change streams | Supported; partitioning simulated | [Change streams](change-streams.md) |
 | Geo-partitioning (fork) | Supported; storage is local | [Placements](placements.md) |
@@ -144,11 +144,13 @@ Require `--data_dir`. See [Persistence](persistence.md#backups).
 
 With `--data_dir`, rows (every version), schema, sequence counters, instances,
 instance configs, instance partitions, IAM policies, long-running operations,
-backups and backup schedules survive restarts. Schema changes replay at their original
-timestamps, interrupted schema changes are finished or rolled back at
-startup, and a database that fails to restore is marked unavailable instead
-of stopping the emulator. See [Persistence](persistence.md), including its
-known limitations.
+backups and backup schedules survive restarts. Each commit is written to disk
+all or nothing. Schema changes replay at their original timestamps,
+interrupted schema changes are finished or rolled back at startup, and a
+database that fails to restore is marked unavailable instead of stopping the
+emulator; it can be dropped, or quarantined with
+`--repair_corrupted_databases`. See [Persistence](persistence.md), including
+its known limitations.
 
 ## Change streams
 
