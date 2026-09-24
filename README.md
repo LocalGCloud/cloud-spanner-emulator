@@ -1,585 +1,164 @@
-# Cloud Spanner Emulator
+# Cloud Spanner Emulator (Extended)
 
-Cloud Spanner Emulator provides application developers with a locally-running,
-_emulated_ instance of Cloud Spanner to enable local development and testing.
+This is LocalGCloud's fork of Google's
+[Cloud Spanner Emulator](https://github.com/GoogleCloudPlatform/cloud-spanner-emulator),
+a locally running emulated Cloud Spanner for development and testing. It adds
+persistent storage, backups, more of the admin API, geo-partitioning, change
+streams that survive restarts, and fixes, and it is the Spanner runtime bundled
+by LocalCloud.
 
-The main focus of the emulator is correctness - an application that runs against
-the emulator should be able to run against the Cloud Spanner service without any
-changes. It is not a goal of the emulator to be a performant standalone
-production database or to provide similar performance to Cloud Spanner. The
-emulator is specifically intended for local unit testing of applications
-targeting Cloud Spanner.
+Like upstream, it aims for correctness: an application that runs against the
+emulator should run against Cloud Spanner without changes. It isn't meant to
+be a production database or to match Cloud Spanner's performance.
+
+- Image: [`jaysen2apache/spanner-emulator-extended`](https://hub.docker.com/r/jaysen2apache/spanner-emulator-extended)
+  (linux/amd64 and linux/arm64)
+- Branch: `jay-spanner-extended`. `master` tracks upstream.
 
 ## Quickstart
 
-There are multiple ways to invoke the emulator.
-
-### Via devcontainers
-To build, develop and test emulator, devcontainers can be used which installs
-all the emulator dependencies inside a docker container. Opening this repository
-in vscode will automatically use the devcontainer defined in .devcontainer
-directory. This requires docker to be installed on the local machine.
-
-To work directly in the browser without installing docker, a GitHub Codespace
-can be created and opened in vscode.dev in the browser.
-
-### Via gcloud
-
-The emulator is included in the [Google Cloud SDK](https://cloud.google.com/sdk)
-and can be invoked via the [gcloud emulators](
-https://cloud.google.com/sdk/gcloud/reference/emulators) command group:
-
 ```shell
-gcloud components update
-gcloud emulators spanner start
-```
-
-### Via pre-built docker image
-
-The emulator is also provided as a [pre-built docker image](
-https://gcr.io/cloud-spanner-emulator/emulator). You can run the latest version
-with:
-
-```shell
-docker pull gcr.io/cloud-spanner-emulator/emulator
-docker run -p 9010:9010 -p 9020:9020 gcr.io/cloud-spanner-emulator/emulator
-```
-
-The first port is the gRPC port and the second port is the REST port. The docker
-images are also tagged with version numbers, so you can run a specific version
-with:
-
-```shell
-VERSION=1.5.6
-docker run -p 9010:9010 -p 9020:9020 gcr.io/cloud-spanner-emulator/emulator:$VERSION
-```
-Works on x86 and arm64 architectures.
-
-### Via pre-built linux binaries
-
-The emulator is also distributed as a standalone linux binary. Note that this
-binary is not fully static, but has been tested on Ubuntu 18.04+, CentOS
-7+, RHEL 8+ and Debian 10+.
-
-Set `ARCHITECTURE` to `arm64` in following command if you are working on arm
-machine.
-```shell
-VERSION=1.5.6
-ARCHITECTURE=amd64
-wget https://storage.googleapis.com/cloud-spanner-emulator/releases/${VERSION}/cloud-spanner-emulator_linux_${ARCHITECTURE}-${VERSION}.tar.gz
-tar xvf cloud-spanner-emulator_linux_${ARCHITECTURE}-${VERSION}.tar.gz
-chmod u+x gateway_main emulator_main
-```
-
-`emulator_main` contains the gRPC server. If you do not need REST functionality,
-you can just use this binary. To override the default host/port at which the
-emulator runs:
-
-```shell
-./emulator_main --host_port localhost:1234
-```
-
-`gateway_main` is the REST gateway which will also start the emulator gRPC
-server as a subprocess. To override the default host/port for the gateway and
-emulator:
-
-```shell
-./gateway_main --hostname localhost --grpc_port 1234 --http_port 1235
-```
-
-### Via bazel
-
-Production releases of the emulator are built on Ubuntu 18.04 with bazel 5.4.0
-and gcc 8.4. You may be able to compile on compatible systems with compatible
-toolchains. From the emulator source directory, you can build and run the
-emulator via bazel from the source root with:
-
-```shell
-bazel run binaries/gateway_main
-```
-Works on x86 and arm64 architectures.
-
-### Via Docker Hub (multi-arch)
-
-A multi-architecture Docker image (amd64 + arm64) is published to Docker Hub
-from the `jay-spanner-extended` branch, by manual dispatch or a release tag
-(see [Release](#release)):
-
-```shell
-docker pull jaysen2apache/spanner-emulator-extended:latest
+# In-memory, like upstream
 docker run -p 9010:9010 -p 9020:9020 jaysen2apache/spanner-emulator-extended
-```
 
-You can also pin to a specific commit SHA:
-
-```shell
-docker run -p 9010:9010 -p 9020:9020 jaysen2apache/spanner-emulator-extended:<commit-sha>
-```
-
-Works on x86 and arm64 architectures.
-
-### Via custom docker image
-
-You can build the emulator docker image from the source root with:
-
-```shell
-docker build . -t emulator -f build/docker/Dockerfile.ubuntu
-```
-
-You can then invoke the emulator with:
-
-```shell
-docker run -p 9010:9010 -p 9020:9020 emulator
-```
-
-The first port is the gRPC port and the second port is the REST port.
-
-Works on x86 and arm64 architectures.
-
-## Technical Details
-
-The Cloud Spanner Emulator is built using the [GoogleSQL](https://github.com/google/googlesql)
-reference implementation and is divided into three layers (each in its own
-directory):
-
-- A REST gateway generated by [grpc-gateway](https://github.com/grpc-ecosystem/grpc-gateway)
-- A gRPC frontend which implements Cloud Spanner's gRPC API
-- A database backend which emulates Cloud Spanner's database features
-
-The core emulator codebase is in C++, and the REST wrapper is written in Go.
-SQL query execution, value/type classes, and SQL functions are provided by the
-GoogleSQL reference implementation. The API surface, DDL, transactional
-semantics, constraint enforcement, and in-memory storage are implemented in
-this codebase.
-
-## Features and Limitations
-
-The authoritative, evidence-linked parity inventory is the
-[Spanner emulator feature coverage matrix](docs/feature-coverage.md). It tracks
-the major documented Spanner feature areas, including partial, accepted-no-op,
-unsupported, unknown, and cloud-only capabilities.
-
-Notable supported features:
-
-- DDL schema changes
-
-- Full SQL/DML query execution (limitations noted below)
-
-- [GQL support](https://docs.cloud.google.com/spanner/docs/reference/standard-sql/graph-intro)
-
-- [Graph Algorithms](https://cloud.google.com/spanner/docs/graph/graph-algorithms-overview) (Graph Algorithms are supported in the emulator for parsing and query validation, but they will always return an empty result set)
-
-- DML sequence numbers
-
-- Non-SQL read and write methods
-
-- Instance and Database admin APIs including long running operations
-
-- Reads with stale timestamps
-
-- Secondary indexes
-
-- Commit timestamps
-
-- Information schema
-
-- Partitioned Read, Partitioned Query and Partitioned DML APIs
-
-- Foreign keys
-
-- NUMERIC type
-
-- JSON type
-
-- Generated columns
-
-- Generated primary keys
-
-- Check constraint
-
-- Dataflow templates
-
-- The [Cloud Spanner PostgreSQL interface](
-  https://cloud.google.com/spanner/docs/postgresql-interface).
-
-- [Connecting with PostgreSQL drivers and tools through PGAdapter](
-  https://github.com/GoogleCloudPlatform/pgadapter/blob/postgresql-dialect/docs/emulator.md).
-
-## Extended Features (this fork)
-
-This fork (`jay-spanner-extended` branch) adds features beyond the upstream
-Google emulator. Below is the gap analysis — what upstream lacks and this
-fork provides.
-
-### Data Persistence (`--data_dir`)
-
-**Upstream gap**: The emulator does not support persistence — all data is kept
-in memory and discarded when the emulator terminates.
-
-**This fork**: Full LevelDB-backed persistent storage. Data, metadata,
-instances, databases, DDL, and ID generator counters survive restarts.
-
-```shell
-docker run -p 9010:9010 -p 9020:9020 \
-  -v /path/to/data:/data \
+# With persistent storage in /path/to/data
+docker run -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
   jaysen2apache/spanner-emulator-extended \
-  --data_dir=/data
+  ./gateway_main --hostname 0.0.0.0 --data_dir=/data
 ```
 
-What persists:
-- All row data (multi-version with microsecond-precision timestamps)
-- Instance metadata (display_name, config, processing_units, labels)
-- Database metadata (dialect, DDL statements)
-- ID generator counters (table_id, column_id, change_stream_id, sequence_id,
-  named_schema_id) — prevents ID collisions after restart
-- Change stream creation times. Each schema change is replayed at its
-  original timestamp, so a change stream query can start from before a
-  restart or a backup restore. The creation time no longer resets to the
-  restart time.
-- Automatic recovery on startup from `metadata.json`
-
-When `--data_dir` is empty (default), emulator runs in-memory mode identical
-to upstream.
-
-**Per-database restore fault isolation**: if a single database's persisted
-data fails to restore on startup (for example, a corrupted unique index),
-that failure no longer crashes the whole emulator process. Every other
-instance and database in `--data_dir` restores and starts normally. The
-failed database itself becomes `UNAVAILABLE`:
-- It still appears in `ListDatabases`/`GetDatabase` (reported as `CREATING`
-  — Cloud Spanner's `Database.State` has no dedicated "failed" value, and
-  `CREATING`'s own contract already allows `FAILED_PRECONDITION` on
-  operations against it).
-- Reads, writes, and DDL against it are rejected with a `FAILED_PRECONDITION`
-  error naming the database and the restore failure reason.
-- The actual reason is also logged at startup (`ERROR` level) for operator
-  diagnosis.
-
-Restart with `--repair_corrupted_databases` to clear a failed database
-instead of leaving it `UNAVAILABLE`: its on-disk LevelDB directory is moved
-aside under `<data_dir>/.quarantine/` and its `metadata.json` entry is
-removed, so it stops blocking future startups and no longer appears at all
-(a quarantined database is not `UNAVAILABLE` — it's gone). Without the flag,
-a failed database is left in place so an operator can inspect it before
-deciding whether to discard it.
-
-### OPTIMIZER_VERSION Statement Hint
-
-**Upstream gap**: Production queries using `@{OPTIMIZER_VERSION=latest}` fail
-with "invalid hint" on the emulator.
-
-**This fork**: `optimizer_version` added to the hint whitelist. Accepts both
-STRING and INT64 values, silently ignored (emulator has no optimizer
-versioning). No more errors on production queries.
-
-### Geo-Partitioning: Placements and Placement Keys
-
-**Upstream gap**: Upstream parses only basic GoogleSQL placement DDL. Three
-`ALTER COLUMN ... PLACEMENT KEY` forms crash the emulator process. It rejects
-the documented `default` placement key value and lets `DROP PLACEMENT` orphan
-rows. It has no PostgreSQL syntax, no `INFORMATION_SCHEMA` views, and none of
-production's placement DML limits.
-
-**This fork**: Geo-partitioning behaves like production Cloud Spanner, in both
-dialects, as far as a single-process emulator can:
-
-```sql
--- GoogleSQL
-CREATE PLACEMENT europe OPTIONS (instance_partition = 'eu-partition');
-CREATE TABLE Singers (
-  SingerId INT64 NOT NULL,
-  Location STRING(MAX) NOT NULL PLACEMENT KEY
-) PRIMARY KEY (SingerId);
-
--- PostgreSQL
-CREATE PLACEMENT europe WITH (instance_partition = 'eu-partition');
-CREATE TABLE singers (
-  singerid bigint PRIMARY KEY,
-  location varchar(1024) NOT NULL PLACEMENT KEY
-);
-```
-
-- **Placements**: `CREATE`, `ALTER` (GoogleSQL), and `DROP PLACEMENT`, with
-  `IF [NOT] EXISTS` and the `instance_partition`, `default_leader`, and
-  `read_lease_regions` options. The instance partition must exist; create it
-  first with the instance admin API. `ALTER PLACEMENT` changes only the
-  options it names.
-- **Placement keys**: one `NOT NULL STRING` column per table, defined only in
-  `CREATE TABLE`. It can't be added, dropped, or loosened later.
-- **Writes**: a placement key must name a placement in the database or be
-  `default`, the implicit default placement.
-- **Safety checks**: `DROP PLACEMENT` fails while any row uses the placement.
-  `DROP TABLE` fails on a placement table that still has rows. An instance
-  partition can't be deleted while a placement uses it.
-- **Routing metadata**: `per_placement_routing_metadata` database option.
-  It can't change once placements exist.
-- **Metadata**: `INFORMATION_SCHEMA.PLACEMENTS` (including `default`),
-  `PLACEMENT_OPTIONS`, `PLACEMENT KEY` constraints in `TABLE_CONSTRAINTS`,
-  and `GetDatabaseDdl` output that can be replayed.
-- **DML limits** (production Preview behavior, on by default): in read-write
-  transactions, an `INSERT` or `DELETE` on a placement table must be the only
-  statement in its transaction, and `WHERE` clauses may reference only the
-  primary key columns of placement tables. Partitioned DML, read-only
-  transactions, and mutations are unaffected. Disable with
-  `--enforce_placement_dml_restrictions=false` (a flag of both `emulator_main`
-  and `gateway_main`).
-- **Persistence**: databases persisted with `--data_dir`, and backups, keep
-  loading. Replayed DDL skips checks that didn't exist when it was first
-  applied.
-
-Every row is stored locally, whatever its placement. Physical placement,
-routing latency, and row-move throughput aren't emulated.
+Port 9010 serves gRPC and 9020 serves REST. Point client libraries at the
+emulator with `SPANNER_EMULATOR_HOST=localhost:9010`.
+
+The image has no `ENTRYPOINT`, so to pass flags, give the whole command as
+above. Appending only flags fails to start. All flags are listed in
+[Configuration](docs/configuration.md).
+
+## What this fork adds
+
+The full list, with limits for each, is in [Capabilities](docs/capabilities.md).
+
+- **Persistence** with `--data_dir`: rows, schema, instances, instance
+  partitions, IAM policies, operations and backups survive restarts. A
+  database that fails to restore is isolated instead of stopping the emulator.
+  See [Persistence](docs/persistence.md).
+- **Backups and restore**, backup schedules (stored, not run), custom instance
+  configs, drop protection, and IAM policy storage (not enforced).
+- **Change streams that survive restarts**: definitions, records and
+  partition history persist with `--data_dir`, so reads can start before a
+  restart. See [Change streams](docs/change-streams.md).
+- **Geo-partitioning**: placements and placement keys in both dialects. See
+  [Placements](docs/placements.md).
+- **Fixes**: REST errors keep their real status code; unique indexes are
+  re-checked at commit; large JSONB numbers work on macOS; `TABLESAMPLE ...
+  REPEATABLE` and the `OPTIMIZER_VERSION` query hint are accepted.
+- **Builds**: multi-arch images, native macOS arm64 builds, and cached local
+  builds. See [Building](docs/building.md).
+
+## Known gaps
+
+Everything known not to work, or to work differently from Cloud Spanner, is in
+[Known gaps](docs/known-gaps.md). The most important:
+
+- Only one read-write transaction runs at a time; others may be aborted, so
+  wrap transactions in a retry loop.
+- IAM policies are stored but never enforced.
+- Backups need `--data_dir`; backup schedules never run and backups never
+  expire.
+- Change stream partitioning is simulated: all writes go to one partition and
+  resume tokens don't work.
+- This fork hasn't merged upstream releases after 2026-08-03.
+
+## Documentation
+
+| Document | Covers |
+|----------|--------|
+| [Capabilities](docs/capabilities.md) | What works, by area, including what this fork adds |
+| [Known gaps](docs/known-gaps.md) | What doesn't work or differs from Cloud Spanner |
+| [Feature coverage](docs/feature-coverage.md) | Per-feature status with evidence; machine-readable in [`feature-coverage.yaml`](docs/feature-coverage.yaml) |
+| [Configuration](docs/configuration.md) | Binaries, flags, environment variables, Docker usage |
+| [Persistence](docs/persistence.md) | `--data_dir`, backups, recovery, on-disk layout |
+| [Change streams](docs/change-streams.md) | Creating and reading change streams, limits, differences |
+| [Placements](docs/placements.md) | Geo-partitioning |
+| [Building](docs/building.md) | Native, Docker and CI builds, caches, releasing |
+| [Changelog](docs/CHANGELOG.md) | Changes in this fork |
+| [Internals](docs/internals/) | Design notes for persistent storage and change streams |
+| [Plans](docs/plans/) | Dated design records |
+
+## Other ways to run
+
+- **From source**: `bazel run //binaries:gateway_main`, or `./build.sh` for a
+  Docker image. See [Building](docs/building.md).
+- **Upstream builds**: `gcloud emulators spanner start`, the
+  `gcr.io/cloud-spanner-emulator/emulator` image and upstream's Linux tarballs
+  run Google's emulator, without this fork's features. See
+  [upstream's README](https://github.com/GoogleCloudPlatform/cloud-spanner-emulator#readme).
+
+## Technical details
+
+The emulator is built on the [GoogleSQL](https://github.com/google/googlesql)
+reference implementation and has three layers:
+
+- a REST gateway generated by [grpc-gateway](https://github.com/grpc-ecosystem/grpc-gateway)
+  (Go, `gateway/`);
+- a gRPC frontend implementing Cloud Spanner's API (`frontend/`);
+- a database backend emulating Cloud Spanner's database features (`backend/`).
+
+GoogleSQL provides SQL query execution, values, types and SQL functions. This
+codebase implements the API surface, DDL, transactions, constraint enforcement
+and storage (in memory, or LevelDB with `--data_dir`). PostgreSQL-dialect
+support comes from a port of PostgreSQL's parser in `third_party/spanner_pg`.
+
+## FAQ
+
+#### Which client library versions are supported?
+
+All Cloud Spanner [client libraries](https://cloud.google.com/spanner/docs/reference/libraries)
+support the emulator from these versions:
+
+| Client library | Version |
+|----------------|---------|
+| C++ | v0.9.x |
+| C# | v3.1.0 |
+| Go | v1.5.0 |
+| Java | v1.51.0 |
+| Node.js | v4.5.0 |
+| PHP | v1.25.0 |
+| Python | v1.15.0 |
+| Ruby | v1.13.0 |
+
+#### How do I fix the client error "UNAUTHENTICATED: Credentials require .."?
 
-### Full-Text Search: `remove_diacritics` Parameter
+Upgrade to a client library version listed above, and set
+`SPANNER_EMULATOR_HOST`.
 
-**Upstream gap**: `TOKENIZE_FULLTEXT` does not support the `remove_diacritics`
-boolean parameter.
+#### What's the recommended test setup?
 
-**This fork**: `remove_diacritics` parameter added to `TOKENIZE_FULLTEXT`
-function signature. Enables diacritic-insensitive full-text indexing.
+Run one emulator process and create an instance in it. Databases are cheap to
+create, so let each test create and drop its own database. Tests stay isolated
+and can run in parallel.
 
-### REST Gateway: Accurate Error Responses
+#### Why does row order change between runs?
 
-**Upstream gap**: Over REST, most failed writes and many query errors come
-back as HTTP 500 with code 13 and the message
-`failed to marshal error message`. The real status code and message are lost.
-This hits constraint violations (NOT NULL, unique, foreign key, check,
-duplicate key), partitioned DML errors, and query errors such as
-`Table not found`. Internal markers attached to these errors reach the
-gateway, which can't encode them. gRPC clients aren't affected.
+The emulator deliberately randomizes results of queries without `ORDER BY`.
+Cloud Spanner doesn't guarantee an order either.
 
-**This fork**: REST errors keep their real status code and message. For
-example, a duplicate key returns HTTP 409 `ALREADY_EXISTS`, a NOT NULL
-violation returns HTTP 400 `FAILED_PRECONDITION`, and an unknown table returns
-HTTP 400 `INVALID_ARGUMENT`. Errors carry only standard `google.rpc` details,
-such as `ResourceInfo`, over both REST and gRPC.
+#### Why does the emulator fail with "Check failed: LoadTimeZone(...)"?
 
-### PostgreSQL JSONB: Large Numbers on Every Platform
+The emulator needs the system's [tzdata](https://www.iana.org/time-zones)
+files. Install tzdata on the machine or image that runs it.
 
-**Gap**: On native macOS builds for Apple silicon, JSONB rejected any number
-above about 1e308 with `number overflow`. This covered `'1e400'::jsonb` and
-`to_jsonb()` of a large `numeric`. `long double` is only 8 bytes there. Linux
-builds and Docker images weren't affected.
+## Issues and contributions
 
-**This fork**: JSONB accepts numbers with up to 4,932 digits before the
-decimal point, the Spanner limit, on every platform. Larger numbers fail with
-the same `whole component of NUMERIC ... too large` error everywhere.
-
-### GCC 12 Compiler
-
-**Upstream**: Built with GCC 8.4 on Ubuntu 18.04.
-
-**This fork**: Upgraded to GCC 12 with all compatibility fixes applied
-(NoDestructor initialization, constructor resolution, designated initializers).
-Better C++ feature support and stability.
-
-### Multi-Architecture Docker CI/CD
-
-**Upstream**: No automated Docker Hub publishing.
-
-**This fork**: Automated multi-arch (amd64 + arm64) Docker builds published
-to `jaysen2apache/spanner-emulator-extended` via GitHub Actions on every push.
-
-### Build Performance
-
-**Upstream**: Full builds from scratch every time.
-
-**This fork**: BuildKit cache mounts for Bazel disk/repository caches. Reduces
-subsequent builds from hours to ~2 minutes. Per-file optimization (`-O1`)
-for heavy GoogleSQL files prevents OOM on resource-constrained systems.
-
-### Supported Features Already in This Fork (No Gap)
-
-These features were analyzed as potential gaps but already work in the current
-GoogleSQL 2026.7.2 base:
-
-| Feature | Status |
-|---------|--------|
-| TOKENLIST type | Supported (proto type 22, full DDL) |
-| TOKENIZE_NGRAMS() | Supported (search function catalog) |
-| TOKENIZE_FULLTEXT() | Supported (search function catalog) |
-| SEARCH_NGRAMS() | Supported (n-gram search evaluator) |
-| SCORE_NGRAMS() | Supported (n-gram scoring evaluator) |
-| SOUNDEX() | Supported (FEATURE_ADDITIONAL_STRING_FUNCTIONS) |
-| SAFE_DIVIDE() | Supported (FEATURE_SAFE_FUNCTION_CALL) |
-| NORMALIZE(str, form) | Supported (FEATURE_ADDITIONAL_STRING_FUNCTIONS) |
-| FORCE_INDEX hint | Supported (hint validator whitelist) |
-| HIDDEN columns | Supported (column attribute) |
-| Named args (=> syntax) | Supported (FEATURE_NAMED_ARGUMENTS) |
-| Unicode regex (\pM) | Supported (RE2 engine) |
-| SEARCH INDEX DDL | Supported (CreateSearchIndex in DDL parser) |
-| Generated columns | Supported (expression evaluator) |
-
-## Remaining Limitations
-
-Notable limitations:
-
-- The gRPC and REST endpoints run on separate ports and serve unencrypted
-  traffic.
-
-- gRPC request deadlines and cancellations are ignored by the emulator.
-
-- IAM policy RPCs are accepted for client compatibility, but IAM authorization
-  and enforcement are not emulated. Backup API coverage varies by method; see
-  the [feature coverage matrix](docs/feature-coverage.md) for audited status and
-  evidence.
-
-- The emulator only allows one read-write transaction or schema change at a
-  time. Any concurrent transaction will be aborted. Transactions should always
-  be wrapped in a retry loop. This [recommendation](
-  https://cloud.google.com/spanner/docs/transactions) applies to the Cloud
-  Spanner service as well.
-
-- Persistence is disabled by default for upstream-compatible in-memory
-  behavior. This fork supports LevelDB-backed persistence when `--data_dir` is
-  configured; see [Data Persistence](#data-persistence---data_dir).
-
-- Error messages may not be consistent between the emulator and the Cloud
-  Spanner service. Error messages are not part of Cloud Spanner's API contract
-  and application code should not depend on the text of the error message being
-  consistent.
-
-- If multiple constraint violations are found during a transaction commit, the
-  violation reported by the emulator may be different from the one reported by
-  the Cloud Spanner service.
-
-- The SQL query modes PLAN and PROFILE do not return any query plans. The
-  emulator does not guarantee the same query execution plan as the Cloud Spanner
-  service, and hence query plans and statistics reporting are disabled on the
-  emulator. Running a query in PLAN mode will just analyze the SQL string and
-  return the corresponding metadata. Running a query in PROFILE mode executes
-  the query and returns the number of rows that was returned and the execution
-  time. The execution time has no relation with what the execution time on
-  Cloud Spanner will be.
-
-- Some queries that use SQL functionality present in GoogleSQL but not in
-  Cloud Spanner service may succeed instead of being rejected as invalid.
-
-- Certain quotas and limits (such as admin api rate limits and mutation size
-  limits) are not enforced.
-
-- List APIs (ListSessions, ListInstances) do not support filtering by labels.
-
-- Many tables related to runtime introspection in the SPANNER_SYS schema (e.g.,
-  query stats tables) are not supported.
-
-- Server-side monitoring and logging functionality such as audit logs,
-  stackdriver logging, and stackdriver monitoring are not supported.
-
-- Foreign key [backing index](
-  https://cloud.google.com/spanner/docs/foreign-keys/overview#backing-indexes)
-  names generated in production Cloud Spanner are usable in emulator query
-  hints. However, index names generated in the emulator cannot be used in the
-  emulator or in production.
-
-- The emulator does not implement handlings of all the parameters of full text
-  search functions in Cloud Spanner.
-  - For full text search functions that has `language_tag` or
-    `enhance_query` parameter, the functions will accept calls with the
-    parameters but take no action on it.
-  - `TOKENIZE_FULLTEXT` and `TOKENIZE_SUBSTRING` functions only support default
-    value `text/plain` for `content_type` parameter.
-  - `TOKENIZE_FULLTEXT` accepts `token_category` parameter but takes no action
-    on it.
-  - `TOKENIZE_SUBSTRING` accepts `remove_diacritics` and
-    `short_tokens_only_for_anchors` parameters but takes no action on them.
-  - `SCORE` function accepts `options` parameter but takes no action on it.
-  - `TOKENIZE_NGRAMS` accepts `remove_diacritics` parameter but takes no action
-    on it.
-  - `CREATE SEARCH INDEX` accepts `OPTIONS` clause but takes no action on it.
-
-## Frequently Asked Questions (FAQ)
-
-#### Which [client library](https://cloud.google.com/spanner/docs/reference/libraries) versions are supported?
-
-All Cloud Spanner client libraries support the emulator. Install the following
-version (or higher) to get emulator support:
-
-| Client Library | Version  |
-|----------------|----------|
-| C++            | v0.9.x   |
-| C#             | v3.1.0   |
-| Go             | v1.5.0   |
-| Java           | v1.51.0  |
-| Node.js        | v4.5.0   |
-| PHP            | v1.25.0  |
-| Python         | v1.15.0  |
-| Ruby           | v1.13.0  |
-
-#### How do I fix the client library error with "UNAUTHENTICATED: Credentials require .."?
-
-Upgrade to the latest client library versions as listed above.
-
-#### What is the recommended test setup?
-
-Use a single emulator process and create a Cloud Spanner instance within it.
-Since creating databases is cheap in the emulator, we recommend that each test
-bring up and tear down its own database. This ensures hermetic testing and
-allows the test suite to run tests in parallel if needed.
-
-#### Why is the order of rows returned by the emulator different across runs?
-
-The emulator intentionally randomizes query results with no ORDER BY clause.
-You should not depend on ordering done by the Cloud Spanner service in the
-absence of an ORDER BY clause.
-
-#### Why does the emulator fail with "Check failed: LoadTimeZone(...)"
-
-The emulator relies on the absl library which in turns uses the
-[tzdata library](https://www.iana.org/time-zones). The tzdata library must be
-installed on the system which emulator is running. This will need to be added to
-the docker build file if you are running through docker.
-
-## Contribute
-
-We are currently not accepting external code contributions to this project.
-
-## Issues
-
-Please file bugs and feature requests using
-[GitHub's issue tracker](https://github.com/GoogleCloudPlatform/cloud-spanner-emulator/issues/new)
-or using the existing Cloud Spanner [support channels](https://cloud.google.com/spanner/docs/getting-support).
-
-## Release
-
-Publishing to Docker Hub is entirely manual: an ordinary commit to any
-branch never triggers a build or publish on its own.
-
-| Event | Docker tags published |
-|-------|------------------------|
-| `workflow_dispatch` against `jay-spanner-extended` | `<7-char-sha>`, `latest` |
-| Plain version tag `x.y.z` (no `v` prefix) | `<7-char-sha>`, `latest`, `x.y.z` |
-| `workflow_dispatch` against any other branch | none (builds/warms cache only) |
-
-Both publishing paths build Linux images for `linux/amd64` and
-`linux/arm64` and merge them into one multi-platform manifest.
-
-### Release: push a version tag
-
-```bash
-git tag -a x.y.z -m "Release x.y.z"
-git push origin x.y.z
-```
-
-Tag pushes also build and upload a native macOS ARM64 archive
-(`spanner-emulator-macos-arm64.tar.gz` + checksum, as a workflow artifact).
-
-### Manual dispatch
-
-```bash
-gh workflow run docker-publish.yml --ref jay-spanner-extended
-```
-
-The Docker/Linux build always runs on any dispatch. `target` (default:
-`arm`) only decides whether the native macOS arm64 archive is *also*
-built: `target=arm` builds it alongside the Docker images, `target=linux`
-skips it. Only publishes when `--ref` is `jay-spanner-extended` -- dispatching
-against any other branch builds without publishing, so experimenting on a
-feature branch can never overwrite the public `latest` tag.
+This fork is maintained for LocalCloud at
+[LocalGCloud/cloud-spanner-emulator](https://github.com/LocalGCloud/cloud-spanner-emulator);
+report problems with it to the LocalCloud maintainers. Bugs that also affect
+Google's emulator can be reported
+[upstream](https://github.com/GoogleCloudPlatform/cloud-spanner-emulator/issues).
 
 ## Security
 
-For information on reporting security vulnerabilities, see [SECURITY.md](./SECURITY.md).
+See [SECURITY.md](SECURITY.md).
 
 ## License
 

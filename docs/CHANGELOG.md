@@ -1,5 +1,46 @@
 # Changelog
 
+Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
+releases are merged separately; the last one merged is the 2026-08-03 import.
+Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
+
+## [2026-09-24] Documentation Review
+
+### Changed
+- Docs reorganized around [capabilities](capabilities.md) and
+  [known gaps](known-gaps.md), with new guides for
+  [configuration](configuration.md), [persistence](persistence.md) and
+  [placements](placements.md), and a rewritten
+  [change streams guide](change-streams.md). Design notes moved to
+  `docs/internals/`, dated plans to `docs/plans/`. The README is now a short
+  landing page.
+- `docs/feature-coverage.yaml` re-audited: specific notes, corrected statuses
+  and evidence, and new records for fork features.
+- `docker-publish.yml` log messages now state the cache limits the workflow
+  actually uses (5 GiB), not the pre-2026-08-26 ones.
+
+### Corrections to earlier docs
+- Only the `table_id`, `column_id` and `change_stream_id` counters persist. The
+  2026-04-17 entry and the README also listed `sequence_id` and
+  `named_schema_id`.
+- `TOKENIZE_FULLTEXT` accepts `remove_diacritics` but ignores it (2026-05-08
+  entry said it enables diacritic-insensitive indexing).
+- Passing flags to the Docker image requires the full command
+  (`./gateway_main --hostname 0.0.0.0 --data_dir=/data`); the old examples
+  appended flags only and failed to start.
+- `--repair_corrupted_databases` is an `emulator_main` flag; `gateway_main`
+  doesn't accept or forward it.
+- Change stream creation times survive restarts only for streams created by
+  `UpdateDatabaseDdl`. Streams created in the `CreateDatabase` request get a
+  1970 creation time after a restart (known bug; the 2026-08-16 entry and the
+  README said creation times always survive).
+- Sequence and `IDENTITY` positions don't persist, so sequences reuse values
+  after a restart (known bug).
+- The change stream docs described queries, limits and internals that don't
+  match the code (for example, a `NULL` partition token returns only child
+  partition records, heartbeats allow 100–300000 ms, and start times can be at
+  most 10 minutes ahead).
+
 ## [2026-09-23] REST Error Codes, Large JSONB Numbers on macOS, Test Fix
 
 ### Fixed
@@ -35,9 +76,45 @@
   JSONB: Large Numbers on Every Platform" sections. Change stream creation
   times added to the Data Persistence list.
 - `docs/change-streams.md`: creation times listed under What Persists.
+- `docs/building.md` (new): how to build natively on macOS, with `build.sh`,
+  and in CI; what each cache holds; what triggers a full rebuild; and how to
+  check a slow local Docker build. `README.md`'s build sections now link to
+  it, and their out-of-date toolchain versions (Ubuntu 18.04, Bazel 5.4.0,
+  GCC 8.4/12) and "built on every push" claims are corrected.
 - `docs/feature-coverage.yaml`/`.md`: `clients.rest_gateway` is now `tested`,
   `change_streams.read` notes cover creation-time validation, and a new
   `postgresql.jsonb` entry.
+
+## [2026-09-23] Geo-Partitioning Placements
+
+### Added
+- Placements and placement keys in both dialects: `CREATE`/`ALTER`/`DROP
+  PLACEMENT` with `instance_partition`, `default_leader` and
+  `read_lease_regions`; one `NOT NULL STRING` placement key column per table;
+  the `default` placement; `per_placement_routing_metadata`;
+  `INFORMATION_SCHEMA` views; replayable `GetDatabaseDdl` output; and
+  production's placement DML limits, on by default
+  (`--enforce_placement_dml_restrictions`). See [placements.md](placements.md).
+
+### Fixed
+- Three `ALTER COLUMN ... PLACEMENT KEY` forms crashed the emulator (inherited
+  from upstream); they now return errors.
+- Conformance tests failed to compile on native macOS because
+  `std::int64_t` is `long long` there (`076e77b8`).
+
+## [2026-09-10] Change Stream Partitions Across Restarts
+
+### Fixed
+- Restarting a persisted database replayed the change stream's one-time
+  partition backfill at a new timestamp and duplicated partitions. Replay now
+  uses the database's creation time for the initial DDL batch, and the
+  backfill treats any persisted partition as proof it already ran. Tests:
+  `frontend/collections/database_manager_test.cc`.
+
+### Added
+- `candidate_only` input on the publish workflow: publishes only the
+  immutable `<sha>` tag and leaves `latest` alone.
+- Images carry `org.opencontainers.image.revision` with the source commit.
 
 ## [2026-08-26] UNAVAILABLE Database State for Restore Failures
 
@@ -90,6 +167,32 @@ section 3.
   (`openspec/changes/fix-spanner-leveldb-race/tasks.md` sections 4.7, 5) is
   still outstanding and unrelated to this entry.
 
+## [2026-08-26] Docker Publishing and CI Cache
+
+### Changed
+- Publishing is manual only. A `workflow_dispatch` on the working branch
+  publishes `<sha>` and `latest`; other branches only build. A version tag
+  `x.y.z` publishes `<sha>`, `latest` and `x.y.z` (no `v`-prefixed tag).
+- The dispatch input `target` is `linux` (Docker images) or `arm` (also the
+  native macOS arm64 archive, the default).
+- The CI Bazel cache budget was raised (archives and expanded caches up to
+  5 GiB, 8 GiB combined), and a twice-weekly scheduled run on `master` keeps
+  the caches from being evicted.
+
+## [2026-08-25] Feature Coverage Inventory
+
+### Added
+- `docs/feature-coverage.yaml`, the rendered `docs/feature-coverage.md`, and
+  `tools/feature_coverage.py` to validate and render them. The
+  `feature-coverage.yml` workflow fails when the rendered matrix is out of date
+  or a registered RPC has no record.
+- `TABLESAMPLE ... REPEATABLE` is accepted (upstream rejects it), with tests
+  for BERNOULLI and RESERVOIR sampling.
+- Partitioned DML on PostgreSQL databases is validated with the PostgreSQL
+  analyzer, so parameterized statements work.
+- Tests for `ISOYEAR` and `ISOWEEK` in `DATE_TRUNC`, `TIMESTAMP_TRUNC` and
+  `DATE_DIFF`.
+
 ## [2026-08-18] Unique Index Restore-Time Corruption and Restore Fault Isolation
 
 Implements `openspec/changes/fix-unique-index-restore-isolation/`. Fixes the
@@ -130,6 +233,50 @@ on underneath it (lock hand-off, or any future change to
 ### Known gaps (not implemented in this pass)
 - A database that fails to restore is *not* currently listed by `DatabaseAdmin.ListDatabases`/`GetDatabase` with an explicit unavailable state (it is simply absent from the catalog for that run, the same as if it were quarantined). Surfacing it as visible-but-unavailable, as originally scoped in `specs/restore-fault-isolation/spec.md`, would need a `state` field threaded through `DatabaseManager`/`frontend::Database` and is left as follow-up work.
 - No automated regression/stress tests were added for either fix (per `tasks.md` sections 1-6) -- this pass was code review and fixes only, with test execution and building explicitly out of scope for this change.
+
+## [2026-08-16] Backups, Admin API Extensions and Durable Change Streams
+
+### Added
+- Backups: `CreateBackup`, `CopyBackup`, `GetBackup`, `ListBackups`,
+  `UpdateBackup`, `DeleteBackup` and `RestoreDatabase`. They require
+  `--data_dir`; each backup is a full copy of the database.
+- Backup schedules: create, get, list, update and delete. Schedules are stored
+  but never run.
+- `ListBackupOperations` and `ListDatabaseOperations`; `UpdateDatabase` with
+  `enable_drop_protection`, enforced by `DropDatabase`; `ListDatabaseRoles`
+  (always empty); `AddSplitPoints` (accepted, no effect).
+- Custom instance configs (create, update, delete, list operations),
+  `MoveInstance` (metadata only), `FetchCacheUpdate` (no updates), and IAM
+  policy storage (`GetIamPolicy`/`SetIamPolicy`; not enforced).
+- With `--data_dir`: IAM policies, custom instance configs, instance
+  partitions and long-running operations persist; each DDL batch is recorded
+  with its commit timestamp; an interrupted `UpdateDatabaseDdl` is finished or
+  rolled back at the next startup. Each database gets its own directory, and
+  the older layout is migrated automatically.
+- Change stream creation times survive restarts and backup restores, and the
+  initial partition backfill runs only once.
+
+### Fixed
+- Merging change stream partitions crashed with more than two tokens
+  (`6cecbd4a`).
+
+## [2026-08-15] Native macOS Build
+
+### Added
+- CI builds a native macOS arm64 archive (`spanner-emulator-macos-arm64`) on
+  release tags and on `target=arm` dispatches.
+
+### Fixed
+- Docker builds in CI work without Docker Hub credentials (no cache export).
+
+## [2026-06-01] Persistent Storage Write Queue and ARRAY Values
+
+### Fixed
+- Writes to LevelDB go through a single queue, so concurrent writers can't
+  interleave. See [internals/persistent-storage.md](internals/persistent-storage.md).
+- `ARRAY` column values persist and reload correctly.
+- GoogleSQL build fix for GCC 12 `constexpr` errors; see
+  [plans/2026-06-01-zetasql-constexpr-fix.md](plans/2026-06-01-zetasql-constexpr-fix.md).
 
 ## [2026-05-08] OPTIMIZER_VERSION Hint and Full-Text Search Fix
 

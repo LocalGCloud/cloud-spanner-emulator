@@ -204,7 +204,7 @@ jobs:
             if (( $(stat -c %s "$repo_archive") <= MAX_ARCHIVE_BYTES )); then
               tar --no-same-owner -xzf "$repo_archive" -C "$REPO_CACHE_PATH"
             else
-              echo "Repository cache archive exceeds 3 GiB; discarding it."
+              echo "Repository cache archive exceeds 5 GiB; discarding it."
               trimmed=true
             fi
           fi
@@ -212,7 +212,7 @@ jobs:
             if (( $(stat -c %s "$disk_archive") <= MAX_ARCHIVE_BYTES )); then
               tar --no-same-owner -xzf "$disk_archive" -C "$DISK_CACHE_PATH"
             else
-              echo "Disk cache archive exceeds 3 GiB; discarding it."
+              echo "Disk cache archive exceeds 5 GiB; discarding it."
               trimmed=true
             fi
           fi
@@ -221,7 +221,7 @@ jobs:
           repo_kib="$(du -sk "$REPO_CACHE_PATH" | cut -f 1)"
           disk_kib="$(du -sk "$DISK_CACHE_PATH" | cut -f 1)"
           if (( repo_kib > MAX_MOUNT_KIB )); then
-            echo "Repository cache exceeds 2 GiB expanded; discarding it."
+            echo "Repository cache exceeds 5 GiB expanded; discarding it."
             rm -rf "$REPO_CACHE_PATH"
             mkdir -p "$REPO_CACHE_PATH"
             repo_kib=0
@@ -339,7 +339,7 @@ jobs:
             save_repo=false
           fi
           if (( repo_bytes + disk_bytes > MAX_COMBINED_BYTES )); then
-            echo "Compressed caches exceed 3 GiB; omitting the disk cache."
+            echo "Compressed caches exceed 5 GiB; omitting the disk cache."
             rm -f "$disk_archive"
             disk_bytes=0
             save_disk=false
