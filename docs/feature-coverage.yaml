@@ -26,7 +26,7 @@
     ],
     "notes": "JSON-compatible YAML canonical inventory. Classifications are conservative and evidence-linked. Re-audited 2026-09-24 against the jay-spanner-extended fork (persistence, backups, placements, change streams, IAM, sessions, REST gateway).",
     "fork_revision": "873634fb (jay-spanner-extended at audit time)",
-    "targeted_update": "2026-09-26; selected evidence and wording corrections only. Full inventory review remains 2026-09-24."
+    "targeted_update": "2026-09-27; audited all former partial and unsupported records against source, tests, and current Spanner docs. Full 154-row inventory review remains 2026-09-24."
   },
   "categories": [
     {
@@ -708,7 +708,7 @@
       "id": "operations.cancel",
       "category": "Database administration, operations, and backups",
       "feature": "CancelOperation RPC",
-      "status": "partial",
+      "status": "accepted-no-op",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
@@ -723,7 +723,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Operations complete synchronously, so CancelOperation is accepted but has nothing to cancel."
+      "notes": "CancelOperation validates an existing operation and returns OK without changing it. Operations finish synchronously, so the cited test only confirms that canceling an already completed operation is accepted."
     },
     {
       "id": "backups.create",
@@ -750,7 +750,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "CreateBackup takes a point-in-time copy of the database's storage and requires --data_dir; without it the call returns FAILED_PRECONDITION. expire_time is required and must be 6 hours to 366 days after the capture time; version_time (historical backups) returns INVALID_ARGUMENT, and encryption_config is ignored."
+      "notes": "CreateBackup takes a point-in-time copy of the database's storage and requires --data_dir; without it the call returns FAILED_PRECONDITION. expire_time is required and must be 6 hours to 366 days after the capture time; version_time (historical backups) returns INVALID_ARGUMENT. encryption_config is retained in backup metadata but does not encrypt the local snapshot."
     },
     {
       "id": "backups.restore",
@@ -766,7 +766,8 @@
           "frontend/handlers/backups.cc",
           "frontend/collections/database_manager.cc",
           "backend/database/database.cc",
-          "backend/storage/sequence_state_store.cc"
+          "backend/storage/sequence_state_store.cc",
+          "backend/query/change_stream/change_stream_query_validator.cc"
         ],
         "tests": [
           "frontend/handlers/backups_test.cc",
@@ -778,7 +779,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "RestoreDatabase copies a READY local backup into a new database and requires --data_dir; the target must be in the backup's project on an instance with the same instance config. The restored database keeps its schema history and saved sequence counters, including those used by identity columns. Change stream start timestamps from before the restore still work. Failures roll back the new database."
+      "notes": "RestoreDatabase copies a READY local backup into a new database and requires --data_dir; the target must be in the backup's project on an instance with the same instance config. Schema contents and saved sequence counters, including those used by identity columns, are restored. The first schema batch receives the restore time, so pre-restore change-stream start timestamps are not guaranteed to work. Ordinary failures roll back the target; a failed rollback can require restart reconciliation."
     },
     {
       "id": "schema.tables",
@@ -1083,7 +1084,7 @@
     {
       "id": "types.json",
       "category": "Types and values",
-      "feature": "JSON",
+      "feature": "JSON type and functions",
       "status": "partial",
       "applicability": "local-development",
       "dialects": [
@@ -1108,7 +1109,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "JSON columns, ARRAY<JSON>, DML with JSON values, index STORING of JSON columns, and allowlisted JSON functions (JSON_QUERY, JSON_VALUE, JSON_SET, JSON_REMOVE, PARSE_JSON, TO_JSON, SAFE_TO_JSON, TO_JSON_STRING on JSON) are tested. JSON cannot be a key or indexed column, and the JSON function surface is limited to the allowlist in gsql_supported_functions.cc and has not been checked function-by-function against production (PostgreSQL JSONB is tracked in postgresql.jsonb)."
+      "notes": "JSON columns, ARRAY<JSON>, DML values, index STORING, and selected JSON functions (JSON_QUERY, JSON_VALUE, JSON_SET, JSON_REMOVE, PARSE_JSON, TO_JSON, SAFE_TO_JSON, TO_JSON_STRING) have representative tests. The JSON type itself works for local development. JSON key and index-key restrictions match Spanner; the combined row remains partial because function coverage is allowlisted and has not been compared function by function with production."
     },
     {
       "id": "types.arrays",
@@ -1203,7 +1204,7 @@
       "id": "types.interval",
       "category": "Types and values",
       "feature": "INTERVAL",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -1224,12 +1225,13 @@
           "tests/conformance/cases/udfs.cc",
           "tests/conformance/cases/dml.cc",
           "tests/conformance/cases/query.cc",
-          "third_party/spanner_pg/ddl/ddl_test.cc"
+          "third_party/spanner_pg/ddl/ddl_test.cc",
+          "backend/schema/updater/schema_updater_tests/table.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "INTERVAL works as a query-only type: INTERVAL literals in DATE_ADD/TIMESTAMP_ADD and generated-column expressions, INTERVAL parameters (type inferred in PLAN mode), UDF INTERVAL parameters, and MAKE_INTERVAL/JUSTIFY_* are allowlisted, with wire encoding covered in values_test.cc. INTERVAL columns are rejected in both dialects, as in production (backend/datamodel/types.cc; ddl_test.cc DisableIntervalType); interval-specific functions such as EXTRACT from an INTERVAL are not individually tested."
+      "notes": "INTERVAL works as a query-only type: literals in DATE_ADD/TIMESTAMP_ADD and generated-column expressions, parameters, UDF parameters, and wire values have representative tests. INTERVAL columns are rejected in both dialects, matching Spanner's documented restriction. Selected interval functions are available, but this type status does not establish function-by-function parity."
     },
     {
       "id": "googlesql.select",
@@ -1489,7 +1491,7 @@
       "id": "googlesql.tablesample",
       "category": "GoogleSQL query language and functions",
       "feature": "TABLESAMPLE",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql"
@@ -1508,7 +1510,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "BERNOULLI percentage sampling and RESERVOIR row sampling are tested, including deterministic REPEATABLE seeds. SYSTEM sampling remains unsupported."
+      "notes": "BERNOULLI percentage sampling and RESERVOIR row sampling are tested, including deterministic REPEATABLE seeds. Spanner's documented TABLESAMPLE grammar lists those two methods; rejecting SYSTEM is expected rather than a missing supported variant."
     },
     {
       "id": "postgresql.create_database",
@@ -1567,7 +1569,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "PostgreSQL SQL is translated to a GoogleSQL resolved tree and runs on the same evaluator; pg_functions_test.cc (111 cases) covers casts, date/timestamptz functions, aggregates, and JSONB functions. DELETE ... USING and WHERE CURRENT OF return UNIMPLEMENTED (unsupported_query_test.cc), several GoogleSQL date-arithmetic cases are skipped for PostgreSQL, and the full Spanner PostgreSQL function list is not audited."
+      "notes": "PostgreSQL SQL is translated to a GoogleSQL resolved tree and runs on the same evaluator. pg_functions_test.cc declares 111 cases for casts, date/timestamptz functions, aggregates, and JSONB functions, of which five are disabled. The full Spanner PostgreSQL query and function surface has not been audited; PostgreSQL syntax absent from Spanner's documented DML grammar is not counted as an emulator gap."
     },
     {
       "id": "postgresql.pg_catalog",
@@ -1591,7 +1593,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "pg_am, pg_attrdef, pg_attribute, pg_class, pg_collation, pg_constraint, pg_index, pg_indexes, pg_namespace, pg_proc (including UDFs), pg_sequence(s), pg_settings, pg_tables, pg_type, and pg_views are populated and tested. Other catalog views such as pg_matviews, pg_policies, pg_cursors, and pg_prepared_xacts exist but always return no rows (pg_catalog_test.cc SupportedButEmptyTables). Overlaps metadata.pg_catalog."
+      "notes": "pg_am, pg_attrdef, pg_attribute, pg_class, pg_collation, pg_constraint, pg_index, pg_indexes, pg_namespace, pg_proc, pg_sequence(s), pg_settings, pg_tables, pg_type, and pg_views have populated or static entries with representative tests. The pg_proc UDF-specific test is unconditionally skipped. Other catalog views such as pg_matviews, pg_policies, pg_cursors, and pg_prepared_xacts exist but return no rows in the cited test. Overlaps metadata.pg_catalog."
     },
     {
       "id": "postgresql.synonyms",
@@ -1648,7 +1650,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE [OR REPLACE] VIEW ... SQL SECURITY INVOKER and DROP VIEW work and show up in information_schema.views and pg_views, and ORDER BY inside a view is honored (pg_views_test.cc). The cited DDL cases reject column-name lists, WITH CHECK OPTION, WITH clauses, and TEMP views; production parity for those rejections is not established here. Coverage is limited to these cases, so the record stays partial."
+      "notes": "CREATE [OR REPLACE] VIEW with SQL SECURITY INVOKER and DROP VIEW work, appear in information_schema.views and pg_views, and honor ORDER BY inside a view. The PostgreSQL DDL translator hardcodes INVOKER, so Spanner's SQL SECURITY DEFINER variant is not implemented. Active fixture cases reject column-name lists and TEMP views; WITH CHECK OPTION and WITH-clause cases are commented out, not tested."
     },
     {
       "id": "postgresql.change_streams",
@@ -1681,12 +1683,12 @@
         ]
       },
       "verification": "tested",
-      "notes": "CREATE/ALTER/DROP CHANGE STREAM ... WITH (...) work, and streams are read with spanner.read_json_<stream>(...), which returns JSONB records; conformance covers insert, update, and delete record content and mixed key types. ALTER CHANGE STREAM ... SET (value_capture_type = NULL) fails in the emulator (cases commented out in pg/ddl.alter_change_stream.test), and the shared engine's gaps apply: REPLACE emits one record instead of two, and multi-table ordering within a transaction is not guaranteed (docs/change-streams.md)."
+      "notes": "CREATE/ALTER/DROP CHANGE STREAM and spanner.read_json_<stream>(...) work, with JSONB insert, update, and delete records tested. The local updater accepts only OLD_AND_NEW_VALUES, NEW_ROW, and NEW_VALUES capture types; the documented NEW_ROW_AND_OLD_VALUES variant and RESET/NULL cases are not covered. The cited PostgreSQL DDL fixture comments out SET (value_capture_type = NULL). Shared gaps remain: REPLACE emits one record instead of two, and multi-table ordering within a transaction is not guaranteed."
     },
     {
       "id": "postgresql.jsonb",
       "category": "PostgreSQL dialect",
-      "feature": "PostgreSQL JSONB",
+      "feature": "PostgreSQL JSONB type and functions",
       "status": "partial",
       "applicability": "local-development",
       "dialects": [
@@ -1708,7 +1710,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "JSONB parsing, normalization, and functions are covered by tests. Numbers keep up to 4,932 digits before the decimal point on every platform, including native macOS builds on Apple silicon. Not every JSONB function was audited."
+      "notes": "JSONB parsing, normalization, storage, and selected functions are covered by tests; the type itself works for local development. Numbers keep up to 4,932 digits before the decimal point across tested platforms. The combined row remains partial because the full Spanner PostgreSQL JSONB function surface has not been audited."
     },
     {
       "id": "writes.mutations_insert",
@@ -1886,7 +1888,7 @@
       "id": "writes.batch_write",
       "category": "DML, mutations, and batch operations",
       "feature": "BatchWrite RPC",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "api"
@@ -1905,7 +1907,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "BatchWrite commits each mutation group in its own single-use read-write transaction, one after another in request order. It streams one response per group with that group's commit timestamp or error; a failing group does not stop later groups, and exclude_txn_from_change_streams is honored. Production may apply groups in any order and report several groups in one response; the emulator does not."
+      "notes": "BatchWrite commits each mutation group atomically in its own single-use read-write transaction. It processes groups sequentially and streams one response per group with that group's commit timestamp or error; a failed group does not stop later groups. This deterministic order and response grouping are allowed by Spanner's unspecified-order API contract. exclude_txn_from_change_streams is implemented, though no dedicated cited test covers it; distributed throughput is not modeled."
     },
     {
       "id": "transactions.read_write",
@@ -2002,7 +2004,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Exact and bounded staleness reads work within the database's version_retention_period (default 1 hour, settable with ALTER DATABASE); older timestamps fail with FAILED_PRECONDITION. Read timestamps up to 1 hour in the future are accepted; later ones are rejected."
+      "notes": "Exact and bounded staleness reads work within the database's version_retention_period (default 1 hour, settable with ALTER DATABASE); older timestamps fail with FAILED_PRECONDITION. The emulator picks a local timestamp for bounded reads rather than selecting a replica, and rejects read timestamps more than 1 hour in the future. Those selection and future-bound limits keep this row partial."
     },
     {
       "id": "transactions.read_your_writes",
@@ -2428,7 +2430,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "partition_mode = 'MUTABLE_KEY_RANGE' streams return partition start and data change records in both dialects. Partitions only split; the MOVE churn production can perform never happens locally, and only a few record shapes are tested."
+      "notes": "partition_mode = 'MUTABLE_KEY_RANGE' streams return partition start and data change records in both dialects. Tests cover initial partitions and INSERT records; other record shapes have less evidence. Partitions only split: the MOVE churn production can perform never happens locally."
     },
     {
       "id": "change_streams.partition_churn",
@@ -2442,7 +2444,8 @@
       "evidence": {
         "implementation": [
           "backend/database/change_stream/change_stream_partition_churner.cc",
-          "frontend/collections/database_manager.cc"
+          "frontend/collections/database_manager.cc",
+          "backend/actions/change_stream.cc"
         ],
         "tests": [
           "backend/database/change_stream/change_stream_partition_churner_test.cc",
@@ -2453,7 +2456,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "A background churner periodically splits and merges partitions so clients see child partition records. Churn is timer-driven (20-40 seconds by default), not load-driven, and all writes go to the active partition whose token sorts first; other active partitions produce only heartbeat and child-partition records. The token lifetime can be shortened with --override_change_stream_partition_token_alive_seconds. Partitions are replayed without duplicates after a restart with --data_dir."
+      "notes": "A background churner periodically splits and merges partitions so clients see child partition records. Churn is timer-driven (normally after 20-40 seconds), not load-driven, and all writes go to the active partition whose token sorts first; other active partitions produce only heartbeat and child-partition records. The token lifetime can be shortened with --override_change_stream_partition_token_alive_seconds. A cited replay test verifies that initial partitions are not duplicated after restart with --data_dir; full churned-history replay is not established."
     },
     {
       "id": "search.search_indexes",
@@ -2470,7 +2473,9 @@
       "evidence": {
         "implementation": [
           "backend/schema/updater/schema_updater.cc",
-          "backend/schema/parser/ddl_parser.cc"
+          "backend/schema/parser/ddl_parser.cc",
+          "backend/schema/validators/table_validator.cc",
+          "backend/schema/printer/print_ddl.cc"
         ],
         "tests": [
           "tests/conformance/cases/search_test.cc",
@@ -2482,7 +2487,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "CREATE/DROP SEARCH INDEX over TOKENLIST columns (with STORING, PARTITION BY/ORDER BY) and search-index hints work; tests cover GoogleSQL only. OPTIONS are accepted but ignored, and ALTER SEARCH INDEX is not parsed."
+      "notes": "CREATE/DROP SEARCH INDEX over TOKENLIST columns (with STORING, PARTITION BY/ORDER BY) and search-index hints work in both dialects. ALTER SEARCH INDEX is not parsed. sort_order_sharding is stored and printed but has no physical sharding effect; disable_automatic_uid_column affects backing-table key-count validation, so search-index options are not all ignored."
     },
     {
       "id": "search.search_functions",
@@ -2516,7 +2521,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "SEARCH (words, words_phrase and rquery dialects with AND/OR/NOT/AROUND), SEARCH_SUBSTRING, SEARCH_NGRAMS, SNIPPET and JSON search work in queries and read-write transactions; they are rejected in partitioned and batch DML. language_tag and enhance_query are accepted but ignored, and there is no language-aware analysis."
+      "notes": "SEARCH (words, words_phrase and rquery dialects with AND/OR/NOT/AROUND), SEARCH_SUBSTRING, SEARCH_NGRAMS, SNIPPET and JSON search work in queries. Read-write transaction search requires the allow_search_indexes_in_transaction statement hint; FOR UPDATE, partitioned DML, and batch DML search uses are rejected. language_tag and enhance_query are accepted but ignored, and there is no language-aware analysis."
     },
     {
       "id": "search.tokenization",
@@ -2550,7 +2555,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "TOKENIZE_FULLTEXT, TOKENIZE_SUBSTRING, TOKENIZE_NGRAMS, TOKENIZE_NUMBER, TOKENIZE_BOOL, TOKENIZE_JSON, TOKEN and TOKENLIST_CONCAT are available. TOKENIZE_FULLTEXT only lowercases and splits on delimiters: language_tag, token_category, content_type (text/plain only) and remove_diacritics are accepted but have no effect, and remove_diacritics is also ignored by TOKENIZE_SUBSTRING and TOKENIZE_NGRAMS."
+      "notes": "TOKENIZE_FULLTEXT, TOKENIZE_SUBSTRING, TOKENIZE_NGRAMS, TOKENIZE_NUMBER, TOKENIZE_BOOL, TOKENIZE_JSON, TOKEN and TOKENLIST_CONCAT are available. TOKENIZE_FULLTEXT lowercases and splits on delimiters while language_tag, token_category, content_type, and remove_diacritics are accepted without their documented effects; remove_diacritics is also ignored by TOKENIZE_SUBSTRING and TOKENIZE_NGRAMS."
     },
     {
       "id": "search.scoring",
@@ -3311,7 +3316,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "REST (port 9020) is served by the grpc-gateway proxy in gateway_main, which gcloud tests use end to end. Errors keep their gRPC status code and message and carry only standard google.rpc details. Only gateway_main exposes REST; emulator_main alone is gRPC-only. Field masks in the URL (for example ?updateMask=enableDropProtection on UpdateDatabase, UpdateBackup, and UpdateBackupSchedule) are converted from their JSON camelCase form to proto field names, as Cloud Spanner accepts; snake_case paths work too."
+      "notes": "REST (port 9020) is served by the grpc-gateway proxy in gateway_main, which gcloud tests use end to end. Errors retain the gRPC status code, but messages longer than 1,024 bytes are truncated and only standard google.rpc details are carried. Only gateway_main exposes REST; emulator_main alone is gRPC-only. URL field masks in JSON camelCase are converted to proto field names; snake_case paths work too."
     },
     {
       "id": "clients.client_libraries",
@@ -3431,7 +3436,7 @@
       "id": "emulator.persistence",
       "category": "Emulator-specific capabilities",
       "feature": "Local persistence",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/emulator"
@@ -3459,7 +3464,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "With --data_dir (accepted by emulator_main and gateway_main), row data (LevelDB, multi-version), schema history, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change stream creation times survive restarts. Metadata writes are atomic and journaled, and each commit (rows, index entries, and change stream records) is a single atomic LevelDB write. Sessions and in-flight transactions and queries are not persisted. Historical reads outside the version retention period (default 1 hour) are rejected; expired row versions are pruned opportunistically when affected cells are written or deleted and may remain on disk for untouched cells. The startup restore path in emulator_main is covered only by component tests."
+      "notes": "With --data_dir, row data (LevelDB, multi-version), schema contents, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change-stream creation times are persisted for restart. Metadata writes are atomic and journaled, and each commit (rows, index entries, and change-stream records) uses one atomic LevelDB data batch. Sessions and in-flight transactions and queries are transient by design. Historical reads outside the version retention period (default 1 hour) are rejected; expired row versions are pruned opportunistically from touched cells. The startup restore path is supported by component tests, not a fresh process-level restart test in this audit."
     },
     {
       "id": "emulator.startup",
@@ -3511,45 +3516,6 @@
       },
       "verification": "implemented",
       "notes": "Multi-arch (amd64, arm64) images are published to jaysen2apache/spanner-emulator-extended by a manually dispatched workflow, and native Linux and macOS arm64 binaries can be built. Packaging is not covered by automated tests."
-    },
-    {
-      "id": "emulator.limitations",
-      "category": "Emulator-specific capabilities",
-      "feature": "Documented emulator limitations",
-      "status": "partial",
-      "applicability": "local-development",
-      "docs": [
-        "https://cloud.google.com/spanner/docs/emulator"
-      ],
-      "evidence": {
-        "implementation": [],
-        "tests": [],
-        "documentation": [
-          "README.md"
-        ]
-      },
-      "verification": "documented",
-      "notes": "README lists remaining limitations: ignored deadlines and cancellations, no TLS, IAM not enforced, no query plans, error text may differ, list filters are ignored, and most SPANNER_SYS statistics are missing."
-    },
-    {
-      "id": "emulator.change_stream_docs",
-      "category": "Emulator-specific capabilities",
-      "feature": "Change stream emulator docs",
-      "status": "partial",
-      "applicability": "local-development",
-      "docs": [
-        "https://cloud.google.com/spanner/docs/emulator"
-      ],
-      "evidence": {
-        "implementation": [],
-        "tests": [],
-        "documentation": [
-          "docs/change-streams.md",
-          "docs/internals/change-streams.md"
-        ]
-      },
-      "verification": "documented",
-      "notes": "docs/change-streams.md is the user guide (DDL in both dialects, the partition-token read flow, record contents, limits, flags, restart behavior and differences from production), checked against a running emulator on 2026-09-24. docs/internals/change-streams.md describes the implementation."
     },
     {
       "id": "data.cache_updates",
@@ -3701,7 +3667,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Implements the registered internal graph administration compatibility surface with local-only semantics."
+      "notes": "InternalUpdateGraphOperation validates the database and operation ID, looks up an existing local operation, and marks it failed when a nonzero status is supplied. Successful status updates and production graph backfill work are not modeled."
     },
     {
       "id": "instance.move",
@@ -3854,7 +3820,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SERIALIZABLE and REPEATABLE_READ are accepted for read-only and read-write transactions; partitioned DML rejects REPEATABLE_READ. The cited tests cover option acceptance and rejection, not production-equivalent REPEATABLE_READ conflict behavior."
+      "notes": "SERIALIZABLE and REPEATABLE_READ options are accepted for read-only and read-write transactions; partitioned DML rejects REPEATABLE_READ. Outside that rejection, both options use the same backend transaction path: Spanner's distinct REPEATABLE_READ snapshot and conflict semantics are not emulated. The cited tests check option acceptance and rejection, not isolation behavior."
     },
     {
       "id": "transactions.concurrency_model",
@@ -3970,13 +3936,14 @@
         ],
         "tests": [
           "frontend/converters/values_test.cc",
+          "frontend/converters/reads_test.cc",
           "tests/conformance/cases/change_streams_read_write.cc",
           "backend/schema/parser/ddl_parser_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "UUID columns, including primary key columns, can be created, written, and read, UUID values round-trip on the wire, and UUID columns appear in change stream records (change_streams_read_write.cc). PostgreSQL uuid columns are translated (enable_uuid_type in schema_updater.cc). UUID functions (NEW_UUID, casts to UUID) are allowlisted but have no dedicated query test, and GENERATE_UUID() still returns STRING."
+      "notes": "GoogleSQL UUID columns, including primary keys, are created and written in change-stream conformance tests; UUID values round-trip through the wire converters and appear in change-stream records. PostgreSQL uuid column translation is enabled in code, but no cited end-to-end PostgreSQL UUID read/write test establishes that path. NEW_UUID and UUID casts are allowlisted without a dedicated query test; GENERATE_UUID returns STRING, as Spanner documents."
     },
     {
       "id": "writes.upsert_dml",
