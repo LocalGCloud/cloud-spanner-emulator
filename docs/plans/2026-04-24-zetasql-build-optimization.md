@@ -1,5 +1,9 @@
 # ZetaSQL Build Optimization Implementation Plan
 
+> Historical plan from 2026-04-24. The paths, Bazel version, and runnable
+> commands below describe that checkout. Use the [current build guide](../building.md)
+> for today's commands.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Reduce Docker/CI build time from 30-60 min to <15 min for code-only changes.

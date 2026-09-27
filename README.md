@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # Cloud Spanner Emulator (Extended)
 
 This is LocalGCloud's fork of Google's
@@ -7,13 +8,25 @@ persistent storage, backups, more of the admin API, geo-partitioning, change
 streams that survive restarts, and fixes, and it is the Spanner runtime bundled
 by LocalCloud.
 
-Like upstream, it aims for correctness: an application that runs against the
-emulator should run against Cloud Spanner without changes. It isn't meant to
-be a production database or to match Cloud Spanner's performance.
+Like upstream, it aims to make application tests portable to Cloud Spanner,
+subject to the [documented differences](docs/known-gaps.md). It isn't meant
+to be a production database or to match Cloud Spanner's performance.
 
 - Image: [`jaysen2apache/spanner-emulator-extended`](https://hub.docker.com/r/jaysen2apache/spanner-emulator-extended)
   (linux/amd64 and linux/arm64)
-- Branch: `jay-spanner-extended`. `master` tracks upstream.
+- Fork development branch: `jay-spanner-extended`.
+
+## Installation
+
+Pull the published Docker image:
+
+```shell
+docker pull jaysen2apache/spanner-emulator-extended
+```
+
+For a local build, see [Building](docs/building.md). Ordinary pushes do not
+publish an image, so `latest` can lag this checkout; use a published commit
+tag when you need a specific revision.
 
 ## Quickstart
 
@@ -28,10 +41,12 @@ docker run -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
 ```
 
 Port 9010 serves gRPC and 9020 serves REST. Point client libraries at the
-emulator with `SPANNER_EMULATOR_HOST=localhost:9010`.
+emulator with `SPANNER_EMULATOR_HOST=localhost:9010`. Without `--data_dir`,
+data is lost when the container stops; with it, the mounted directory retains
+the supported persistent state across restarts.
 
 The image has no `ENTRYPOINT`, so to pass flags, give the whole command as
-above. Appending only flags fails to start. All flags are listed in
+above. Appending only flags fails to start. Common flags are described in
 [Configuration](docs/configuration.md).
 
 ## What this fork adds
@@ -61,8 +76,8 @@ The full list, with limits for each, is in [Capabilities](docs/capabilities.md).
 Everything known not to work, or to work differently from Cloud Spanner, is in
 [Known gaps](docs/known-gaps.md). The most important:
 
-- Only one read-write transaction runs at a time; others may be aborted, so
-  wrap transactions in a retry loop.
+- Read-write transactions can overlap, but lock contention may abort one;
+  retry aborted transactions.
 - IAM policies are stored but never enforced.
 - Backups need `--data_dir`; backup schedules never run and backups never
   expire.
@@ -77,7 +92,11 @@ Everything known not to work, or to work differently from Cloud Spanner, is in
 | [Capabilities](docs/capabilities.md) | What works, by area, including what this fork adds |
 | [Known gaps](docs/known-gaps.md) | What doesn't work or differs from Cloud Spanner |
 | [Feature coverage](docs/feature-coverage.md) | Per-feature status with evidence; machine-readable in [`feature-coverage.yaml`](docs/feature-coverage.yaml) |
+| [Getting started](docs/GETTING-STARTED.md) | Run the published image and connect a client |
 | [Configuration](docs/configuration.md) | Binaries, flags, environment variables, Docker usage |
+| [Architecture](docs/ARCHITECTURE.md) | Gateway, frontend, backend and persistence flow |
+| [Development](docs/DEVELOPMENT.md) | Local setup and build workflow |
+| [Testing](docs/TESTING.md) | Test targets and evidence scope |
 | [Persistence](docs/persistence.md) | `--data_dir`, backups, recovery, on-disk layout |
 | [Change streams](docs/change-streams.md) | Creating and reading change streams, limits, differences |
 | [Placements](docs/placements.md) | Geo-partitioning |
@@ -112,26 +131,12 @@ support comes from a port of PostgreSQL's parser in `third_party/spanner_pg`.
 
 ## FAQ
 
-#### Which client library versions are supported?
+#### Which client libraries are tested here?
 
-All Cloud Spanner [client libraries](https://cloud.google.com/spanner/docs/reference/libraries)
-support the emulator from these versions:
-
-| Client library | Version |
-|----------------|---------|
-| C++ | v0.9.x |
-| C# | v3.1.0 |
-| Go | v1.5.0 |
-| Java | v1.51.0 |
-| Node.js | v4.5.0 |
-| PHP | v1.25.0 |
-| Python | v1.15.0 |
-| Ruby | v1.13.0 |
-
-#### How do I fix the client error "UNAUTHENTICATED: Credentials require .."?
-
-Upgrade to a client library version listed above, and set
-`SPANNER_EMULATOR_HOST`.
+The conformance suite uses the Google Cloud C++ Spanner client against a real
+gRPC endpoint. Other language clients are not tested in this repository. Set
+`SPANNER_EMULATOR_HOST` to the emulator's gRPC address and follow your client
+library's emulator setup instructions.
 
 #### What's the recommended test setup?
 
@@ -141,8 +146,8 @@ and can run in parallel.
 
 #### Why does row order change between runs?
 
-The emulator deliberately randomizes results of queries without `ORDER BY`.
-Cloud Spanner doesn't guarantee an order either.
+Queries without `ORDER BY` have no guaranteed row order. Add `ORDER BY` when a
+test depends on the order.
 
 #### Why does the emulator fail with "Check failed: LoadTimeZone(...)"?
 
@@ -156,6 +161,7 @@ This fork is maintained for LocalCloud at
 report problems with it to the LocalCloud maintainers. Bugs that also affect
 Google's emulator can be reported
 [upstream](https://github.com/GoogleCloudPlatform/cloud-spanner-emulator/issues).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for this fork's contribution policy.
 
 ## Security
 

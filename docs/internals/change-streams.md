@@ -105,16 +105,17 @@ Each thread loops:
    plus up to `--change_stream_churn_thread_retry_jitter` ms, and retry. Only
    non-`ABORTED` failures are logged.
 
-So a partition lives 20–40 seconds, and a change stream has two or three
-active partitions. Churning doesn't depend on load or key ranges.
+Normally a partition is replaced after 20–40 seconds, and a change stream has
+two or three active partitions. Failed churn attempts can delay replacement.
+Churning doesn't depend on load or key ranges.
 
 `--override_change_stream_partition_token_alive_seconds=X` (X > 0) sets the
 churning interval, the sleep interval, and the retry sleep interval to X
 seconds in the churner constructor. `--enable_change_stream_churning=false`
 stops the threads from starting.
 
-The churn transaction competes with user transactions. The emulator runs one
-read-write transaction at a time, so churning can abort a user transaction.
+The churn transaction competes with user transactions for database locks, so
+contention can abort a user transaction.
 See the TODO above `ChurnPartitions`.
 
 ## Record generation at commit
@@ -209,7 +210,8 @@ databases.
 - **Initial query** (`partition_token` is `NULL`): selects partitions with
   `start_time <= start_timestamp` and `end_time` `NULL` or after it, and
   returns one child partitions record per partition with `start_timestamp`
-  set to the requested value. A `RET_CHECK` requires at least one partition.
+  set to the requested value. If no partition covers `start_timestamp`, it
+  returns `OUT_OF_RANGE`.
 - **Partition query**: reads the token's `start_time` and `end_time` and
   checks that `start_timestamp` is inside them. It then loops over time slices
   of `--change_streams_partition_query_chop_interval` (100 ms). For each

@@ -57,7 +57,7 @@ emulator_main --host_port=localhost:9010 --data_dir=/path/to/data
 
 | State | What is saved | Stored in |
 |-------|---------------|-----------|
-| Rows | Every committed row, with each version's commit timestamp (microsecond precision) | Per-database LevelDB directory |
+| Rows | Committed row versions still present after pruning, with their commit timestamps (microsecond precision) | Per-database LevelDB directory |
 | Instances | Name, display name, config, node count or processing units, labels, create and update times | `metadata.json` |
 | Custom instance configs | The full config | `metadata.json` |
 | Instance partitions | The full partition | `metadata.json` |
@@ -82,8 +82,9 @@ IAM policies are stored and returned, but the emulator doesn't enforce them.
 - Sessions. Clients need new sessions after a restart.
 - Open transactions. Anything not committed is lost.
 - In-flight change stream queries. Start them again after a restart.
-- Row versions older than the database's version retention period (default
-  1 hour). See [Space usage](#space-usage).
+
+The version retention period limits historical reads, but older row versions
+may still be on disk. See [Space usage](#space-usage).
 
 ## On-disk layout
 
@@ -331,12 +332,14 @@ whole emulator:
 
 ## Space usage
 
-- The emulator keeps old row versions for the database's
-  `version_retention_period` (default 1 hour). Old versions of a row are pruned
-  when that row is written again. Deleted rows leave a deletion record.
-- Data of a dropped table is removed at the first read or schema change after
-  the retention period has passed. Data of a dropped column is removed at the
-  first schema change after that.
+- Read timestamps at least `version_retention_period` old (default 1 hour)
+  are rejected. After a write or delete, the emulator prunes
+  expired versions of touched cells but keeps the newest version at or before
+  the cutoff. Untouched cells can retain older versions on disk. Deleted rows
+  leave a deletion record.
+- Data of a dropped table is removed at the first read-only transaction read
+  or schema change after the retention period has passed. Data of a dropped
+  column is removed at the first schema change after that.
 - Each backup is a full copy of its database. Backups are removed only by
   `DeleteBackup`.
 - Each DDL change needs temporary space for a full copy of its database.

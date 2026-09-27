@@ -14,7 +14,7 @@ Reviewed 2026-09-24 against `jay-spanner-extended`.
 | Area | Status | More |
 |------|--------|------|
 | Data API: sessions, reads, SQL, DML, mutations | Supported | [Data API](#data-api) |
-| Transactions | Supported; one read-write transaction at a time | [Transactions](#transactions) |
+| Transactions | Supported; lock contention may abort a transaction | [Transactions](#transactions) |
 | Schema and DDL, both dialects | Supported | [Schema and DDL](#schema-and-ddl) |
 | GoogleSQL and PostgreSQL queries | Supported, with some functions stubbed | [Queries](#queries-and-functions) |
 | Instance and database admin | Supported; capacity is metadata only | [Admin API](#admin-api) |
@@ -46,11 +46,11 @@ Reviewed 2026-09-24 against `jay-spanner-extended`.
 
 - Read-write, read-only and single-use transactions, inline begin, and commit
   timestamps (`PENDING_COMMIT_TIMESTAMP()`).
-- Only one read-write transaction or schema change runs at a time; a new one
-  may abort the current one. `SERIALIZABLE` and `REPEATABLE_READ` are
-  accepted but run serialized.
-- Unique indexes are re-checked at commit, so a duplicate can't reach storage
-  through a race between write and commit (fork).
+- Read-write transactions can overlap; lock contention may abort one, and a
+  schema change can abort an active transaction. `SERIALIZABLE` and
+  `REPEATABLE_READ` are accepted but do not select separate isolation
+  implementations.
+- Unique indexes are re-checked at commit (fork).
 - `--enable_fault_injection` randomly aborts commits, to test retry logic.
 
 ## Schema and DDL
@@ -90,8 +90,7 @@ platform, including native macOS builds (fork).
 
 ## Queries and functions
 
-SQL runs on the GoogleSQL reference implementation, so most GoogleSQL
-functions work, including:
+SQL runs on the GoogleSQL reference implementation. Tested functions include:
 
 - full-text search: `TOKENIZE_FULLTEXT`, `TOKENIZE_SUBSTRING`,
   `TOKENIZE_NGRAMS`, `SEARCH`, `SEARCH_NGRAMS`, `SCORE`, `SCORE_NGRAMS`
@@ -142,7 +141,7 @@ Require `--data_dir`. See [Persistence](persistence.md#backups).
 
 ## Persistence (fork)
 
-With `--data_dir`, rows (every version), schema, sequence counters, instances,
+With `--data_dir`, rows, schema, sequence counters, instances,
 instance configs, instance partitions, IAM policies, long-running operations,
 backups and backup schedules survive restarts. Each commit is written to disk
 all or nothing. Schema changes replay at their original timestamps,
@@ -172,9 +171,8 @@ many came back as HTTP 500. Field masks accept the JSON form
 
 ## Clients and tools
 
-- **Client libraries** connect with `SPANNER_EMULATOR_HOST` (see the
-  [README FAQ](../README.md#faq) for minimum versions). This repository tests
-  the C++ client; other languages aren't tested here.
+- **Client libraries** connect with `SPANNER_EMULATOR_HOST`. This repository
+  tests the C++ client; other languages aren't tested here.
 - **gcloud** works against the REST port through
   `api_endpoint_overrides/spanner`, and is tested for instance, database, DDL,
   operation and read/write commands.

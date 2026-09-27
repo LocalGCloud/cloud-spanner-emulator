@@ -14,7 +14,7 @@ It is for people changing the code. For user-facing behavior, see
 |-----------|-------|---------------|--------|
 | `MetadataStore` | Instances, databases, DDL batches, ID counters, IAM policies, custom instance configs, instance partitions, and crash-recovery journals | `<data_dir>/metadata.json` | `frontend/persistence/metadata_store.{h,cc}` |
 | `BackupCatalog` | Backups, backup schedules, and long-running operations | `<data_dir>/backup_catalog.json` | `frontend/persistence/backup_catalog.{h,cc}` |
-| `PersistentStorage` | Row data, all versions | One LevelDB database per emulator database | `backend/storage/persistent_storage.{h,cc}` |
+| `PersistentStorage` | Timestamped row versions | One LevelDB database per emulator database | `backend/storage/persistent_storage.{h,cc}` |
 | Checkpoints | Backup snapshots and DDL rollback copies | LevelDB copies made by `PersistentStorage::CreateCheckpoint` | `backend/storage/persistent_storage.cc`, `backend/database/database.cc` |
 | Directory protocol | Legacy migration, markers, orphan cleanup, DDL rollback | Files and folders under `<data_dir>` | `frontend/collections/database_manager.{h,cc}` |
 | Startup restore | Loads and reconciles everything above | | `binaries/emulator_main.cc` (`RestoreFromMetadata`) |
@@ -261,8 +261,8 @@ This layout allows prefix scans at three levels:
 | Prefix | Scans |
 |--------|-------|
 | `{table}` | All rows of a table |
-| `{table}{key}` | All columns and versions of one row |
-| `{table}{key}{column}` | All versions of one cell |
+| `{table}{key}` | All stored columns and versions of one row |
+| `{table}{key}{column}` | All stored versions of one cell |
 
 ### Timestamp encoding
 
@@ -296,12 +296,14 @@ every key that shares its prefix.
 
 ## MVCC
 
-`PersistentStorage` is append-only:
+`PersistentStorage` writes timestamped versions and prunes older entries
+opportunistically:
 
-- Every write adds new LevelDB entries stamped with the commit timestamp.
+- A write puts LevelDB entries stamped with the commit timestamp.
 - Reads see the latest version at or before the read timestamp.
 - A delete writes `_exists = false` and an invalid value for each column at the
-  delete timestamp. Earlier versions stay readable until garbage collection.
+  delete timestamp. Earlier versions remain on disk until garbage collection;
+  historical reads are limited by the version retention period.
 
 ### Hidden columns
 
@@ -456,7 +458,7 @@ Tests: `backend/storage/sequence_state_store_test.cc`,
 ## Checkpoints
 
 `PersistentStorage::CreateCheckpoint(output_dir)` makes a point-in-time copy
-of the whole LevelDB database, all versions included:
+of the whole LevelDB database, including every version still stored:
 
 1. Fail if `output_dir` exists. Create its parent.
 2. Open a new LevelDB at `<output_dir>.tmp-<steady clock>-<sequence>`.
@@ -530,8 +532,9 @@ Delete(timestamp, table, key_range):
   3. Submit the batch, then a GC batch as in Write().
 ```
 
-Each `Write()` or `Delete()` call is one row or range, and one LevelDB write.
-Schema backfills and `SequenceStateStore` use them directly.
+Each `Write()` or `Delete()` call writes one row or range in a main LevelDB
+batch, followed by a separate best-effort GC batch. Schema backfills and
+`SequenceStateStore` use them directly.
 
 ## Atomic commits
 

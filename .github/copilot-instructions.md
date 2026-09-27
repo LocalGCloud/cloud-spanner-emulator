@@ -4,10 +4,8 @@
 
 | Area | Description | Skill |
 |------|-------------|-------|
-| Get | 1696 symbols | `/gortex-get` |
 | Parser | 391 symbols | `/gortex-parser` |
 | Alter | 384 symbols | `/gortex-alter` |
-| Exec | 357 symbols | `/gortex-exec` |
 | Gin | 314 symbols | `/gortex-gin` |
 | Set | 287 symbols | `/gortex-set` |
 | Replication | 286 symbols | `/gortex-replication` |

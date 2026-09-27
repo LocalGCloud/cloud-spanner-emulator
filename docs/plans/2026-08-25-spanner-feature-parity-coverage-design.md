@@ -1,7 +1,11 @@
 # Spanner feature parity coverage design
 
 **Date:** 2026-08-25  
-**Status:** Approved for implementation  
+**Status at approval:** Approved for implementation
+
+**Current status:** Inventory, generator, and CI implemented; the
+[coverage catalog](../feature-coverage.md) remains an evolving baseline.
+
 **Audience:** Emulator maintainers and contributors
 
 ## 1. Purpose

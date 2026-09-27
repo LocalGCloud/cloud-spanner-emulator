@@ -11,20 +11,23 @@ inherited from upstream. Reviewed 2026-09-24 against `jay-spanner-extended`.
 
 ## Known bugs
 
-None are known. The seven bugs found in the 2026-09-24 review, and a REST
-field-mask bug found while fixing them, are fixed; see the
-[changelog](CHANGELOG.md). New bugs go in a table here, marked "Reproduced"
-(confirmed against a running emulator) or "From code" (found by reading the
-code).
+The seven bugs found in the 2026-09-24 review, and a REST field-mask bug
+found while fixing them, are fixed; see the [changelog](CHANGELOG.md). An
+earlier [unique-index incident investigation](../openspec/changes/fix-unique-index-restore-isolation/tasks.md)
+still lacks a dedicated regression and stress test, so its root cause and
+end-to-end closure remain unverified. No other current bug is documented.
+New bugs go in a table here, marked "Reproduced" (confirmed against a running
+emulator) or "From code" (found by reading the code).
 
 ## Transactions and concurrency
 
-- Only one read-write transaction or schema change runs at a time. A new one
-  may abort the current one (`--abort_current_transaction_probability`,
-  default 20%). Wrap transactions in a retry loop, as Cloud Spanner also
-  recommends.
-- `SERIALIZABLE` and `REPEATABLE_READ` isolation are accepted, but everything
-  runs serialized.
+- Read-write transactions can overlap, but the per-database lock manager may
+  abort a transaction when work contends. The
+  `--abort_current_transaction_probability` flag (default 20%) influences
+  which transaction loses the lock. Retry aborted transactions. Schema changes
+  can also abort active transactions.
+- `SERIALIZABLE` and `REPEATABLE_READ` isolation options are accepted but do
+  not select separate isolation implementations.
 - `return_commit_stats` and `max_commit_delay` are ignored.
 - `--enable_fault_injection` aborts about 5% of first commit attempts.
 - gRPC deadlines and cancellations are ignored.
@@ -43,8 +46,8 @@ code).
 
 ## Admin API
 
-- Every list RPC ignores its `filter`: instances, sessions, databases, backups,
-  backup schedules and operations.
+- List RPCs that accept a `filter` ignore it. `ListDatabases` has no `filter`
+  field.
 - Long-running operations complete before the RPC returns. Cancelling does
   nothing, no progress is reported, and index backfills block
   `UpdateDatabaseDdl`.
@@ -97,7 +100,8 @@ Details and workarounds are in [Persistence](persistence.md#known-limitations).
   temporary disk space grow with database size.
 - `.quarantine/` is never cleaned up: it keeps databases quarantined at
   startup and unavailable databases that were dropped. Old row versions are
-  pruned only when a row is written again.
+  pruned for cells touched by a later write or delete; untouched cells may
+  retain older versions on disk.
 
 ## Change streams
 

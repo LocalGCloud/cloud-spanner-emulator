@@ -1,5 +1,9 @@
 # Design: Accept OPTIMIZER_VERSION Statement Hint
 
+> Historical design from 2026-05-07. The hint was subsequently accepted and
+> ignored by the emulator; see the [changelog](../CHANGELOG.md). The investigation
+> below describes behavior before that change.
+
 ## Summary
 
 Production Spanner queries using `@{OPTIMIZER_VERSION=latest}` fail on the emulator with "invalid hint". This is the **only** missing feature from the full-text search emulation proposal — the other 8 features already work. Fix: add `optimizer_version` to the accepted hints whitelist. One file, ~3 lines.

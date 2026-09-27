@@ -27,15 +27,16 @@ different:
 | Bazel output base | Incremental state from the last build | Bazel's output base or a BuildKit cache mount | Yes |
 | Base image `jaysen2apache/spanner-emulator-base:<arch>` | Ubuntu 22.04, GCC 13, JDK, lld | Docker Hub | No, it only skips `apt-get` |
 | BuildKit cache mounts | The three Bazel caches above, inside Docker builds | The buildx builder's storage | Yes, but only on that builder |
-| Docker Hub layer cache `jaysen2apache/spanner-emulator-extended:buildcache-<arch>` | Docker layers | Docker Hub | No, it never includes cache mounts |
+| Docker Hub layer cache `jaysen2apache/spanner-emulator-extended:buildcache-<arch>` | Docker layers | Docker Hub | Only for an exact build-layer hit; it never includes Bazel cache mounts |
 | GitHub Actions cache | Bazel repository and disk cache archives, capped at 2 GiB each | GitHub | Partly; the cap leaves most outputs uncached |
 
 Bazel reuses a compiled output only when every input of the action matches:
 source, flags, compiler, and environment. That's why:
 
 - A macOS build (Apple clang) and a Linux build (GCC 13) never share outputs.
-- A new buildx builder, or one whose cache was garbage-collected, starts cold,
-  even though the base image and the Docker Hub layer cache are available.
+- A new buildx builder, or one whose cache was garbage-collected, cannot reuse
+  Bazel's incremental compiled outputs after source changes. An exact Docker
+  build-layer hit can still skip the build step.
 - In native builds, a different `PATH`, `CC`, `CXX`, or `PROTOC` causes cache
   misses. Use the same environment every time.
 
@@ -126,9 +127,10 @@ BAZEL_JOBS=3 ./build.sh --online   # override the Bazel job count
 - **The base image must be in a registry.** A docker-container buildx builder
   doesn't see images in the local `docker images` store. An image that exists
   only locally can't be used as the base; push it or let `build.sh` push it.
-- **The first build on a builder is cold.** Neither the base image nor the
-  Docker Hub layer cache holds compiled code, so the first build compiles
-  everything, GoogleSQL included. Later builds recompile only what changed.
+- **A new builder has no Bazel cache mounts.** If the source or build inputs
+  changed, its first build compiles everything, GoogleSQL included. An exact
+  Docker build-layer cache hit can skip that step; later builds on the same
+  builder recompile only what changed.
 - **Job count.** `build.sh` picks jobs from the Docker VM's memory: under
   20 GiB 1, under 32 GiB 2, under 44 GiB 3, otherwise 4. Heavy GoogleSQL files
   can use several GB each, so more jobs risks running out of memory. A 32 GiB

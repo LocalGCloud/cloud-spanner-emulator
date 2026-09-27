@@ -1,5 +1,9 @@
 # GoogleSQL Upgrade Analysis: 2025.09.1 → 2026.01.1
 
+> Historical analysis from 2026-05-07. "Current State" and the proposed upgrade
+> below describe that checkout. See [MODULE.bazel](../../MODULE.bazel) for the
+> current dependency pin.
+
 ## Current State
 
 - **Version**: googlesql 2025.09.1 (Sep 15, 2025)

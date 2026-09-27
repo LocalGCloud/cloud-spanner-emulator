@@ -25,7 +25,8 @@
       "cloud-only"
     ],
     "notes": "JSON-compatible YAML canonical inventory. Classifications are conservative and evidence-linked. Re-audited 2026-09-24 against the jay-spanner-extended fork (persistence, backups, placements, change streams, IAM, sessions, REST gateway).",
-    "fork_revision": "873634fb (jay-spanner-extended at audit time)"
+    "fork_revision": "873634fb (jay-spanner-extended at audit time)",
+    "targeted_update": "2026-09-26; selected evidence and wording corrections only. Full inventory review remains 2026-09-24."
   },
   "categories": [
     {
@@ -641,7 +642,8 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/databases.cc",
-          "backend/schema/updater/schema_updater.cc"
+          "backend/schema/updater/schema_updater.cc",
+          "backend/database/database.cc"
         ],
         "tests": [
           "frontend/handlers/databases_test.cc",
@@ -651,7 +653,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "UpdateDatabaseDdl applies statements in order and completes synchronously; on a failure, earlier statements stay applied (partial success) and the operation reports the error. A caller-supplied operation_id is honored, and GetDatabaseDdl returns replayable DDL. Only one schema change or read-write transaction runs at a time."
+      "notes": "UpdateDatabaseDdl applies statements in order and completes synchronously; on a failure, earlier statements stay applied (partial success) and the operation reports the error. A caller-supplied operation_id is honored, and GetDatabaseDdl returns replayable DDL. Schema change requests are serialized per database and take an exclusive lock; an active transaction can cause a schema change to abort."
     },
     {
       "id": "operations.get",
@@ -762,18 +764,21 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/backups.cc",
-          "frontend/collections/database_manager.cc"
+          "frontend/collections/database_manager.cc",
+          "backend/database/database.cc",
+          "backend/storage/sequence_state_store.cc"
         ],
         "tests": [
           "frontend/handlers/backups_test.cc",
-          "frontend/collections/database_manager_test.cc"
+          "frontend/collections/database_manager_test.cc",
+          "backend/query/query_engine_test.cc"
         ],
         "documentation": [
           "docs/persistence.md"
         ]
       },
       "verification": "tested",
-      "notes": "RestoreDatabase requires --data_dir and a READY backup; the target must be in the backup's project on an instance with the same instance config. The restored database keeps its schema history (change stream start timestamps before the restore still work), but sequence and identity counters restart from start_with_counter. Failures roll back the new database."
+      "notes": "RestoreDatabase copies a READY local backup into a new database and requires --data_dir; the target must be in the backup's project on an instance with the same instance config. The restored database keeps its schema history and saved sequence counters, including those used by identity columns. Change stream start timestamps from before the restore still work. Failures roll back the new database."
     },
     {
       "id": "schema.tables",
@@ -855,7 +860,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "DROP TABLE [IF EXISTS] works for parent and child tables and tables with synonyms; tables that still have indexes cannot be dropped, and non-empty placement tables are rejected. With --data_dir, dropped table data is physically purged after the version retention period."
+      "notes": "DROP TABLE [IF EXISTS] works for parent and child tables and tables with synonyms; tables that still have indexes cannot be dropped, and non-empty placement tables are rejected. With --data_dir, dropped table data is removed on the first read-only transaction read or schema change after the version retention period has passed."
     },
     {
       "id": "schema.views",
@@ -1643,7 +1648,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE [OR REPLACE] VIEW ... SQL SECURITY INVOKER and DROP VIEW work and show up in information_schema.views and pg_views, and ORDER BY inside a view is honored (pg_views_test.cc). Column-name lists, WITH CHECK OPTION, WITH clauses, and TEMP views are rejected as in production (pg/ddl.create_view.test). Coverage is limited to these cases, so the record stays partial."
+      "notes": "CREATE [OR REPLACE] VIEW ... SQL SECURITY INVOKER and DROP VIEW work and show up in information_schema.views and pg_views, and ORDER BY inside a view is honored (pg_views_test.cc). The cited DDL cases reject column-name lists, WITH CHECK OPTION, WITH clauses, and TEMP views; production parity for those rejections is not established here. Coverage is limited to these cases, so the record stays partial."
     },
     {
       "id": "postgresql.change_streams",
@@ -1914,17 +1919,19 @@
       "evidence": {
         "implementation": [
           "backend/transaction/read_write_transaction.cc",
-          "frontend/handlers/transactions.cc"
+          "frontend/handlers/transactions.cc",
+          "backend/locking/manager.cc"
         ],
         "tests": [
           "tests/conformance/cases/transactions.cc",
           "frontend/handlers/transactions_test.cc",
-          "backend/locking/manager_test.cc"
+          "backend/locking/manager_test.cc",
+          "backend/transaction/read_write_transaction_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Read-write transactions support reads, queries, DML, batch DML, and buffered mutations, with Commit, Rollback, and idempotent commit retries. Only one read-write transaction (or schema change) runs at a time per database; a conflicting one is ABORTED, so clients must retry."
+      "notes": "Read-write transactions support reads, queries, DML, batch DML, and buffered mutations, with Commit, Rollback, and idempotent commit retries. Multiple read-write transactions can be open at once. Lock contention can abort the current transaction or the requester, so clients must retry ABORTED transactions."
     },
     {
       "id": "transactions.read_only",
@@ -2030,7 +2037,8 @@
       ],
       "evidence": {
         "implementation": [
-          "backend/query/query_validator.cc"
+          "backend/query/query_validator.cc",
+          "backend/locking/manager.cc"
         ],
         "tests": [
           "tests/conformance/cases/select_for_update.cc"
@@ -2038,7 +2046,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SELECT ... FOR UPDATE is accepted in read-write transactions in both dialects (with WHERE, subqueries, set operations, GROUP BY, LIMIT) and rejected in read-only transactions or together with a lock_scanned_ranges hint. Row locking is not modeled beyond the single-writer transaction model."
+      "notes": "SELECT ... FOR UPDATE works in tested read-write transaction queries and is rejected in read-only transactions or together with a lock_scanned_ranges hint. PostgreSQL rejects FOR UPDATE with set operations and GROUP BY/HAVING; GoogleSQL accepts the cited cases. The lock manager uses one active handle per database, so row-scoped contention is not modeled."
     },
     {
       "id": "transactions.transaction_errors",
@@ -2239,7 +2247,7 @@
       "id": "indexes.identity_columns",
       "category": "Indexes, generated values, and constraints",
       "feature": "Identity columns",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -2251,16 +2259,19 @@
       "evidence": {
         "implementation": [
           "backend/schema/updater/schema_updater.cc",
-          "backend/schema/catalog/sequence.cc"
+          "backend/schema/catalog/sequence.cc",
+          "backend/storage/sequence_state_store.cc"
         ],
         "tests": [
           "tests/conformance/cases/identity_column.cc",
-          "backend/schema/updater/schema_updater_tests/identity_column.cc"
+          "backend/schema/updater/schema_updater_tests/identity_column.cc",
+          "backend/storage/sequence_state_store_test.cc",
+          "backend/query/query_engine_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "GENERATED BY DEFAULT AS IDENTITY (bit_reversed_positive, skip range, RESTART COUNTER), the default_sequence_kind database option, and PostgreSQL SERIAL/GoogleSQL AUTO_INCREMENT work and appear in INFORMATION_SCHEMA. Gap: identity columns use an internal sequence whose counter is process memory only, so after a --data_dir restart or backup restore generated values restart and can collide with existing keys (untested)."
+      "notes": "GENERATED BY DEFAULT AS IDENTITY (bit_reversed_positive, skip range, RESTART COUNTER), the default_sequence_kind database option, and PostgreSQL SERIAL/GoogleSQL AUTO_INCREMENT work and appear in INFORMATION_SCHEMA. Identity columns use internal sequences backed by the same saved counter store as named sequences. With --data_dir, the saved counter survives restart and backup restore; generated values may skip up to 1,000 counter values. A dedicated identity-column restart/restore test is not cited."
     },
     {
       "id": "indexes.column_defaults",
@@ -2442,7 +2453,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "A background churner periodically splits and merges partitions so clients see child partition records. The token lifetime can be shortened with --override_change_stream_partition_token_alive_seconds (also a gateway_main flag). Partitions are replayed without duplicates after a restart with --data_dir."
+      "notes": "A background churner periodically splits and merges partitions so clients see child partition records. Churn is timer-driven (20-40 seconds by default), not load-driven, and all writes go to the active partition whose token sorts first; other active partitions produce only heartbeat and child-partition records. The token lifetime can be shortened with --override_change_stream_partition_token_alive_seconds. Partitions are replayed without duplicates after a restart with --data_dir."
     },
     {
       "id": "search.search_indexes",
@@ -3057,7 +3068,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE ROLE and DROP ROLE are accepted but not stored, and ListDatabaseRoles always returns an empty list. Session creator_role is not used to restrict access."
+      "notes": "The schema updater accepts CREATE ROLE and DROP ROLE as no-ops, but no role is stored; the cited test covers only ListDatabaseRoles returning an empty list, not role DDL acceptance. Session creator_role is not used to restrict access."
     },
     {
       "id": "security.fine_grained_access",
@@ -3078,8 +3089,8 @@
         ],
         "documentation": []
       },
-      "verification": "tested",
-      "notes": "GRANT and REVOKE (privileges and role membership) are parsed and accepted but ignored, so no fine-grained access control is enforced."
+      "verification": "implemented",
+      "notes": "GRANT and REVOKE (privileges and role membership) are parsed; the schema updater accepts them as no-ops, so no fine-grained access control is enforced. The cited test checks parsing only, not DDL application."
     },
     {
       "id": "security.encryption",
@@ -3448,7 +3459,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "With --data_dir (accepted by emulator_main and gateway_main), row data (LevelDB, multi-version), schema history, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change stream creation times survive restarts, metadata writes are atomic and journaled, and each commit (rows, index entries, and change stream records) is a single atomic LevelDB write. Not persisted: sessions and in-flight transactions and queries; old row versions are dropped after the version retention period (default 1 hour). The startup restore path in emulator_main is covered only by component tests."
+      "notes": "With --data_dir (accepted by emulator_main and gateway_main), row data (LevelDB, multi-version), schema history, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change stream creation times survive restarts. Metadata writes are atomic and journaled, and each commit (rows, index entries, and change stream records) is a single atomic LevelDB write. Sessions and in-flight transactions and queries are not persisted. Historical reads outside the version retention period (default 1 hour) are rejected; expired row versions are pruned opportunistically when affected cells are written or deleted and may remain on disk for untouched cells. The startup restore path in emulator_main is covered only by component tests."
     },
     {
       "id": "emulator.startup",
@@ -3518,7 +3529,7 @@
         ]
       },
       "verification": "documented",
-      "notes": "README lists the remaining limitations: one read-write transaction at a time, ignored deadlines and cancellations, no TLS, IAM not enforced, no query plans, error text may differ, list filters ignored, and most SPANNER_SYS statistics missing."
+      "notes": "README lists remaining limitations: ignored deadlines and cancellations, no TLS, IAM not enforced, no query plans, error text may differ, list filters are ignored, and most SPANNER_SYS statistics are missing."
     },
     {
       "id": "emulator.change_stream_docs",
@@ -3792,7 +3803,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Multiplexed sessions last 28 days, are omitted from ListSessions by default, and can hold several transactions at once (still one read-write transaction per database at a time). Read-write transactions return precommit tokens and the commit-retry flow is tested. Not persisted across restarts."
+      "notes": "Multiplexed sessions last 28 days, are omitted from ListSessions by default, and can hold several transactions at once. Read-write transactions return precommit tokens and the commit-retry flow is tested. Sessions are not persisted across restarts."
     },
     {
       "id": "data.directed_reads_data_boost",
@@ -3843,7 +3854,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SERIALIZABLE and REPEATABLE_READ are accepted for read-only and read-write transactions; partitioned DML rejects REPEATABLE_READ. Every read-write transaction still runs under the emulator's single-writer serializable model, so repeatable-read concurrency and conflict behavior are not emulated."
+      "notes": "SERIALIZABLE and REPEATABLE_READ are accepted for read-only and read-write transactions; partitioned DML rejects REPEATABLE_READ. The cited tests cover option acceptance and rejection, not production-equivalent REPEATABLE_READ conflict behavior."
     },
     {
       "id": "transactions.concurrency_model",
@@ -3866,14 +3877,15 @@
         "tests": [
           "backend/locking/manager_test.cc",
           "backend/database/database_test.cc",
-          "tests/conformance/cases/batch_dml.cc"
+          "tests/conformance/cases/batch_dml.cc",
+          "backend/transaction/read_write_transaction_test.cc"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "Only one read-write transaction or schema change runs per database at a time; a competing transaction is ABORTED (--abort_current_transaction_probability, default 20, emulator_main only, tunes which one). --enable_fault_injection aborts about 5% of first commit attempts to exercise client retry loops; that path has no test."
+      "notes": "Multiple read-write transactions can be open at once, but the database lock manager grants one active handle at a time. On contention it may abort the current transaction or the requester; a cited test has a second transaction commit while the first is still open, and the first becomes ABORTED. --abort_current_transaction_probability (default 20, emulator_main only) controls attempts to abort the current holder. --enable_fault_injection aborts about 5% of first commit attempts to exercise retry loops; that path has no test."
     },
     {
       "id": "emulator.restore_fault_isolation",

@@ -7,8 +7,8 @@ partition records with all four value capture types and the exclusion options.
 With `--data_dir`, change streams and their records survive restarts.
 
 Use the emulator to develop and test change stream consumers. It doesn't
-reproduce production partitioning: partitions are replaced on a timer (every
-20–40 seconds by default), and all writes go to one partition. See
+reproduce production partitioning: partitions are replaced on a timer
+(normally after 20–40 seconds), and all writes go to one partition. See
 [Differences from production](#differences-from-production) before you rely on
 partition behavior, ordering, or record details.
 
@@ -145,7 +145,8 @@ instead.
 | `heartbeat_milliseconds` | Yes | 100 to 300000. |
 | `read_options` | No | Fifth argument. Must be `NULL` or omitted. |
 
-A query at a future `end_timestamp` waits until that time passes.
+An initial query does not wait for `end_timestamp`. A partition query with a
+future `end_timestamp` waits until that time or its partition is replaced.
 
 ### How a read works
 
@@ -165,9 +166,10 @@ A query at a future `end_timestamp` waits until that time passes.
    query each token only once.
 4. Keep querying new tokens until you reach your end time.
 
-Partitions are replaced every 20–40 seconds by default, so a partition query
-with no `end_timestamp` still returns within about 40 seconds. A reader must
-follow child tokens to keep reading.
+Partitions are normally replaced after 20–40 seconds by default. A partition
+query with no `end_timestamp` returns when its partition is replaced; lock
+contention and churn retries can delay that return. If churning is disabled,
+the query can keep waiting. A reader must follow child tokens to keep reading.
 
 Records from different partitions aren't ordered relative to each other. Sort
 by `commit_timestamp` if you need one order.
@@ -468,7 +470,7 @@ These views list change streams:
 | Difference | Impact |
 |------------|--------|
 | All writes go to one partition: the active token that sorts first. | You can't test how work spreads across partitions. The other partitions return only heartbeats and child partitions records. |
-| Partitions are replaced on a timer (20–40 seconds), not by load. | Readers must follow child tokens often. A partition query with no end returns within about 40 seconds. |
+| Partitions are normally replaced on a timer (20–40 seconds), not by load. | Readers must follow child tokens often. A partition query with no end returns when its partition is replaced; churn retries can delay it. |
 | `REPLACE` on an existing row gives one `INSERT` record, not a `DELETE` and an `INSERT`. | Consumers see an `INSERT` for replaced rows. Columns that the `REPLACE` didn't set show as `null`. |
 | Records for writes to several tables in one transaction may not follow the order of the writes. | Don't rely on record order within a transaction. |
 | A DML `INSERT` writes `null` to the columns it doesn't list; production doesn't write them. | Records for rows inserted by DML can differ from production (disabled test `DISABLED_MultipleDMLVerifyDataChangeRecordContent`). |
@@ -476,5 +478,5 @@ These views list change streams:
 | Resume tokens are placeholders, and the emulator ignores resume tokens in requests. | If a client library retries a broken change stream query, the query starts over and records can repeat. |
 | `exclude_ttl_deletes` has no effect, and TTL deletions never run. | You can't test TTL filtering. |
 | Setting an option to `NULL` doesn't reset it. | The old value still applies. Set an explicit value, or use `RESET` in PostgreSQL. |
-| The process that replaces partitions uses read-write transactions, and the emulator runs one read-write transaction at a time. | User transactions can abort now and then. Retry them, as the client libraries do. |
+| Partition replacement uses a read-write transaction that can contend with user transactions. | Conflicting transactions can abort. Retry aborted transactions, as the client libraries do. |
 | Records aren't deleted after `retention_period`. | Disk use grows with change volume. |
