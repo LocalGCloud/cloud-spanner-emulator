@@ -16,17 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     git \
     make \
-    rename \
     software-properties-common \
     gnupg \
     build-essential \
     ca-certificates \
-    libgnutls30 \
     tzdata \
     language-pack-en \
     default-jre \
     default-jdk \
-    protobuf-compiler \
     python3 \
     && add-apt-repository ppa:ubuntu-toolchain-r/test -y \
     && apt-get update \
@@ -35,7 +32,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        g++-${GCC_VERSION} \
     && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90 \
        --slave /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} \
-    && apt-get install -y --no-install-recommends --only-upgrade libstdc++6
+    && apt-get install -y --no-install-recommends --only-upgrade libstdc++6 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create a symlink so 'python' points to 'python3'
 RUN ln -s /usr/bin/python3 /usr/bin/python

@@ -195,10 +195,10 @@ Details are in [Change streams](change-streams.md).
   `--enable_change_stream_churning=false` they stay on disk.
 - Records differ from production in a few ways:
   `number_of_partitions_in_transaction` is always 1, and `transaction_tag` is
-  empty for user transactions (TTL deletes carry `RowDeletionPolicy` with
-  `is_system_transaction` set). `record_sequence` increases within a
-  transaction, but clients should not assume mutation input order, which
-  Spanner also does not guarantee.
+  propagated from user transactions and BatchWrite requests (TTL deletes carry
+  `RowDeletionPolicy` with `is_system_transaction` set). `record_sequence`
+  increases within a transaction, but clients should not assume mutation input
+  order, which Spanner also does not guarantee.
 - `MUTABLE_KEY_RANGE` `MOVE` churns keep a single child partition, and writes
   still go to one active partition.
 - Setting `retention_period` to `NULL` retains its previous effective value.
@@ -259,9 +259,13 @@ Details are in [Change streams](change-streams.md).
   queries and DML; statistics package names aren't checked.
 - Queries that force a `NULL_FILTERED` index are rejected unless
   `--disable_query_null_filtered_index_check` or the matching hint is set.
-- `PartitionQuery` and `PartitionRead` always return two partitions: one
-  empty and one with every row. Partitioned DML runs as a single local
-  transaction, and `BatchWrite` applies mutation groups one at a time.
+- `PartitionQuery` and `PartitionRead` default to two partitions (one empty
+  and one with every row) when `max_partitions <= 1`. When `max_partitions > 1`,
+  `PartitionRead` slices discrete keys, key ranges, or primary key scans into up
+  to `max_partitions` disjoint slices, and `PartitionQuery` returns $N$ streaming
+  row-sliced tokens for multi-worker parallel execution (tested with Spark and
+  Dataflow patterns). Partitioned DML runs as a single local transaction, and
+  `BatchWrite` applies mutation groups one at a time.
 - `TABLESAMPLE SYSTEM` isn't supported.
 - Graph algorithms (fork) compute deterministic results in memory. Where
   Spanner doesn't publish an algorithm's exact method, the results are the
@@ -302,11 +306,15 @@ Details are in [Change streams](change-streams.md).
 - Clients that speak the PostgreSQL wire protocol need
   [PGAdapter](https://github.com/GoogleCloudPlatform/pgadapter/blob/postgresql-dialect/docs/emulator.md);
   the emulator serves only the Spanner API.
-- `DELETE ... USING` and `WHERE CURRENT OF` return `UNIMPLEMENTED`.
+- `DELETE ... USING` returns `UNIMPLEMENTED` (matches Cloud Spanner PostgreSQL
+  dialect, which does not support multi-table `DELETE ... USING`; queries should
+  be rewritten using `WHERE ... IN (SELECT ...)`). `WHERE CURRENT OF` returns `UNIMPLEMENTED`.
 - `pg_catalog` views for objects Spanner doesn't have (for example
   `pg_matviews`, `pg_policies`) return no rows.
-- `= ANY` over a `float8[]` column and `= ANY('{...}')` array literals are
-  rejected; production parity is unconfirmed.
+- `= ANY('{...}')` and `<> ALL('{...}')` array literals are supported (with
+  implicit string literal coercion and explicit type casting). `= ANY` over
+  `float4[]` and `float8[]` columns remains unsupported due to PostgreSQL NaN
+  comparison semantics.
 
 ## Errors
 

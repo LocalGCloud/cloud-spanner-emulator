@@ -999,6 +999,65 @@ TEST_P(QueryTest, UnnestArrayColumnWithOrdinality) {
       IsOkAndHoldsRows({{2, 1, "abc"}, {2, 2, "def"}, {2, 3, "ghi"}}));
 }
 
+TEST_P(QueryTest, PostgresArrayLiteralAnyAll) {
+  if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  PopulateDatabase();
+
+  // Test = ANY with integer array literal
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id = ANY('{1, 3}'::bigint[]) "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({{1}, {3}}));
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id = ANY('{99, 100}'::bigint[]) "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({}));
+
+  // Test = ANY without explicit cast (coerced from string literal)
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id = ANY('{1, 3}') "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({{1}, {3}}));
+
+  // Test = ANY with text array literal
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE name = ANY('{Douglas Adams, J.R.R. Tolkien}') "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({{1}, {3}}));
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE name = ANY('{Arthur Dent, Ford Prefect}') "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({}));
+
+  // Test <> ALL with array literal
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id <> ALL('{1, 2}'::bigint[]) "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({{3}}));
+
+  // Test < ALL and > ALL with array literal
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id < ALL('{2, 3}'::bigint[]) "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({{1}}));
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id > ALL('{1, 2}'::bigint[]) "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({{3}}));
+
+  // Test empty array literal
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id = ANY('{}'::bigint[]) "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({}));
+  EXPECT_THAT(
+      Query("SELECT user_id FROM users WHERE user_id <> ALL('{}'::bigint[]) "
+            "ORDER BY user_id"),
+      IsOkAndHoldsRows({{1}, {2}, {3}}));
+}
+
 TEST_P(QueryTest, UnnestArrayColumnWithOrdinality_Filter) {
   if (GetParam() != database_api::DatabaseDialect::POSTGRESQL) {
     GTEST_SKIP();

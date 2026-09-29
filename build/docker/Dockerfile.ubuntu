@@ -50,9 +50,8 @@ RUN if [ ! -f /.toolchain-gcc13-ready ]; then \
       apt-get install -y --no-install-recommends \
         curl tar build-essential wget python3 zip unzip \
         default-jre default-jdk ca-certificates-java \
-        software-properties-common make rename git \
-        language-pack-en tzdata ca-certificates gnupg dirmngr \
-        libssl-dev zlib1g-dev libtinfo5 lld \
+        git language-pack-en tzdata \
+        libssl-dev zlib1g-dev lld \
         gcc-${GCC_VERSION} g++-${GCC_VERSION} && \
       update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${GCC_VERSION} 90  \
                           --slave   /usr/bin/g++ g++ /usr/bin/g++-${GCC_VERSION} && \

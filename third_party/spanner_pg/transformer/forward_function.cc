@@ -1097,10 +1097,6 @@ ForwardTransformer::BuildGsqlInFunctionCall(
     return absl::InvalidArgumentError(
         "ANY, SOME, and IN expressions requiring array casting are not "
         "supported. Consider rewriting as an explicit JOIN");
-  } else if (IsA(array_argument, Const)) {
-    return absl::InvalidArgumentError(
-        "ANY, SOME, and IN expressions with array literal arguments are not "
-        "supported. Try using an array constructor (ARRAY[])");
   } else if (IsA(array_argument, SubLink)) {
     // UnimplementedError to match the equivalent error in
     // BuildGsqlResolvedSubqueryExpr
@@ -1189,10 +1185,6 @@ ForwardTransformer::BuildGsqlAllFunctionCall(
     return absl::InvalidArgumentError(
         "ALL expressions requiring array casting are not supported. Consider "
         "rewriting as an explicit JOIN");
-  } else if (IsA(array_argument, Const)) {
-    return absl::InvalidArgumentError(
-        "ALL expressions with array literal arguments are not supported. "
-        "Try using an array constructor (ARRAY[])");
   } else if (IsA(array_argument, SubLink)) {
     // UnimplementedError to match the equivalent error in
     // BuildGsqlResolvedSubqueryExpr
@@ -1281,6 +1273,14 @@ absl::Status ForwardTransformer::AppendGsqlAllFunctionCallArrayArg(
             *internal::PostgresConstCastNode(Param, array_argument)));
     GOOGLESQL_RET_CHECK(param_ref->type()->IsArray());
     argument_list.push_back(std::move(param_ref));
+  } else if (IsA(array_argument, Const)) {
+    // ALL expressions with array literal arguments.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<googlesql::ResolvedLiteral> literal,
+        BuildGsqlResolvedLiteral(
+            *internal::PostgresConstCastNode(Const, array_argument)));
+    GOOGLESQL_RET_CHECK(literal->type()->IsArray());
+    argument_list.push_back(std::move(literal));
   } else {
     GOOGLESQL_RET_CHECK(IsA(array_argument, ArrayExpr));
     ArrayExpr* array_node =
@@ -1316,7 +1316,8 @@ absl::StatusOr<bool> ForwardTransformer::AppendGsqlInFunctionCallArrayArg(
       << "The scalar argument should be added to argument_list before the "
          "array arguments";
   bool appended_arg_is_array =
-      IsA(array_argument, Var) || IsA(array_argument, Param);
+      IsA(array_argument, Var) || IsA(array_argument, Param) ||
+      IsA(array_argument, Const);
   if (IsA(array_argument, Var)) {
     // ANY/SOME expressions with column arguments.
     GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<googlesql::ResolvedExpr> column_ref,
@@ -1333,6 +1334,14 @@ absl::StatusOr<bool> ForwardTransformer::AppendGsqlInFunctionCallArrayArg(
             *internal::PostgresConstCastNode(Param, array_argument)));
     GOOGLESQL_RET_CHECK(param_ref->type()->IsArray());
     argument_list.push_back(std::move(param_ref));
+  } else if (IsA(array_argument, Const)) {
+    // ANY/SOME expressions with array literal arguments.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<googlesql::ResolvedLiteral> literal,
+        BuildGsqlResolvedLiteral(
+            *internal::PostgresConstCastNode(Const, array_argument)));
+    GOOGLESQL_RET_CHECK(literal->type()->IsArray());
+    argument_list.push_back(std::move(literal));
   } else {
     GOOGLESQL_RET_CHECK(IsA(array_argument, ArrayExpr));
     // Get each expression from the array and add them to the argument list.

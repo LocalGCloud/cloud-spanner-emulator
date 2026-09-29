@@ -32,24 +32,46 @@ bazel-*
 ._*
 **/._*
 
+# Python caches, virtualenvs, and bytecode
+.venv/
+venv/
+**/__pycache__/
+*.pyc
+*.pyo
+
 # Local shadow index, symbol cache, and assistant configs
 graft/
 .tgrep/
 .codex/
 .aiderignore
 .ignore
+.mcp.json
+CLAUDE.md
+AGENTS.md
+GEMINI.md
 
-# Documentation and non-build test fixtures
+# Documentation, notices, and host scripts
 docs/
-tests/client_matrix/
+THIRD_PARTY_NOTICES.txt
+README.md
+CONTRIBUTING.md
+CONVENTIONS.md
+SECURITY.md
+build.sh
+fetch_workspace_deps.sh
 
-# Python caches and bytecode
-**/__pycache__/
-*.pyc
-*.pyo
+# Non-build directories and CI configs
+openspec/
+build/kokoro/
+
+# Tests not needed for build
+tests/client_matrix/
+tests/image_verification_test.py
 
 # Temporary files and logs
 *.tmp
 **/*.log
 node_modules/
 **/node_modules/
+
+

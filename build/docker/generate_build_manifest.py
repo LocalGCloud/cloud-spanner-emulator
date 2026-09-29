@@ -23,6 +23,9 @@ IGNORED_DIRECTORIES = {
     ".vscode",
     ".continue",
     ".idea",
+    ".venv",
+    "venv",
+    "openspec",
     "node_modules",
 }
 ROOT_FILES = (
