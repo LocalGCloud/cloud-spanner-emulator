@@ -44,6 +44,7 @@ __pycache__/
 .ignore
 .pi/
 .tgrep/
+.venv/
 
 # Client matrix build artifacts
 tests/client_matrix/**/node_modules/

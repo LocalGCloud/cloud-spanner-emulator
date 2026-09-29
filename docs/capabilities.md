@@ -87,8 +87,8 @@ Both GoogleSQL and PostgreSQL DDL, through `CreateDatabase` and
 (`pg_catalog` too for PostgreSQL, partly):
 
 - tables, `ALTER TABLE`, interleaving (`INTERLEAVE IN PARENT` and
-  `INTERLEAVE IN`, with `ON DELETE`);
-- secondary indexes, including unique, `NULL_FILTERED` and `STORING`;
+  `INTERLEAVE IN`, with `ON DELETE`), and tables without primary keys (system-assigned hidden `_rowid` key);
+- secondary indexes, including unique, `NULL_FILTERED` and `STORING` (disallows combining `NULL_FILTERED` with a `WHERE` clause);
 - foreign keys, check constraints, generated columns, hidden columns and
   column defaults;
 - sequences, `IDENTITY` columns and generated primary keys. With
@@ -105,7 +105,7 @@ Both GoogleSQL and PostgreSQL DDL, through `CreateDatabase` and
   prints search indexes as `CREATE SEARCH INDEX` and vector indexes as
   `CREATE INDEX ... USING scann`, so the output re-parses (fork);
 - database options (`version_retention_period`, `default_time_zone`,
-  `default_sequence_kind`; placement options are metadata);
+  `default_sequence_kind`, `score_version`; placement options are metadata);
 - row deletion policies (TTL): a background sweeper deletes expired rows
   every `--row_deletion_policy_sweep_interval_seconds` (default 60) (fork);
 - roles, `GRANT` and `REVOKE` in both dialects (fork; see
@@ -157,8 +157,7 @@ SQL runs on the GoogleSQL reference implementation. Tested functions include:
 - exact cosine, Euclidean, and dot-product vector functions, and the
   approximate `APPROX_*` (GoogleSQL) and `spanner.approx_*` (PostgreSQL, fork)
   functions, which return exact nearest neighbors;
-- `TABLESAMPLE` with `BERNOULLI` and `RESERVOIR`, including `REPEATABLE`
-  (fork);
+- `TABLESAMPLE` with `BERNOULLI` and `RESERVOIR` in both dialects (GoogleSQL supports `REPEATABLE`; PostgreSQL supports `BERNOULLI` and `SPANNER.RESERVOIR`);
 - hints, including `FORCE_INDEX` and the `OPTIMIZER_VERSION` and
   `OPTIMIZER_STATISTICS_PACKAGE` statement hints on queries and DML (fork);
 - graph queries (GQL) and graph algorithms (fork): `PageRank` (including
