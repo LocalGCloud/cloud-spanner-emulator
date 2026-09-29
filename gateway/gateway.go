@@ -19,6 +19,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -35,15 +36,17 @@ import (
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/utilities"
+	"google.golang.org/genproto/googleapis/rpc/code"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	instancepb "cloud.google.com/go/spanner/admin/instance/apiv1/instancepb"
 	lrgw "cloud_spanner_emulator/gateway/longrunning_operations_gateway"
 	dagw "cloud_spanner_emulator/gateway/spanner_admin_database_gateway"
-	spgw "cloud_spanner_emulator/gateway/spanner_gateway"
 	iagw "cloud_spanner_emulator/gateway/spanner_admin_instance_gateway"
+	spgw "cloud_spanner_emulator/gateway/spanner_gateway"
 )
 
 // Options encapsulates options for the emulator gateway.
@@ -56,11 +59,15 @@ type Options struct {
 	LogRequests                                    bool
 	EnableFaultInjection                           bool
 	DisableQueryNullFilteredIndexCheck             bool
+	SpannerSysExposeOpenInterval                   bool
 	EnforcePlacementDmlRestrictions                bool
 	RepairCorruptedDatabases                       bool
 	OverrideMaxDatabasesPerInstance                int
 	OverrideChangeStreamPartitionTokenAliveSeconds int
+	RowDeletionPolicySweepIntervalSeconds          int
+	LockWaitTimeoutMs                              int
 	DataDir                                        string
+	RemoteFunctionsHostPort                        string
 }
 
 // Gateway implements the emulator gateway server.
@@ -82,6 +89,9 @@ func emulatorArgs(opts Options) []string {
 	if opts.DataDir != "" {
 		args = append(args, "--data_dir", opts.DataDir)
 	}
+	if opts.RemoteFunctionsHostPort != "" {
+		args = append(args, "--remote_functions_host_port", opts.RemoteFunctionsHostPort)
+	}
 	if opts.RepairCorruptedDatabases {
 		args = append(args, "--repair_corrupted_databases")
 	}
@@ -94,6 +104,9 @@ func emulatorArgs(opts Options) []string {
 	if opts.DisableQueryNullFilteredIndexCheck {
 		args = append(args, "--disable_query_null_filtered_index_check")
 	}
+	if opts.SpannerSysExposeOpenInterval {
+		args = append(args, "--spanner_sys_expose_open_interval")
+	}
 	args = append(args,
 		fmt.Sprintf("--enforce_placement_dml_restrictions=%t",
 			opts.EnforcePlacementDmlRestrictions))
@@ -103,6 +116,11 @@ func emulatorArgs(opts Options) []string {
 	args = append(args,
 		fmt.Sprintf("--override_change_stream_partition_token_alive_seconds=%d",
 			opts.OverrideChangeStreamPartitionTokenAliveSeconds))
+	args = append(args,
+		fmt.Sprintf("--row_deletion_policy_sweep_interval_seconds=%d",
+			opts.RowDeletionPolicySweepIntervalSeconds))
+	args = append(args,
+		fmt.Sprintf("--lock_wait_timeout_ms=%d", opts.LockWaitTimeoutMs))
 	return args
 }
 
@@ -236,23 +254,7 @@ func (gw *Gateway) Run() {
 	}
 
 	// Setup the gateway services.
-	mux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{}),
-		runtime.SetQueryParameterParser(newQueryParser()))
-	opts := []grpc.DialOption{grpc.WithInsecure()}
-	err = spgw.RegisterSpannerHandlerFromEndpoint(ctx, mux, addr, opts)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = iagw.RegisterInstanceAdminHandlerFromEndpoint(ctx, mux, addr, opts)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = dagw.RegisterDatabaseAdminHandlerFromEndpoint(ctx, mux, addr, opts)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = lrgw.RegisterOperationsHandlerFromEndpoint(ctx, mux, addr, opts)
+	mux, err := newServeMux(ctx, addr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -265,6 +267,70 @@ func (gw *Gateway) Run() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// restError is the JSON error body Google REST APIs return, for example
+// {"error": {"code": 400, "message": "...", "status": "INVALID_ARGUMENT"}}.
+type restError struct {
+	Error restErrorBody `json:"error"`
+}
+
+type restErrorBody struct {
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Status  string          `json:"status"`
+	Details json.RawMessage `json:"details,omitempty"`
+}
+
+// writeRESTError replaces grpc-gateway's default body, which is the bare
+// google.rpc.Status with a gRPC code, with the envelope Google REST clients
+// parse. The HTTP status and the standard google.rpc details are unchanged.
+func writeRESTError(ctx context.Context, mux *runtime.ServeMux, marshaler runtime.Marshaler, w http.ResponseWriter, r *http.Request, err error) {
+	st := status.Convert(err)
+	httpStatus := runtime.HTTPStatusFromCode(st.Code())
+	body := restErrorBody{
+		Code:    httpStatus,
+		Message: st.Message(),
+		Status:  code.Code(st.Code()).String(),
+	}
+	if len(st.Proto().GetDetails()) > 0 {
+		// Marshal details with the gateway marshaler so each Any keeps its
+		// "@type" and uses proto JSON field names.
+		encoded, marshalErr := marshaler.Marshal(st.Proto())
+		var fields struct {
+			Details json.RawMessage `json:"details"`
+		}
+		if marshalErr == nil && json.Unmarshal(encoded, &fields) == nil {
+			body.Details = fields.Details
+		}
+	}
+	w.Header().Del("Trailer")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+	if encodeErr := json.NewEncoder(w).Encode(restError{Error: body}); encodeErr != nil {
+		log.Printf("writing REST error response: %v", encodeErr)
+	}
+}
+
+func newServeMux(ctx context.Context, addr string) (*runtime.ServeMux, error) {
+	mux := runtime.NewServeMux(
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{}),
+		runtime.WithErrorHandler(writeRESTError),
+		runtime.SetQueryParameterParser(newQueryParser()))
+	opts := []grpc.DialOption{grpc.WithInsecure()}
+	if err := spgw.RegisterSpannerHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+		return nil, err
+	}
+	if err := iagw.RegisterInstanceAdminHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+		return nil, err
+	}
+	if err := dagw.RegisterDatabaseAdminHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+		return nil, err
+	}
+	if err := lrgw.RegisterOperationsHandlerFromEndpoint(ctx, mux, addr, opts); err != nil {
+		return nil, err
+	}
+	return mux, nil
 }
 
 func waitForReady(ctx context.Context, endpoint string) error {

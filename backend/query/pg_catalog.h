@@ -23,6 +23,7 @@
 #include "googlesql/public/simple_catalog.h"
 #include "absl/container/flat_hash_map.h"
 #include "backend/query/info_schema_columns_metadata_values.h"
+#include "backend/schema/catalog/access_policy.h"
 #include "backend/schema/catalog/schema.h"
 #include "third_party/spanner_pg/catalog/engine_system_catalog.h"
 
@@ -34,13 +35,36 @@ class PGCatalog : public googlesql::SimpleCatalog {
  public:
   static constexpr char kName[] = "pg_catalog";
 
-  explicit PGCatalog(
+  // `access` is the fine-grained access control policy of the database role
+  // that reads the tables, or nullptr if the reader has no database role. A
+  // role sees the rows about the schema objects that it may see in
+  // INFORMATION_SCHEMA; members of spanner_info_reader see all rows.
+  PGCatalog(
       const EnumerableCatalog* root_catalog,
-      const google::spanner::emulator::backend::Schema* default_schema);
+      const google::spanner::emulator::backend::Schema* default_schema,
+      const google::spanner::emulator::backend::AccessPolicy* access =
+          nullptr);
 
  private:
+  // Row filtering: whether the database role may see an object. All objects
+  // are visible without a policy. `index` is nullptr for the primary key of
+  // `table`.
+  bool CanSeeTable(const google::spanner::emulator::backend::Table* table) const;
+  bool CanSeeColumn(
+      const google::spanner::emulator::backend::Column* column) const;
+  bool CanSeeIndex(const google::spanner::emulator::backend::Table* table,
+                   const google::spanner::emulator::backend::Index* index,
+                   bool table_delete_suffices) const;
+  bool CanSeeView(const google::spanner::emulator::backend::View* view) const;
+  bool CanSeeSequence(
+      const google::spanner::emulator::backend::Sequence* sequence) const;
+  bool CanSeeRoutine(
+      const google::spanner::emulator::backend::SchemaNode* routine) const;
+
   const EnumerableCatalog* root_catalog_;
   const google::spanner::emulator::backend::Schema* default_schema_;
+  // The policy that filters rows, or nullptr if all rows are visible.
+  const google::spanner::emulator::backend::AccessPolicy* access_;
 
   const postgres_translator::EngineSystemCatalog* system_catalog_ =
       postgres_translator::EngineSystemCatalog::GetEngineSystemCatalog();

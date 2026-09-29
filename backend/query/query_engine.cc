@@ -46,11 +46,13 @@
 #include "googlesql/public/types/type_factory.h"
 #include "googlesql/public/value.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
+#include "googlesql/resolved_ast/resolved_ast_visitor.h"
 #include "googlesql/resolved_ast/resolved_ast_deep_copy_visitor.h"
 #include "googlesql/resolved_ast/resolved_ast_enums.pb.h"
 #include "googlesql/resolved_ast/resolved_column.h"
 #include "googlesql/resolved_ast/resolved_node.h"
 #include "googlesql/resolved_ast/resolved_node_kind.pb.h"
+#include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/log.h"
@@ -67,6 +69,7 @@
 #include "backend/datamodel/key.h"
 #include "backend/datamodel/key_set.h"
 #include "backend/datamodel/value.h"
+#include "backend/query/access_recording_reader.h"
 #include "backend/query/analyzer_options.h"
 #include "backend/query/ann_functions_rewriter.h"
 #include "backend/query/ann_validator.h"
@@ -75,12 +78,16 @@
 #include "backend/query/dml_query_validator.h"
 #include "backend/query/feature_filter/query_size_limits_checker.h"
 #include "backend/query/function_catalog.h"
+#include "backend/query/graph/graph_algorithm_table_valued_function.h"
 #include "backend/query/hint_rewriter.h"
 #include "backend/query/index_hint_validator.h"
 #include "backend/query/insert_on_conflict_dml_execution.h"
 #include "backend/query/partitionability_validator.h"
 #include "backend/query/partitioned_dml_validator.h"
 #include "backend/query/placement_dml_validator.h"
+#include "backend/query/plan/query_plan_builder.h"
+#include "backend/query/plan/scan_profiler.h"
+#include "backend/query/privilege_validator.h"
 #include "backend/query/query_context.h"
 #include "backend/query/query_engine_options.h"
 #include "backend/query/query_engine_util.h"
@@ -90,6 +97,7 @@
 #include "backend/query/queryable_view.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/table.h"
+#include "backend/stats/operation_stats.h"
 #include "backend/transaction/commit_timestamp.h"
 #include "common/config.h"
 #include "common/constants.h"
@@ -148,15 +156,29 @@ class VectorsRowCursor : public RowCursor {
   std::vector<std::vector<googlesql::Value>> column_values_;
 };
 
+class OrderByDetector : public googlesql::ResolvedASTVisitor {
+ public:
+  bool has_order_by() const { return has_order_by_; }
+  absl::Status VisitResolvedOrderByScan(
+      const googlesql::ResolvedOrderByScan* node) override {
+    has_order_by_ = true;
+    return absl::OkStatus();
+  }
+
+ private:
+  bool has_order_by_ = false;
+};
+
 googlesql::EvaluatorOptions CommonEvaluatorOptions(
     googlesql::TypeFactory* type_factory, const std::string time_zone,
-    bool return_all_insert_rows_insert_ignore_dml = false) {
+    bool return_all_insert_rows_insert_ignore_dml = false,
+    bool scramble_undefined_orderings = true) {
   googlesql::EvaluatorOptions options;
   options.type_factory = type_factory;
   absl::TimeZone time_zone_obj;
   absl::LoadTimeZone(time_zone, &time_zone_obj);
   options.default_time_zone = time_zone_obj;
-  options.scramble_undefined_orderings = true;
+  options.scramble_undefined_orderings = scramble_undefined_orderings;
   options.return_all_insert_rows_insert_ignore_dml =
       return_all_insert_rows_insert_ignore_dml;
   options.max_value_byte_size = limits::kMaxValueSizeBytes;
@@ -441,36 +463,43 @@ bool IsPendingCommitTimestampSentinel(const Schema* schema,
 }
 
 // Builds a UPDATE mutation and returns it along with a count of updated rows.
+// Like the equivalent Update mutation, it writes only the primary key columns
+// (generated ones included, so that the key needs none of the columns it is
+// generated from), the SET columns and the columns set to the pending commit
+// timestamp, which include the triggered ON UPDATE columns. The write path
+// fills in the generated columns. Leaving every other column out keeps change
+// stream records to the columns the statement modified.
 std::pair<Mutation, int64_t> BuildUpdate(
     std::unique_ptr<googlesql::EvaluatorTableModifyIterator> iterator,
     MutationOpType op_type, const CaseInsensitiveStringSet& pending_ts_columns,
     const CaseInsensitiveStringSet& updated_columns, const Schema* schema) {
   const googlesql::Table* table = iterator->table();
-  absl::flat_hash_set<int> generated_columns;
+  std::vector<int> written_columns;
   std::vector<std::string> column_names;
   for (int i = 0; i < table->NumColumns(); ++i) {
-    if (IsGenerated(table->GetColumn(i))) {
-      generated_columns.insert(i);
+    const std::string column_name = table->GetColumn(i)->Name();
+    if (!IsKeyColumn(table, column_name) &&
+        !updated_columns.contains(column_name) &&
+        !pending_ts_columns.contains(column_name)) {
       continue;
     }
-    column_names.push_back(table->GetColumn(i)->Name());
+    written_columns.push_back(i);
+    column_names.push_back(column_name);
   }
 
   std::vector<ValueList> values;
   while (iterator->NextRow()) {
     values.emplace_back();
-    for (int i = 0; i < table->NumColumns(); ++i) {
-      if (generated_columns.contains(i)) {
-        continue;
-      }
+    for (int i : written_columns) {
       const googlesql::Column* column = table->GetColumn(i);
       googlesql::Value value = iterator->GetColumnValue(i);
       if (pending_ts_columns.contains(column->Name()) ||
-          // Also replace previously written commit timestamp sentinels with
-          // the string representation. Otherwise, these previously written
-          // sentinels will appear to ReadWriteTransaction to be user-specified
-          // timestamps from the future (which MaybeSetCommitTimestampSentinel
-          // will then reject).
+          // Also replace commit timestamp sentinels that earlier writes in
+          // this transaction left in key columns with the string
+          // representation. Otherwise, these previously written sentinels will
+          // appear to ReadWriteTransaction to be user-specified timestamps
+          // from the future (which MaybeSetCommitTimestampSentinel will then
+          // reject).
           (!updated_columns.contains(column->Name()) &&
            IsPendingCommitTimestampSentinel(schema, table, column, value))) {
         values.back().push_back(
@@ -646,23 +675,22 @@ absl::StatusOr<CaseInsensitiveStringSet> PendingCommitTimestampColumnsInUpdate(
   return pending_ts_columns;
 }
 
-// Extracts the set of column names being updated.
+// Extracts the set of column names being updated, including the targets of
+// nested DML update items, which have no set value.
 absl::StatusOr<CaseInsensitiveStringSet> ColumnsInUpdate(
     const std::vector<std::unique_ptr<const googlesql::ResolvedUpdateItem>>&
         update_item_list) {
   CaseInsensitiveStringSet columns;
   for (const auto& update_item : update_item_list) {
-    if (update_item->set_value()) {
-      std::vector<const googlesql::ResolvedNode*> column_refs;
-      update_item->target()->GetDescendantsWithKinds(
-          {googlesql::RESOLVED_COLUMN_REF}, &column_refs);
-      GOOGLESQL_RET_CHECK_EQ(column_refs.size(), 1);
-      std::string column_name = column_refs[0]
-                                    ->GetAs<googlesql::ResolvedColumnRef>()
-                                    ->column()
-                                    .name();
-      columns.insert(std::move(column_name));
-    }
+    std::vector<const googlesql::ResolvedNode*> column_refs;
+    update_item->target()->GetDescendantsWithKinds(
+        {googlesql::RESOLVED_COLUMN_REF}, &column_refs);
+    GOOGLESQL_RET_CHECK_EQ(column_refs.size(), 1);
+    std::string column_name = column_refs[0]
+                                  ->GetAs<googlesql::ResolvedColumnRef>()
+                                  ->column()
+                                  .name();
+    columns.insert(std::move(column_name));
   }
   return columns;
 }
@@ -861,31 +889,174 @@ absl::StatusOr<std::unique_ptr<RowCursor>> ResolveNoopStatement() {
   return std::make_unique<VectorsRowCursor>(names, types, values);
 }
 
+// Returns the query of an EXPORT DATA statement as a query statement.
+absl::StatusOr<std::unique_ptr<const googlesql::ResolvedQueryStmt>>
+ExportedQuery(const googlesql::ResolvedExportDataStmt& export_data) {
+  std::vector<std::unique_ptr<const googlesql::ResolvedOutputColumn>>
+      output_columns;
+  for (const auto& column : export_data.output_column_list()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<googlesql::ResolvedOutputColumn> copy,
+                     googlesql::ResolvedASTDeepCopyVisitor::Copy(column.get()));
+    output_columns.push_back(std::move(copy));
+  }
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::unique_ptr<googlesql::ResolvedScan> query,
+      googlesql::ResolvedASTDeepCopyVisitor::Copy(export_data.query()));
+  return googlesql::MakeResolvedQueryStmt(std::move(output_columns),
+                                          export_data.is_value_table(),
+                                          std::move(query));
+}
+
+// Returns the string value of an EXPORT DATA option.
+std::optional<std::string> ExportOption(
+    const googlesql::ResolvedExportDataStmt& export_data,
+    absl::string_view name) {
+  for (const auto& option : export_data.option_list()) {
+    if (!absl::EqualsIgnoreCase(option->name(), name) ||
+        !option->value()->Is<googlesql::ResolvedLiteral>()) {
+      continue;
+    }
+    const googlesql::Value& value =
+        option->value()->GetAs<googlesql::ResolvedLiteral>()->value();
+    if (value.type()->IsString() && !value.is_null()) {
+      return value.string_value();
+    }
+  }
+  return std::nullopt;
+}
+
+// Validates the destination of an EXPORT DATA statement and returns the rows
+// that it writes back to Spanner. Returns nothing for exports to Cloud
+// Storage, which the emulator cannot reach: their rows are dropped.
+absl::StatusOr<std::optional<SpannerExport>> MakeSpannerExport(
+    const googlesql::ResolvedExportDataStmt& export_data, const Schema& schema,
+    RowCursor& rows) {
+  const std::optional<std::string> format = ExportOption(export_data, "format");
+  if (!format.has_value()) {
+    return absl::InvalidArgumentError(
+        "EXPORT DATA requires the format option");
+  }
+  if (!absl::EqualsIgnoreCase(*format, "CLOUD_SPANNER")) {
+    if (!absl::EqualsIgnoreCase(*format, "CSV") &&
+        !absl::EqualsIgnoreCase(*format, "PARQUET") &&
+        !absl::EqualsIgnoreCase(*format, "AVRO")) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported EXPORT DATA format: ", *format,
+          ". Supported formats are CSV, PARQUET, AVRO and CLOUD_SPANNER"));
+    }
+    if (!ExportOption(export_data, "uri").has_value()) {
+      return absl::InvalidArgumentError(
+          "EXPORT DATA to Cloud Storage requires the uri option");
+    }
+    return std::nullopt;
+  }
+
+  const std::optional<std::string> table_name =
+      ExportOption(export_data, "table");
+  const std::optional<std::string> write_mode =
+      ExportOption(export_data, "write_mode");
+  if (!table_name.has_value()) {
+    return absl::InvalidArgumentError(
+        "EXPORT DATA with format CLOUD_SPANNER requires the table option");
+  }
+  if (!write_mode.has_value() ||
+      (!absl::EqualsIgnoreCase(*write_mode, "update_ignore_all") &&
+       !absl::EqualsIgnoreCase(*write_mode, "upsert_ignore_all"))) {
+    return absl::InvalidArgumentError(
+        "EXPORT DATA with format CLOUD_SPANNER requires the write_mode "
+        "option, update_ignore_all or upsert_ignore_all");
+  }
+  const Table* table = schema.FindTable(*table_name);
+  if (table == nullptr) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "EXPORT DATA destination table not found: ", *table_name));
+  }
+  SpannerExport spanner_export{
+      .table = table->Name(),
+      .upsert = absl::EqualsIgnoreCase(*write_mode, "upsert_ignore_all")};
+  for (int i = 0; i < rows.NumColumns(); ++i) {
+    const Column* column = table->FindColumn(rows.ColumnName(i));
+    if (column == nullptr) {
+      return absl::InvalidArgumentError(absl::Substitute(
+          "Column $0 returned by the EXPORT DATA query does not exist in "
+          "table $1",
+          rows.ColumnName(i), table->Name()));
+    }
+    if (!column->GetType()->Equals(rows.ColumnType(i))) {
+      return absl::InvalidArgumentError(absl::Substitute(
+          "Column $0 of table $1 has type $2, but the EXPORT DATA query "
+          "returns $3",
+          column->Name(), table->Name(),
+          column->GetType()->ShortTypeName(googlesql::PRODUCT_EXTERNAL),
+          rows.ColumnType(i)->ShortTypeName(googlesql::PRODUCT_EXTERNAL)));
+    }
+    spanner_export.columns.push_back(column->Name());
+  }
+  for (const KeyColumn* key_column : table->primary_key()) {
+    if (!absl::c_linear_search(spanner_export.columns,
+                               key_column->column()->Name())) {
+      return absl::InvalidArgumentError(absl::Substitute(
+          "The EXPORT DATA query must return the primary key column $0 of "
+          "table $1",
+          key_column->column()->Name(), table->Name()));
+    }
+  }
+  while (rows.Next()) {
+    std::vector<googlesql::Value>& row = spanner_export.rows.emplace_back();
+    for (int i = 0; i < rows.NumColumns(); ++i) {
+      row.push_back(rows.ColumnValue(i));
+    }
+  }
+  GOOGLESQL_RETURN_IF_ERROR(rows.Status());
+  return spanner_export;
+}
+
 // Uses googlesql/public/evaluator to evaluate a query statement represented by
-// a resolved AST and returns a row cursor.
+// a resolved AST and returns a row cursor. For an EXPORT DATA statement,
+// evaluates its query.
 absl::StatusOr<std::unique_ptr<RowCursor>> EvaluateQuery(
     const googlesql::ResolvedStatement* resolved_statement,
     const googlesql::ParameterValueMap& params,
     googlesql::TypeFactory* type_factory, int64_t* num_output_rows,
-    const v1::ExecuteSqlRequest_QueryMode query_mode,
+    int64_t* num_output_bytes, const v1::ExecuteSqlRequest_QueryMode query_mode,
     const std::string time_zone) {
-  if (resolved_statement->node_kind() == googlesql::RESOLVED_CALL_STMT ||
-      resolved_statement->node_kind() == googlesql::RESOLVED_EXPORT_DATA_STMT) {
-    // Evaluation of a CALL or EXPORT DATA statement is currently a no-op. This
-    // is added to ensure the emulator doesn't error out when the customer tries
-    // the statement.
+  if (resolved_statement->node_kind() == googlesql::RESOLVED_CALL_STMT) {
+    // Evaluation of a CALL statement is currently a no-op. This is added to
+    // ensure the emulator doesn't error out when the customer tries the
+    // statement.
     return ResolveNoopStatement();
+  }
+  std::unique_ptr<const googlesql::ResolvedQueryStmt> exported_query;
+  if (resolved_statement->node_kind() == googlesql::RESOLVED_EXPORT_DATA_STMT) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        exported_query,
+        ExportedQuery(
+            *resolved_statement->GetAs<googlesql::ResolvedExportDataStmt>()));
+    resolved_statement = exported_query.get();
   }
   GOOGLESQL_RET_CHECK_EQ(resolved_statement->node_kind(), googlesql::RESOLVED_QUERY_STMT)
       << "input is not a query statement";
 
+  bool scramble_undefined_orderings = true;
+  OrderByDetector order_by_detector;
+  if (resolved_statement->Accept(&order_by_detector).ok() &&
+      order_by_detector.has_order_by()) {
+    scramble_undefined_orderings = false;
+  }
+
   auto prepared_query = std::make_unique<googlesql::PreparedQuery>(
       resolved_statement->GetAs<googlesql::ResolvedQueryStmt>(),
-      CommonEvaluatorOptions(type_factory, time_zone));
+      CommonEvaluatorOptions(type_factory, time_zone,
+                             /*return_all_insert_rows_insert_ignore_dml=*/false,
+                             scramble_undefined_orderings));
   // Call PrepareQuery to set the AnalyzerOptions that we used to Analyze the
   // statement.
   GOOGLESQL_ASSIGN_OR_RETURN(auto analyzer_options,
                    MakeAnalyzerOptionsWithParameters(params, time_zone));
+  // Statements that call graph algorithms are analyzed with more graph
+  // features than other statements (see Analyze). The features only relax the
+  // validation that Prepare repeats, so they are enabled for every statement.
+  EnableGraphAlgorithmLanguageFeatures(*analyzer_options.mutable_language());
   GOOGLESQL_RETURN_IF_ERROR(prepared_query->Prepare(analyzer_options));
 
   // Get the query metadata from the prepared query.
@@ -913,6 +1084,7 @@ absl::StatusOr<std::unique_ptr<RowCursor>> EvaluateQuery(
       values.back().reserve(iterator->NumColumns());
       for (int i = 0; i < iterator->NumColumns(); ++i) {
         values.back().push_back(iterator->GetValue(i));
+        *num_output_bytes += LogicalByteSize(values.back().back());
       }
     }
     GOOGLESQL_RETURN_IF_ERROR(iterator->Status());
@@ -1126,14 +1298,28 @@ class QueryEvaluatorForEngine : public QueryEvaluator {
   ~QueryEvaluatorForEngine() override = default;
 
   absl::StatusOr<std::unique_ptr<RowCursor>> Evaluate(
-      const std::string& query) override {
+      const std::string& query, bool definer_rights) override {
     Query q{/*sql=*/query, /*declared_params=*/{}, /*undeclared_params=*/{}};
     q.secure_context = secure_context_;
 
+    QueryContext context = query_context_;
+    if (definer_rights) {
+      context.access = nullptr;
+    }
     GOOGLESQL_ASSIGN_OR_RETURN(auto result,
-                     query_engine_.ExecuteSql(q, query_context_,
+                     query_engine_.ExecuteSql(q, context,
                                               v1::ExecuteSqlRequest::NORMAL));
     return std::move(result.rows);
+  }
+
+  absl::Status CheckPrivileges(const std::string& query) override {
+    Query q{/*sql=*/query, /*declared_params=*/{}, /*undeclared_params=*/{}};
+    q.secure_context = secure_context_;
+    // PLAN analyzes and validates the query, which checks the privileges of
+    // the caller, without reading any data.
+    return query_engine_
+        .ExecuteSql(q, query_context_, v1::ExecuteSqlRequest::PLAN)
+        .status();
   }
 
  private:
@@ -1279,6 +1465,7 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteInsertOnConflictDml(
                          context.schema,
                          GetTimeZone(function_catalog_.GetLatestSchema())));
       GOOGLESQL_RETURN_IF_ERROR(context.writer->Write(insert_or_update_result.mutation));
+      result.footprint.AddMutation(insert_or_update_result.mutation);
       result.modified_row_count = insert_or_update_result.modify_row_count;
       result.rows = std::move(insert_or_update_result.returning_row_cursor);
       return result;
@@ -1346,6 +1533,7 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteInsertOnConflictDml(
 
     GOOGLESQL_RETURN_IF_ERROR(
         context.writer->Write(insert_stmt_execute_update_result.mutation));
+    result.footprint.AddMutation(insert_stmt_execute_update_result.mutation);
     result.modified_row_count +=
         insert_stmt_execute_update_result.modify_row_count;
     GOOGLESQL_RETURN_IF_ERROR(CollectReturningRows(
@@ -1373,6 +1561,7 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteInsertOnConflictDml(
                        GetTimeZone(function_catalog_.GetLatestSchema())));
     GOOGLESQL_RETURN_IF_ERROR(
         context.writer->Write(update_stmt_execute_update_result.mutation));
+    result.footprint.AddMutation(update_stmt_execute_update_result.mutation);
     result.modified_row_count +=
         update_stmt_execute_update_result.modify_row_count;
     GOOGLESQL_RETURN_IF_ERROR(CollectReturningRows(
@@ -1392,6 +1581,7 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
     const Query& query, const QueryContext& context,
     v1::ExecuteSqlRequest_QueryMode query_mode) const {
   absl::Time start_time = absl::Now();
+  const absl::Duration start_cpu_time = ThreadCpuTime();
 
   Query normalized_query;
   NormalizeParameterNames(context.schema, query, &normalized_query);
@@ -1401,13 +1591,22 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
                        GetTimeZone(function_catalog_.GetLatestSchema())));
   analyzer_options.set_prune_unused_columns(true);
 
-  QueryEvaluatorForEngine view_evaluator(*this, context,
+  // Tables, including those read by views, are read through `access_reader`
+  // to measure the statement.
+  AccessRecordingReader access_reader(context.reader);
+  QueryContext view_context = context;
+  if (context.reader != nullptr) {
+    view_context.reader = &access_reader;
+  }
+  QueryEvaluatorForEngine view_evaluator(*this, view_context,
                                          normalized_query.secure_context);
+  bool select_for_update = false;
   auto catalog = std::make_unique<Catalog>(
       context.schema, &function_catalog_, type_factory_, analyzer_options,
-      context.reader, &view_evaluator,
+      view_context.reader, &view_evaluator,
       normalized_query.change_stream_internal_lookup,
-      normalized_query.secure_context);
+      normalized_query.secure_context, &select_for_update, stats_collector_,
+      context.access);
 
   std::unique_ptr<const googlesql::AnalyzerOutput> analyzer_output;
   if (context.schema->dialect() == database_api::DatabaseDialect::POSTGRESQL &&
@@ -1426,8 +1625,10 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
       analyzer_options.set_prune_unused_columns(false);
       catalog = std::make_unique<Catalog>(
           context.schema, &function_catalog_, type_factory_, analyzer_options,
-          context.reader, &view_evaluator,
-          normalized_query.change_stream_internal_lookup);
+          view_context.reader, &view_evaluator,
+          normalized_query.change_stream_internal_lookup,
+          normalized_query.secure_context, &select_for_update,
+          stats_collector_, context.access);
       GOOGLESQL_ASSIGN_OR_RETURN(analyzer_output,
                        Analyze(normalized_query.sql, catalog.get(),
                                analyzer_options, type_factory_));
@@ -1440,6 +1641,7 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
   GOOGLESQL_ASSIGN_OR_RETURN(auto resolved_statement,
                    ExtractValidatedResolvedStatementAndOptions(
                        analyzer_output.get(), context, catalog.get()));
+  const absl::Duration plan_creation_time = absl::Now() - start_time;
 
   // Change stream queries are not directly executed via this generic ExecuteSql
   // function in query engine. If a change stream query reaches here, it is from
@@ -1452,6 +1654,14 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
                    validator.IsChangeStreamQuery(resolved_statement.get()));
   if (is_change_stream) {
     return error::ChangeStreamQueriesMustBeStreaming();
+  }
+
+  // Queries that change streams run internally are not checked.
+  if (context.access != nullptr &&
+      !normalized_query.change_stream_internal_lookup.has_value()) {
+    PrivilegeValidator privilege_validator(context.access, context.schema);
+    GOOGLESQL_RETURN_IF_ERROR(
+        privilege_validator.Validate(resolved_statement.get()));
   }
 
   // Enforce the geo-partitioning (placement) limits of read-write
@@ -1472,14 +1682,43 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
     }
   }
 
+  select_for_update = IsSelectForUpdateQuery(*resolved_statement) ||
+                      HasExclusiveLockScannedRangesHint(*resolved_statement);
   QueryResult result;
+  // Measurements of the execution for PROFILE mode.
+  StatementProfile profile;
+  ScanProfiler scan_profiler;
+  absl::Time execution_start_time = absl::Now();
+  absl::Duration execution_start_cpu_time = ThreadCpuTime();
   if (!IsDMLStmt(analyzer_output->resolved_statement()->node_kind())) {
+    std::unique_ptr<const googlesql::ResolvedStatement> profiled_statement;
+    if (query_mode == v1::ExecuteSqlRequest::PROFILE) {
+      GOOGLESQL_ASSIGN_OR_RETURN(profiled_statement,
+                       scan_profiler.Instrument(*resolved_statement));
+    }
     GOOGLESQL_ASSIGN_OR_RETURN(
         auto cursor,
-        EvaluateQuery(resolved_statement.get(), params, type_factory_,
-                      &result.num_output_rows, query_mode,
+        EvaluateQuery(profiled_statement != nullptr ? profiled_statement.get()
+                                                    : resolved_statement.get(),
+                      params, type_factory_, &result.num_output_rows,
+                      &result.bytes_returned, query_mode,
                       GetTimeZone(function_catalog_.GetLatestSchema())));
+    if (resolved_statement->node_kind() ==
+        googlesql::RESOLVED_EXPORT_DATA_STMT) {
+      // Like production, EXPORT DATA returns no rows.
+      if (query_mode != v1::ExecuteSqlRequest::PLAN) {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            result.spanner_export,
+            MakeSpannerExport(*resolved_statement
+                                   ->GetAs<googlesql::ResolvedExportDataStmt>(),
+                              *context.schema, *cursor));
+      }
+      GOOGLESQL_ASSIGN_OR_RETURN(cursor, ResolveNoopStatement());
+      result.num_output_rows = 0;
+      result.bytes_returned = 0;
+    }
     result.rows = std::move(cursor);
+    profile.rows = result.num_output_rows;
   } else {
     GOOGLESQL_RET_CHECK_NE(context.writer, nullptr);
     analyzer_options.set_prune_unused_columns(false);
@@ -1500,6 +1739,8 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
 
     // Only execute the SQL statement if the user did not request PLAN mode.
     if (query_mode != v1::ExecuteSqlRequest::PLAN) {
+      execution_start_time = absl::Now();
+      execution_start_cpu_time = ThreadCpuTime();
       bool is_insert_on_conflict_stmt =
           resolved_statement->Is<googlesql::ResolvedInsertStmt>() &&
           resolved_statement->GetAs<googlesql::ResolvedInsertStmt>()
@@ -1512,6 +1753,7 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
                            context.schema,
                            GetTimeZone(function_catalog_.GetLatestSchema())));
         GOOGLESQL_RETURN_IF_ERROR(context.writer->Write(execute_update_result.mutation));
+        result.footprint.AddMutation(execute_update_result.mutation);
         result.modified_row_count = execute_update_result.modify_row_count;
         result.rows = std::move(execute_update_result.returning_row_cursor);
       } else {
@@ -1530,6 +1772,7 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
                              normalized_query, resolved_statement.get(), params,
                              *catalog, analyzer_options, context));
       }
+      profile.rows = result.modified_row_count;
     } else {
       // Add the columns and types of the returning clause to the result.
       auto returning_clause = GetReturningClause(resolved_statement.get());
@@ -1552,7 +1795,21 @@ absl::StatusOr<QueryResult> QueryEngine::ExecuteSql(
   }
   result.placement_sole_statement_table =
       std::move(placement_sole_statement_table);
+  profile.latency = absl::Now() - execution_start_time;
+  profile.cpu_time = ThreadCpuTime() - execution_start_cpu_time;
+  if (query_mode == v1::ExecuteSqlRequest::PLAN ||
+      query_mode == v1::ExecuteSqlRequest::PROFILE ||
+      query_mode == v1::ExecuteSqlRequest::WITH_PLAN_AND_STATS) {
+    profile.scans = scan_profiler.ScanProfiles();
+    result.query_plan = BuildQueryPlan(
+        *resolved_statement,
+        query_mode == v1::ExecuteSqlRequest::PROFILE ? &profile : nullptr);
+  }
+  result.rows_scanned = access_reader.rows_scanned();
+  result.footprint.Merge(access_reader.footprint());
+  result.plan_creation_time = plan_creation_time;
   result.elapsed_time = absl::Now() - start_time;
+  result.cpu_time = ThreadCpuTime() - start_cpu_time;
   return result;
 }
 

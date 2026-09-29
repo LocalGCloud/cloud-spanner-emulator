@@ -72,6 +72,7 @@ cc_library(
         "database_option.cc",
         "foreign_key.cc",
         "generated_column.cc",
+        "grants.cc",
         "identity_column.cc",
         "index.cc",
         "locality_group_test.cc",

@@ -39,6 +39,7 @@
 #include "google/cloud/spanner/mutations.h"
 #include "google/cloud/spanner/numeric.h"
 #include "google/cloud/spanner/timestamp.h"
+#include "google/cloud/spanner/uuid.h"
 #include "google/cloud/status_or.h"
 #include "common/clock.h"
 #include "frontend/converters/pg_change_streams.h"
@@ -126,6 +127,12 @@ class PGChangeStreamTest : public DatabaseTest {
           numeric_val numeric,
           numeric_arr numeric[],
           float_val float4
+          );
+        )",
+        R"(
+          CREATE TABLE uuid_values (
+          id uuid PRIMARY KEY,
+          payload uuid
           );
         )",
         R"(
@@ -419,6 +426,37 @@ TEST_F(PGChangeStreamTest, SingleUpdateVerifyDataChangeRecordContent) {
   ASSERT_FALSE(data_change_records[0].is_system_transaction.bool_value());
 }
 
+// A DML UPDATE records only the key and the SET columns, like the equivalent
+// Update mutation, not every tracked column of the row.
+TEST_F(PGChangeStreamTest, DmlUpdateRecordsOnlySetColumns) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto commit_result,
+      CommitDml({SqlStatement("UPDATE scalar_types_table SET string_val = "
+                              "'dml' WHERE int_val = 1")}));
+  const absl::Time commit_ts = GetCommitTimestampOrDie(commit_result);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::vector<DataChangeRecord> data_change_records,
+                       GetDataRecordsFromStartToNow(commit_ts));
+  ASSERT_EQ(data_change_records.size(), 1);
+  EXPECT_EQ(data_change_records[0].table_name.string_value(),
+            "scalar_types_table");
+  EXPECT_EQ(data_change_records[0].mod_type.string_value(), "UPDATE");
+  EXPECT_EQ(data_change_records[0].value_capture_type.string_value(),
+            "NEW_VALUES");
+  EXPECT_THAT(
+      data_change_records[0].column_types,
+      JsonContentEquals(
+          R"json([
+      {"is_primary_key":true,"name":"int_val","ordinal_position":1,"type":{"code":"INT64"}},
+      {"is_primary_key":false,"name":"string_val","ordinal_position":6,"type":{"code":"STRING"}}
+      ])json"));
+  EXPECT_THAT(data_change_records[0].mods,
+              JsonContentEquals(R"json([
+      {"keys":{"int_val":"1"},
+      "old_values":{},
+      "new_values":{"string_val":"dml"}}
+      ])json"));
+}
+
 TEST_F(PGChangeStreamTest, SingleDeleteVerifyDataChangeRecordContent) {
   auto mutation_builder = DeleteMutationBuilder(
       "scalar_types_table", KeySet().AddKey(cloud::spanner::MakeKey(1)));
@@ -534,6 +572,69 @@ TEST_F(PGChangeStreamTest, DiffDataTypesInKey) {
       1);
   EXPECT_EQ(data_change_records[0].transaction_tag.string_value(), "");
   ASSERT_FALSE(data_change_records[0].is_system_transaction.bool_value());
+}
+
+TEST_F(PGChangeStreamTest, UuidKeyAndValueInsertUpdate) {
+  constexpr char kId[] = "9a31411b-caca-4ff1-86e9-39fbd2bc3f39";
+  constexpr char kInitial[] = "12345678-1234-4abc-8def-123456789abc";
+  constexpr char kUpdated[] = "87654321-4321-4cba-8fed-cba987654321";
+
+  auto insert = InsertMutationBuilder("uuid_values", {"id", "payload"});
+  insert.AddRow(ValueRow{cloud::spanner::MakeUuid(kId).value(),
+                         cloud::spanner::MakeUuid(kInitial).value()});
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto insert_result, Commit({insert.Build()}));
+  const absl::Time insert_ts = GetCommitTimestampOrDie(insert_result);
+
+  auto update = UpdateMutationBuilder("uuid_values", {"id", "payload"});
+  update.AddRow(ValueRow{cloud::spanner::MakeUuid(kId).value(),
+                         cloud::spanner::MakeUuid(kUpdated).value()});
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto update_result, Commit({update.Build()}));
+  const absl::Time update_ts = GetCommitTimestampOrDie(update_result);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto records,
+                                 GetDataRecordsFromStartToNow(insert_ts));
+  ASSERT_EQ(records.size(), 2);
+  int inserts = 0;
+  int updates = 0;
+  for (const auto& record : records) {
+    EXPECT_EQ(record.table_name.string_value(), "uuid_values");
+    EXPECT_EQ(record.value_capture_type.string_value(), "NEW_VALUES");
+    EXPECT_THAT(record.column_types, JsonContentEquals(R"json([
+      {"is_primary_key":true,"name":"id","ordinal_position":1,"type":{"code":"UUID"}},
+      {"is_primary_key":false,"name":"payload","ordinal_position":2,"type":{"code":"UUID"}}
+    ])json"));
+    if (record.mod_type.string_value() == "INSERT") {
+      ++inserts;
+      EXPECT_EQ(record.commit_timestamp.string_value(),
+                test::EncodeTimestampString(insert_ts, /*is_pg=*/true));
+      EXPECT_THAT(record.mods, JsonContentEquals(R"json([
+        {"keys":{"id":"9a31411b-caca-4ff1-86e9-39fbd2bc3f39"},
+         "new_values":{"payload":"12345678-1234-4abc-8def-123456789abc"},
+         "old_values":{}}
+      ])json"));
+    } else if (record.mod_type.string_value() == "UPDATE") {
+      ++updates;
+      EXPECT_EQ(record.commit_timestamp.string_value(),
+                test::EncodeTimestampString(update_ts, /*is_pg=*/true));
+      EXPECT_THAT(record.mods, JsonContentEquals(R"json([
+        {"keys":{"id":"9a31411b-caca-4ff1-86e9-39fbd2bc3f39"},
+         "new_values":{"payload":"87654321-4321-4cba-8fed-cba987654321"},
+         "old_values":{}}
+      ])json"));
+    } else {
+      ADD_FAILURE() << "Unexpected change-stream mod type: "
+                    << record.mod_type.string_value();
+    }
+  }
+  EXPECT_EQ(inserts, 1);
+  EXPECT_EQ(updates, 1);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto resumed_records,
+                                 GetDataRecordsFromStartToNow(update_ts));
+  ASSERT_EQ(resumed_records.size(), 1);
+  EXPECT_EQ(resumed_records[0].mod_type.string_value(), "UPDATE");
+  EXPECT_EQ(resumed_records[0].commit_timestamp.string_value(),
+            test::EncodeTimestampString(update_ts, /*is_pg=*/true));
 }
 
 }  // namespace

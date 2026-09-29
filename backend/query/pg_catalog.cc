@@ -29,6 +29,7 @@
 #include "absl/strings/str_cat.h"
 #include "backend/query/info_schema_columns_metadata_values.h"
 #include "backend/query/tables_from_metadata.h"
+#include "backend/schema/catalog/access_policy.h"
 #include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/check_constraint.h"
 #include "backend/schema/catalog/column.h"
@@ -87,6 +88,7 @@ static constexpr char kPGTables[] = "pg_tables";
 static constexpr char kPGType[] = "pg_type";
 static constexpr char kPGViews[] = "pg_views";
 
+using google::spanner::emulator::backend::AccessPolicy;
 using google::spanner::emulator::backend::ChangeStream;
 using google::spanner::emulator::backend::CheckConstraint;
 using google::spanner::emulator::backend::Column;
@@ -98,6 +100,7 @@ using google::spanner::emulator::backend::NamedSchema;
 using google::spanner::emulator::backend::PGCatalogColumnsMetadata;
 using google::spanner::emulator::backend::PGColumnsMetadata;
 using google::spanner::emulator::backend::Schema;
+using google::spanner::emulator::backend::SchemaNode;
 using google::spanner::emulator::backend::SDLObjectName;
 using google::spanner::emulator::backend::Sequence;
 using google::spanner::emulator::backend::SpannerSysColumnsMetadata;
@@ -359,6 +362,7 @@ const auto kHardCodedSystemViewOid =
         {"spanner_sys.txn_stats_total_10minute", 75110},
         {"spanner_sys.txn_stats_total_hour", 75111},
         {"spanner_sys.txn_stats_total_minute", 75112},
+        {"spanner_sys.user_split_points", 75115},
     });
 
 inline std::pair<std::string, std::string>
@@ -379,10 +383,13 @@ std::string PrimaryKeyName(const T* table) {
 }  // namespace
 
 PGCatalog::PGCatalog(const EnumerableCatalog* root_catalog,
-                     const Schema* default_schema)
+                     const Schema* default_schema, const AccessPolicy* access)
     : googlesql::SimpleCatalog(kName),
       root_catalog_(root_catalog),
-      default_schema_(default_schema) {
+      default_schema_(default_schema),
+      access_(access != nullptr && !access->unfiltered_information_schema()
+                  ? access
+                  : nullptr) {
   tables_by_name_ = AddTablesFromMetadata(
       PGCatalogColumnsMetadata(), *kSpannerPGTypeToGSQLType, *kSupportedTables);
   for (auto& [name, table] : tables_by_name_) {
@@ -419,6 +426,32 @@ PGCatalog::PGCatalog(const EnumerableCatalog* root_catalog,
   FillPGTablesTable();
   FillPGTypeTable();
   FillPGViewsTable();
+}
+
+bool PGCatalog::CanSeeTable(const Table* table) const {
+  return access_ == nullptr || access_->CanSeeTable(table);
+}
+
+bool PGCatalog::CanSeeColumn(const Column* column) const {
+  return access_ == nullptr || access_->CanSeeColumn(column);
+}
+
+bool PGCatalog::CanSeeIndex(const Table* table, const Index* index,
+                            bool table_delete_suffices) const {
+  return access_ == nullptr ||
+         access_->CanSeeIndex(table, index, table_delete_suffices);
+}
+
+bool PGCatalog::CanSeeView(const View* view) const {
+  return access_ == nullptr || access_->CanSeeView(view);
+}
+
+bool PGCatalog::CanSeeSequence(const Sequence* sequence) const {
+  return access_ == nullptr || access_->CanSeeSequence(sequence);
+}
+
+bool PGCatalog::CanSeeRoutine(const SchemaNode* routine) const {
+  return access_ == nullptr || access_->CanSeeRoutine(routine);
 }
 
 void PGCatalog::FillPGAmTable() {
@@ -458,6 +491,9 @@ void PGCatalog::FillPGAttrdefTable() {
     int ordinal_position = 0;
     for (const Column* column : table->columns()) {
       ++ordinal_position;
+      if (!CanSeeColumn(column)) {
+        continue;
+      }
       if (!column->postgresql_oid().has_value()) {
         GOOGLESQL_VLOG(1) << "Column " << column->Name()
                 << " does not have a PostgreSQL OID.";
@@ -498,8 +534,12 @@ void PGCatalog::FillPGAttributeTable() {
       continue;
     }
     // Add columns.
-    int ordinal_position = 1;
+    int ordinal_position = 0;
     for (const Column* column : table->columns()) {
+      ++ordinal_position;
+      if (!CanSeeColumn(column)) {
+        continue;
+      }
       const PostgresTypeMapping* pg_type =
           system_catalog_->GetTypeFromReverseMapping(column->GetType());
       auto type = pg_type->PostgresTypeOid();
@@ -555,11 +595,15 @@ void PGCatalog::FillPGAttributeTable() {
           // attfdwoptions
           NullString(),
       });
-      ++ordinal_position;
     }
     // Add primary key columns.
+    const bool can_see_primary_key = CanSeeIndex(
+        table, /*index=*/nullptr, /*table_delete_suffices=*/false);
     ordinal_position = 1;
     for (const KeyColumn* key_column : table->primary_key()) {
+      if (!can_see_primary_key) {
+        break;
+      }
       const PostgresTypeMapping* pg_type =
           system_catalog_->GetTypeFromReverseMapping(
               key_column->column()->GetType());
@@ -620,7 +664,10 @@ void PGCatalog::FillPGAttributeTable() {
       });
     }
     for (const Index* index : table->indexes()) {
-      if (index->is_search_index()) continue;
+      if (index->is_search_index() ||
+          !CanSeeIndex(table, index, /*table_delete_suffices=*/false)) {
+        continue;
+      }
       if (!index->postgresql_oid().has_value()) {
         GOOGLESQL_VLOG(1) << "Index " << index->Name()
                 << " does not have a PostgreSQL OID.";
@@ -748,6 +795,9 @@ void PGCatalog::FillPGAttributeTable() {
   }
 
   for (const View* view : default_schema_->views()) {
+    if (!CanSeeView(view)) {
+      continue;
+    }
     if (!view->postgresql_oid().has_value()) {
       GOOGLESQL_VLOG(1) << "View " << view->Name() << " does not have a PostgreSQL OID.";
       continue;
@@ -820,6 +870,9 @@ void PGCatalog::FillPGClassTable() {
   std::vector<std::vector<googlesql::Value>> rows;
   // Add tables.
   for (const Table* table : default_schema_->tables()) {
+    if (!CanSeeTable(table)) {
+      continue;
+    }
     const auto& [table_schema_part, table_name_part] =
         GetSchemaAndNameForPGCatalog(table->Name());
     int namespace_oid = 0;
@@ -913,77 +966,83 @@ void PGCatalog::FillPGClassTable() {
     });
 
     // Add primary key.
-    rows.push_back({
-        // oid
-        CreatePgOidValue(table->primary_key_index_postgresql_oid().value())
-            .value(),
-        // relname
-        String(PrimaryKeyName(table)),
-        // relnamespace
-        CreatePgOidValue(namespace_oid).value(),
-        // reltype
-        NullPgOid(),
-        // reloftype
-        NullPgOid(),
-        // relowner
-        NullPgOid(),
-        // relam
-        CreatePgOidValue(75002).value(),
-        // relfilenode
-        NullPgOid(),
-        // reltablespace
-        NullPgOid(),
-        // relpages
-        NullInt64(),
-        // reltuples
-        NullDouble(),
-        // relallvisible
-        NullInt64(),
-        // reltoastrelid
-        NullPgOid(),
-        // relhasindex
-        Bool(false),
-        // relisshared
-        NullBool(),
-        // relpersistence
-        String("p"),
-        // relkind
-        String("i"),
-        // relnatts
-        Int64(table->primary_key().size()),
-        // relchecks
-        Int64(0),
-        // relhasrules
-        NullBool(),
-        // relhastriggers
-        NullBool(),
-        // relhassubclass
-        NullBool(),
-        // relrowsecurity
-        NullBool(),
-        // relforcerowsecurity
-        NullBool(),
-        // relispopulated
-        Bool(true),
-        // relreplident
-        NullString(),
-        // relispartition
-        NullBool(),
-        // relrewrite
-        NullPgOid(),
-        // relfrozenxid
-        NullInt64(),
-        // relminmxid
-        NullInt64(),
-        // reloptions
-        NullString(),
-        // relpartbound
-        NullString(),
-    });
+    if (CanSeeIndex(table, /*index=*/nullptr,
+                    /*table_delete_suffices=*/true)) {
+      rows.push_back({
+          // oid
+          CreatePgOidValue(table->primary_key_index_postgresql_oid().value())
+              .value(),
+          // relname
+          String(PrimaryKeyName(table)),
+          // relnamespace
+          CreatePgOidValue(namespace_oid).value(),
+          // reltype
+          NullPgOid(),
+          // reloftype
+          NullPgOid(),
+          // relowner
+          NullPgOid(),
+          // relam
+          CreatePgOidValue(75002).value(),
+          // relfilenode
+          NullPgOid(),
+          // reltablespace
+          NullPgOid(),
+          // relpages
+          NullInt64(),
+          // reltuples
+          NullDouble(),
+          // relallvisible
+          NullInt64(),
+          // reltoastrelid
+          NullPgOid(),
+          // relhasindex
+          Bool(false),
+          // relisshared
+          NullBool(),
+          // relpersistence
+          String("p"),
+          // relkind
+          String("i"),
+          // relnatts
+          Int64(table->primary_key().size()),
+          // relchecks
+          Int64(0),
+          // relhasrules
+          NullBool(),
+          // relhastriggers
+          NullBool(),
+          // relhassubclass
+          NullBool(),
+          // relrowsecurity
+          NullBool(),
+          // relforcerowsecurity
+          NullBool(),
+          // relispopulated
+          Bool(true),
+          // relreplident
+          NullString(),
+          // relispartition
+          NullBool(),
+          // relrewrite
+          NullPgOid(),
+          // relfrozenxid
+          NullInt64(),
+          // relminmxid
+          NullInt64(),
+          // reloptions
+          NullString(),
+          // relpartbound
+          NullString(),
+      });
+    }
 
     // Add indexes.
     for (const Index* index : table->indexes()) {
-      if (index->is_search_index()) continue;
+      if (index->is_search_index() ||
+          !CanSeeIndex(table, index, /*table_delete_suffices=*/true)) {
+        continue;
+      }
       const auto& [index_schema_part, index_name_part] =
           GetSchemaAndNameForPGCatalog(index->Name());
       if (!index->postgresql_oid().has_value()) {
@@ -1061,7 +1120,7 @@ void PGCatalog::FillPGClassTable() {
   }
   // Add sequences.
   for (const Sequence* sequence : default_schema_->sequences()) {
-    if (sequence->is_internal_use()) {
+    if (sequence->is_internal_use() || !CanSeeSequence(sequence)) {
       // Skip internal sequences.
       continue;
     }
@@ -1154,6 +1213,9 @@ void PGCatalog::FillPGClassTable() {
   }
   // Add views.
   for (const View* view : default_schema_->views()) {
+    if (!CanSeeView(view)) {
+      continue;
+    }
     const auto& [view_schema_part, view_name_part] =
         GetSchemaAndNameForPGCatalog(view->Name());
     int namespace_oid = 0;
@@ -1408,6 +1470,9 @@ void PGCatalog::FillPGConstraintTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Table* table : default_schema_->tables()) {
+    if (!CanSeeTable(table)) {
+      continue;
+    }
     if (!table->postgresql_oid().has_value()) {
       GOOGLESQL_VLOG(1) << "Table " << table->Name()
               << " does not have a PostgreSQL OID.";
@@ -1660,6 +1725,9 @@ void PGCatalog::FillPGIndexTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Table* table : default_schema_->tables()) {
+    if (!CanSeeTable(table)) {
+      continue;
+    }
     // Columns don't track their index in the table, so we need to build a map
     // to get the index.
     std::map<std::string, int> column_name_to_index;
@@ -1667,7 +1735,10 @@ void PGCatalog::FillPGIndexTable() {
       column_name_to_index[table->columns()[i]->Name()] = i + 1;
     }
     for (const Index* index : table->indexes()) {
-      if (index->is_search_index()) continue;
+      if (index->is_search_index() ||
+          !CanSeeIndex(table, index, /*table_delete_suffices=*/true)) {
+        continue;
+      }
       std::vector<int64_t> key_columns;
       key_columns.reserve(index->key_columns().size());
       for (const auto& key_column : index->key_columns()) {
@@ -1731,6 +1802,10 @@ void PGCatalog::FillPGIndexTable() {
               << " does not have a PostgreSQL OID.";
       continue;
     }
+    if (!CanSeeIndex(table, /*index=*/nullptr,
+                     /*table_delete_suffices=*/true)) {
+      continue;
+    }
     rows.push_back({
         // indexrelid
         CreatePgOidValue(table->primary_key_index_postgresql_oid().value())
@@ -1783,11 +1858,17 @@ void PGCatalog::FillPGIndexesTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Table* table : default_schema_->tables()) {
+    if (!CanSeeTable(table)) {
+      continue;
+    }
     const auto& [table_schema, table_name] =
         GetSchemaAndNameForPGCatalog(table->Name());
     // Add normal indexes.
     for (const Index* index : table->indexes()) {
-      if (index->is_search_index()) continue;
+      if (index->is_search_index() ||
+          !CanSeeIndex(table, index, /*table_delete_suffices=*/true)) {
+        continue;
+      }
       const auto& [index_schema, index_name] =
           GetSchemaAndNameForPGCatalog(index->Name());
       rows.push_back({
@@ -1805,6 +1886,10 @@ void PGCatalog::FillPGIndexesTable() {
     }
 
     // Add the primary key index.
+    if (!CanSeeIndex(table, /*index=*/nullptr,
+                     /*table_delete_suffices=*/true)) {
+      continue;
+    }
     rows.push_back({
         // schemaname
         String(table_schema),
@@ -1935,6 +2020,9 @@ void PGCatalog::FillPGProcTable() {
   }
 
   for (const Udf* udf : default_schema_->udfs()) {
+    if (!CanSeeRoutine(udf)) {
+      continue;
+    }
     if (!udf->postgresql_oid().has_value()) {
       GOOGLESQL_VLOG(1) << "UDF " << udf->Name() << " does not have a PostgreSQL OID.";
       continue;
@@ -2004,7 +2092,7 @@ void PGCatalog::FillPGProcTable() {
         // oid
         CreatePgOidValue(udf->postgresql_oid().value()).value(),
         // proname
-        String(udf->Name()),
+        String(udf_name),
         // pronamespace
         CreatePgOidValue(namespace_oid).value(),
         // proowner
@@ -2306,7 +2394,7 @@ void PGCatalog::FillPGSequenceTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Sequence* sequence : default_schema_->sequences()) {
-    if (sequence->is_internal_use()) {
+    if (sequence->is_internal_use() || !CanSeeSequence(sequence)) {
       // Skip internal sequences.
       continue;
     }
@@ -2342,7 +2430,7 @@ void PGCatalog::FillPGSequencesTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Sequence* sequence : default_schema_->sequences()) {
-    if (sequence->is_internal_use()) {
+    if (sequence->is_internal_use() || !CanSeeSequence(sequence)) {
       // Skip internal sequences.
       continue;
     }
@@ -2424,6 +2512,9 @@ void PGCatalog::FillPGTablesTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Table* table : default_schema_->tables()) {
+    if (!CanSeeTable(table)) {
+      continue;
+    }
     const auto& [table_schema, table_name] =
       GetSchemaAndNameForPGCatalog(table->Name());
     rows.push_back({
@@ -2575,6 +2666,9 @@ void PGCatalog::FillPGViewsTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const View* view : default_schema_->views()) {
+    if (!CanSeeView(view)) {
+      continue;
+    }
     const auto& [view_schema, view_name] =
       GetSchemaAndNameForPGCatalog(view->Name());
     rows.push_back({

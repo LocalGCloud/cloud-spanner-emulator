@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "backend/access/read.h"
 #include "backend/access/write.h"
@@ -102,6 +103,11 @@ absl::StatusOr<ResolvedMutationOp> ResolveDeleteMutationOp(
 
 absl::StatusOr<const Table*> FindChangeStreamPartitionTable(
     const Schema* schema, std::string change_stream_partition_table_name);
+
+// Returns the data table of a change stream by its internal table name. Only
+// deletes of expired records write to it by name.
+absl::StatusOr<const Table*> FindChangeStreamDataTable(
+    const Schema* schema, absl::string_view change_stream_data_table_name);
 
 }  // namespace backend
 }  // namespace emulator

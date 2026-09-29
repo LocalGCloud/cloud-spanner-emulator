@@ -64,6 +64,49 @@ TEST_F(OperationApiTest, ListsOperations) {
               )pb")));
 }
 
+TEST_F(OperationApiTest, ListsOperationsMatchingFilter) {
+  operations_api::ListOperationsRequest request = PARSE_TEXT_PROTO(R"pb(
+    name: "projects/123/instances/instance-456/operations"
+    filter: "done = true AND metadata.@type:CreateInstanceMetadata"
+  )pb");
+  operations_api::ListOperationsResponse response;
+  grpc::ClientContext context;
+  GOOGLESQL_EXPECT_OK(test_env()->operations_client()->ListOperations(
+      &context, request, &response));
+  EXPECT_THAT(response, test::proto::Partially(test::EqualsProto(R"pb(
+                operations {
+                  name: "projects/123/instances/instance-456/operations/_auto0"
+                }
+              )pb")));
+
+  request.set_filter("done = false");
+  response.Clear();
+  grpc::ClientContext no_match_context;
+  GOOGLESQL_EXPECT_OK(test_env()->operations_client()->ListOperations(
+      &no_match_context, request, &response));
+  EXPECT_EQ(response.operations_size(), 0);
+}
+
+TEST_F(OperationApiTest, ListOperationsRejectsInvalidFilter) {
+  operations_api::ListOperationsRequest request = PARSE_TEXT_PROTO(R"pb(
+    name: "projects/123/instances/instance-456/operations"
+    filter: "unknown_field = 1"
+  )pb");
+  operations_api::ListOperationsResponse response;
+  grpc::ClientContext context;
+  EXPECT_THAT(test_env()->operations_client()->ListOperations(&context, request,
+                                                              &response),
+              googlesql_base::testing::StatusIs(
+                  absl::StatusCode::kInvalidArgument));
+
+  request.set_filter("done = (true");
+  grpc::ClientContext syntax_context;
+  EXPECT_THAT(test_env()->operations_client()->ListOperations(
+                  &syntax_context, request, &response),
+              googlesql_base::testing::StatusIs(
+                  absl::StatusCode::kInvalidArgument));
+}
+
 TEST_F(OperationApiTest, ListsOperationsInvalidUri) {
   operations_api::ListOperationsRequest request = PARSE_TEXT_PROTO(R"pb(
     name: "projects/123/instance/instance-456/operations"

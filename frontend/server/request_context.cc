@@ -16,11 +16,13 @@
 
 #include "frontend/server/request_context.h"
 
+#include <chrono>  // NOLINT(build/c++11)
 #include <memory>
 #include <string>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/time/time.h"
 #include "frontend/common/uris.h"
 #include "frontend/entities/instance.h"
 #include "googlesql/base/status_macros.h"
@@ -29,6 +31,17 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace frontend {
+
+absl::Time RequestContext::deadline() const {
+  if (grpc_ == nullptr) {
+    return absl::InfiniteFuture();
+  }
+  const std::chrono::system_clock::time_point deadline = grpc_->deadline();
+  if (deadline == std::chrono::system_clock::time_point::max()) {
+    return absl::InfiniteFuture();
+  }
+  return absl::FromChrono(deadline);
+}
 
 absl::StatusOr<std::shared_ptr<Instance>> GetInstance(
     RequestContext* ctx, const std::string& instance_uri) {

@@ -21,6 +21,7 @@
 
 #include "backend/access/read.h"
 #include "backend/access/write.h"
+#include "backend/schema/catalog/access_policy.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/transaction/commit_timestamp.h"
 
@@ -65,6 +66,10 @@ struct QueryContext {
   // geo-partitioning (placement) DML restrictions.
   std::optional<PlacementDmlRestrictions> placement_dml_restrictions =
       std::nullopt;
+
+  // The fine-grained access control privileges that the statement is checked
+  // against. Null when the statement is not restricted by a database role.
+  const AccessPolicy* access = nullptr;
 };
 
 }  // namespace backend

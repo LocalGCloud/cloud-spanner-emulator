@@ -26,7 +26,30 @@ bazel-*
 !build_files.tar
 !build_files.txt
 
+# OS-generated metadata (placed after !bazel-distdir/** so they remain ignored inside it)
+.DS_Store
+**/.DS_Store
+._*
+**/._*
+
+# Local shadow index, symbol cache, and assistant configs
+graft/
+.tgrep/
+.codex/
+.aiderignore
+.ignore
+
+# Documentation and non-build test fixtures
+docs/
+tests/client_matrix/
+
+# Python caches and bytecode
+**/__pycache__/
+*.pyc
+*.pyo
+
 # Temporary files and logs
 *.tmp
-*.log
+**/*.log
 node_modules/
+**/node_modules/

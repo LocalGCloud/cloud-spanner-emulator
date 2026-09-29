@@ -49,11 +49,12 @@
 #include "absl/types/span.h"
 #include "backend/common/case.h"
 #include "backend/query/analyzer_options.h"
-#include "backend/query/graph/mock_graph_algo_table_valued_function.h"
+#include "backend/query/graph/graph_algorithm_table_valued_function.h"
 #include "backend/query/ml/ml_predict_row_function.h"
 #include "backend/query/ml/ml_predict_table_valued_function.h"
 #include "backend/query/ml/model_evaluator.h"
 #include "backend/query/search/search_function_catalog.h"
+#include "backend/query/spanner_string_functions.h"
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/catalog/table.h"
 #include "googlesql/base/ret_check.h"
@@ -587,7 +588,7 @@ FunctionCatalog::FunctionCatalog(googlesql::TypeFactory* type_factory,
   AddSpannerPGFunctions();
   AddPGLambdaFunctions();
   AddSearchFunctions(type_factory);
-  AddMockGraphAlgoFunctions(table_valued_functions_);
+  AddGraphAlgorithmFunctions(type_factory, table_valued_functions_);
 }
 
 void FunctionCatalog::AddGoogleSQLBuiltInFunctions(
@@ -636,6 +637,12 @@ void FunctionCatalog::AddSpannerFunctions() {
       GetNextSequenceValueFunction(catalog_name_);
   functions_[get_next_sequence_value_func->Name()] =
       std::move(get_next_sequence_value_func);
+
+  // Replace built-ins the reference evaluator cannot execute.
+  for (auto& function : SpannerStringFunctions(catalog_name_)) {
+    const std::string name = function->Name();
+    functions_[name] = std::move(function);
+  }
 }
 
 void FunctionCatalog::AddGraphSafeToJsonSignatures() {

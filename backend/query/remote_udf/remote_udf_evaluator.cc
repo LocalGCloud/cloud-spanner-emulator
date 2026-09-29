@@ -16,6 +16,7 @@
 
 #include "backend/query/remote_udf/remote_udf_evaluator.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -124,8 +125,9 @@ absl::StatusOr<googlesql::JSONValue> RemoteUdfEvaluator::EvaluateRemoteFunction(
   json_body_ref.GetMember("caller").SetString("");
   json_body_ref.GetMember("sessionUser").SetString("");
   json_body_ref.GetMember("userDefinedContext").SetToEmptyObject();
-  json_body_ref.GetMember("requestId")
-      .SetString("00000000-0000-0000-0000-000000000000");
+  static std::atomic<uint64_t> next_request_id{0};
+  json_body_ref.GetMember("requestId").SetString(
+      absl::StrCat(next_request_id.fetch_add(1, std::memory_order_relaxed)));
   json_body_ref.GetMember("calls").Set(std::move(calls));
 
   GOOGLESQL_ASSIGN_OR_RETURN(
@@ -142,15 +144,29 @@ absl::StatusOr<googlesql::JSONValue> RemoteUdfEvaluator::EvaluateRemoteFunction(
         endpoint, ". Schema object name: ", schema_object_name));
   }
   if (result->status != 200) {
+    auto error = googlesql::JSONValue::ParseJSONString(result->body);
+    if (error.ok() && error->GetConstRef().IsObject() &&
+        error->GetConstRef().HasMember("errorMessage") &&
+        error->GetConstRef().GetMember("errorMessage").IsString()) {
+      return absl::FailedPreconditionError(
+          error->GetConstRef().GetMember("errorMessage").GetString());
+    }
     return absl::FailedPreconditionError(absl::StrCat(
         "Remote function call failed. Status: ", result->status,
         ". Endpoint: ", endpoint, ". Schema object name: ", schema_object_name,
         ". Body: ", result->body));
   }
 
-  GOOGLESQL_ASSIGN_OR_RETURN(googlesql::JSONValue json_response,
-                   googlesql::JSONValue::ParseJSONString(result->body));
-  googlesql::JSONValueConstRef json_response_ref = json_response.GetConstRef();
+  absl::StatusOr<googlesql::JSONValue> json_response =
+      googlesql::JSONValue::ParseJSONString(result->body);
+  if (!json_response.ok()) {
+    return absl::FailedPreconditionError(absl::StrCat(
+        "Remote function call returned invalid JSON. Endpoint: ", endpoint,
+        ". Schema object name: ", schema_object_name,
+        ". Error: ", json_response.status().message()));
+  }
+  googlesql::JSONValueConstRef json_response_ref =
+      json_response->GetConstRef();
   if (!json_response_ref.IsObject()) {
     return absl::FailedPreconditionError(absl::StrCat(
         "Remote function call did not return a JSON object. Endpoint: ",
@@ -159,6 +175,11 @@ absl::StatusOr<googlesql::JSONValue> RemoteUdfEvaluator::EvaluateRemoteFunction(
   }
 
   if (json_response_ref.HasMember("errorMessage")) {
+    if (!json_response_ref.GetMember("errorMessage").IsString()) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Remote function errorMessage must be a string. Endpoint: ",
+          endpoint, ". Schema object name: ", schema_object_name));
+    }
     return absl::FailedPreconditionError(
         json_response_ref.GetMember("errorMessage").GetString());
   }

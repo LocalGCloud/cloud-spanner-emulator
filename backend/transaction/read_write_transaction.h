@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <queue>
 
 #include "absl/base/thread_annotations.h"
@@ -107,6 +108,9 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
 
   absl::StatusOr<absl::Time> GetCommitTimestamp() ABSL_LOCKS_EXCLUDED(mu_);
 
+  // Returns the CommitStats mutation count of a committed transaction.
+  absl::StatusOr<int64_t> GetMutationCount() ABSL_LOCKS_EXCLUDED(mu_);
+
   const State state() const ABSL_LOCKS_EXCLUDED(mu_) {
     absl::MutexLock lock(&mu_);
     return state_;
@@ -131,6 +135,12 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
   const CommitTimestampTracker* commit_timestamp_tracker() const {
     return commit_timestamp_tracker_.get();
   }
+
+  // Sets the transaction tag for this transaction if not already set.
+  void SetTransactionTag(absl::string_view tag) ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Returns the transaction tag for this transaction.
+  std::string transaction_tag() const ABSL_LOCKS_EXCLUDED(mu_);
 
  private:
   friend class TransactionOpsProcessor;
@@ -223,6 +233,15 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
 
   // The commit timestamp chosen for this transaction.
   absl::Time commit_timestamp_ ABSL_GUARDED_BY(mu_);
+  // Repeatable-read snapshot, chosen at the first read.
+  std::optional<absl::Time> snapshot_timestamp_ ABSL_GUARDED_BY(mu_);
+
+  // Ranges read under repeatable read with exclusive locks (FOR UPDATE or the
+  // lock_scanned_ranges=exclusive hint), validated at commit.
+  std::vector<LockedRange> locked_read_ranges_ ABSL_GUARDED_BY(mu_);
+
+  // CommitStats.mutation_count, computed when the transaction commits.
+  int64_t mutation_count_ ABSL_GUARDED_BY(mu_) = 0;
 
   // Queue of mutations being processed by this transaction.
   std::queue<WriteOp> write_ops_queue_ ABSL_GUARDED_BY(mu_);
@@ -234,6 +253,9 @@ class ReadWriteTransaction : public RowReader, public RowWriter {
   const Schema* schema_ ABSL_GUARDED_BY(mu_);
 
   CaseInsensitiveStringMap<std::vector<KeyRange>> deleted_key_ranges_by_table_;
+
+  // Transaction tag passed in request options.
+  std::string transaction_tag_ ABSL_GUARDED_BY(mu_);
 };
 
 }  // namespace backend

@@ -77,6 +77,7 @@ cc_test(
     deps = [
         ":multiplexed_session_transaction_manager",
         "//backend/actions:manager",
+        "//backend/database",
         "//backend/locking:manager",
         "//backend/schema/catalog:schema",
         "//backend/schema/catalog:versioned_catalog",
@@ -84,6 +85,7 @@ cc_test(
         "//backend/transaction:foreign_key_restrictions",
         "//backend/transaction:read_write_transaction",
         "//common:clock",
+        "//frontend/entities:database",
         "//frontend/entities:transaction",
         "//tests/common:proto_matchers",
         "//tests/common:test_schema_constructor",

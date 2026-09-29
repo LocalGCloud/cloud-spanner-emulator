@@ -45,11 +45,15 @@ fails with `exec: "--data_dir=/data": no such file or directory`.
 | `--grpc_port` | `9010` | gRPC port | as `--host_port` |
 | `--http_port` | `9020` | REST port | — |
 | `--grpc_binary` | `emulator_main` | Path to the `emulator_main` binary | — |
-| `--data_dir` | empty (in-memory) | Persistent storage directory. See [Persistence](persistence.md). | yes |
+| `--remote_functions_host_port` | empty | Forward a `localhost:PORT` remote-function backend to `emulator_main`. | yes |
+| `--data_dir` | empty (in-memory) | Persistent storage directory. `emulator_main` locks it (`<data_dir>/.lock`), so a second emulator on the same directory exits at startup. See [Persistence](persistence.md). | yes |
 | `--repair_corrupted_databases` | `false` | Move a database that fails to restore under `<data_dir>/.quarantine/` instead of leaving it unavailable. See [Persistence](persistence.md#quarantine). | yes |
 | `--enforce_placement_dml_restrictions` | `true` | Production's placement DML limits. See [Placements](placements.md). | yes |
 | `--override_max_databases_per_instance` | `100` | Raises the per-instance database limit when greater than 100; lower values cannot reduce it. | yes |
 | `--override_change_stream_partition_token_alive_seconds` | `-1` (20–40 s nominal token life) | A positive X sets the churn age threshold, worker sleep, and churn retry sleep to X seconds (nominal token life X–2X seconds). | yes |
+| `--row_deletion_policy_sweep_interval_seconds` | `60` | How often each database deletes rows that its row deletion policies (TTL) have expired. `0` or a negative value disables the sweeper. Production deletes within about 72 hours. | yes |
+| `--lock_wait_timeout_ms` | `10000` | How long a read-write transaction waits for a lock that an older transaction holds before it aborts. An older transaction never waits for a younger one; it aborts (wounds) the younger holder. `0` aborts a conflicting request at once, the behavior before 2026-09-28. Waits ignore the RPC deadline. | yes |
+| `--spanner_sys_expose_open_interval` | `false` | Also show the `SPANNER_SYS` statistics interval that is still in progress, so statistics are visible right after an operation. Production shows only ended intervals. | yes |
 | `--log_requests` | `false` | Log gRPC requests and responses at INFO level. | yes |
 | `--enable_fault_injection` | `false` | Randomly abort commits, to test retry logic | yes |
 | `--disable_query_null_filtered_index_check` | `false` | Answer queries that use `NULL_FILTERED` indexes | yes |
@@ -73,7 +77,9 @@ open only after the emulator has finished restoring persisted data.
 
 On `SIGINT` (Ctrl-C) or `SIGTERM` (`docker stop`, process managers),
 `gateway_main` sends `SIGTERM` to `emulator_main`, waits up to 5 seconds for
-it to exit, kills it if it hasn't, and then exits with status 0. `SIGKILL`
+it to exit, kills it if it hasn't, and then exits with status 0. With
+`--data_dir`, `emulator_main` saves each database's `SPANNER_SYS` statistics
+when it gets `SIGINT` or `SIGTERM`. `SIGKILL`
 can't be caught: killing `gateway_main` that way leaves `emulator_main`
 running.
 
@@ -85,8 +91,7 @@ them; see the Docker example above.
 | Flag | Default | Effect |
 |------|---------|--------|
 | `--host_port` | `localhost:10007` | gRPC listen address |
-| `--abort_current_transaction_probability` | `20` | Percentage chance of trying to abort the transaction holding a contested lock in favor of the new transaction. `0` disables that attempt. |
-| `--remote_functions_host_port` | empty | Host and port of the remote functions backend (for example `localhost:8080`). |
+| `--abort_current_transaction_probability` | `20` | Percentage chance that a transaction requesting a lock held by an older, idle transaction aborts that holder instead of waiting (see `--lock_wait_timeout_ms`). `0` gives Cloud Spanner's wound-wait behavior: a younger transaction always waits. Requests that can't wait, such as schema changes, abort the holder with this probability or abort themselves. |
 | `--enable_change_stream_churning` | `true` | Rotate change stream partitions |
 | `--change_stream_churning_interval` | `20s` | Minimum age of an active partition before churning. |
 | `--change_stream_churn_thread_sleep_interval` | `20s` | How long the churn worker waits between scans. |

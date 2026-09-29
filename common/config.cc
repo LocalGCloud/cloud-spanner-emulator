@@ -19,6 +19,7 @@
 #include <string>
 
 #include "absl/flags/flag.h"
+#include "absl/time/time.h"
 
 ABSL_FLAG(std::string, host_port, "localhost:10007",
           "Emulator host IP and port that serves Cloud Spanner gRPC requests.");
@@ -58,6 +59,12 @@ ABSL_FLAG(bool, repair_corrupted_databases, false,
           "whether the corrupted database is left in place for inspection "
           "(default) or cleaned up automatically.");
 
+ABSL_FLAG(bool, spanner_sys_expose_open_interval, false,
+          "If true, the SPANNER_SYS statistics tables also show the interval "
+          "that is still in progress, so that statistics are visible right "
+          "after an operation completes. Production Cloud Spanner shows only "
+          "intervals that have ended.");
+
 ABSL_FLAG(bool, enforce_placement_dml_restrictions, true,
           "If true, read-write transactions enforce the geo-partitioning "
           "(placement) DML limits of production Cloud Spanner: an INSERT or "
@@ -68,11 +75,28 @@ ABSL_FLAG(bool, enforce_placement_dml_restrictions, true,
 
 ABSL_FLAG(
     int, abort_current_transaction_probability, 20,
-    "The probability that the emulator will try to abort the current "
-    "transaction if a new transaction is requested. A higher value gives "
-    "higher priority to new transactions. A lower value gives higher priority "
-    "to the current transaction. A value of zero means that the emulator will "
-    "never abort the current transaction.");
+    "The probability, in percent, that a transaction that requests a lock "
+    "held by an older transaction tries to abort that transaction instead of "
+    "waiting for it (see --lock_wait_timeout_ms). The attempt succeeds only if "
+    "the older transaction is not executing a request. A higher value gives "
+    "higher priority to new transactions. A value of zero means that locks "
+    "follow Cloud Spanner's wound-wait scheme: a younger transaction always "
+    "waits for an older one. Requests that cannot wait, such as schema "
+    "changes, abort the holder with this probability or abort themselves.");
+ABSL_FLAG(int, lock_wait_timeout_ms, 10000,
+          "How long, in milliseconds, a read-write transaction waits for a "
+          "lock that an older transaction holds before it aborts. Following "
+          "Cloud Spanner's wound-wait locking, an older transaction never "
+          "waits for a younger one: it aborts (wounds) the younger holder "
+          "instead. Zero means that a transaction that requests a conflicting "
+          "lock aborts at once instead of waiting.");
+
+ABSL_FLAG(int, row_deletion_policy_sweep_interval_seconds, 60,
+          "How often, in seconds, each database deletes the rows that its row "
+          "deletion policies (TTL) have expired. Production Cloud Spanner "
+          "deletes expired rows within about 72 hours; the emulator deletes "
+          "them within this interval. Zero or a negative value disables "
+          "background row deletion.");
 
 namespace google {
 namespace spanner {
@@ -91,6 +115,14 @@ bool disable_query_null_filtered_index_check() {
   return absl::GetFlag(FLAGS_disable_query_null_filtered_index_check);
 }
 
+bool spanner_sys_expose_open_interval() {
+  return absl::GetFlag(FLAGS_spanner_sys_expose_open_interval);
+}
+
+void set_spanner_sys_expose_open_interval(bool expose) {
+  absl::SetFlag(&FLAGS_spanner_sys_expose_open_interval, expose);
+}
+
 bool enforce_placement_dml_restrictions() {
   return absl::GetFlag(FLAGS_enforce_placement_dml_restrictions);
 }
@@ -107,10 +139,27 @@ void set_abort_current_transaction_probability(int probability) {
   absl::SetFlag(&FLAGS_abort_current_transaction_probability, probability);
 }
 
+absl::Duration lock_wait_timeout() {
+  return absl::Milliseconds(absl::GetFlag(FLAGS_lock_wait_timeout_ms));
+}
+
+void set_lock_wait_timeout_ms(int milliseconds) {
+  absl::SetFlag(&FLAGS_lock_wait_timeout_ms, milliseconds);
+}
+
 std::string data_dir() { return absl::GetFlag(FLAGS_data_dir); }
 
 bool repair_corrupted_databases() {
   return absl::GetFlag(FLAGS_repair_corrupted_databases);
+}
+
+absl::Duration row_deletion_policy_sweep_interval() {
+  return absl::Seconds(
+      absl::GetFlag(FLAGS_row_deletion_policy_sweep_interval_seconds));
+}
+
+void set_row_deletion_policy_sweep_interval_seconds(int seconds) {
+  absl::SetFlag(&FLAGS_row_deletion_policy_sweep_interval_seconds, seconds);
 }
 
 }  // namespace config

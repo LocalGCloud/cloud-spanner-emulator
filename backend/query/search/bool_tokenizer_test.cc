@@ -56,7 +56,9 @@ TEST(BoolTokenizerTest, TestTokenize) {
 TEST(BoolTokenizerTest, TestTokenizeNull) {
   absl::StatusOr<googlesql::Value> result =
       BoolTokenizer::Tokenize({googlesql::Value::NullBool()});
-  CheckResult(result);
+  GOOGLESQL_EXPECT_OK(result.status());
+  EXPECT_TRUE(result->type()->IsTokenList());
+  EXPECT_TRUE(result->is_null());
 }
 
 }  // namespace search

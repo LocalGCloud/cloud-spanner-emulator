@@ -755,11 +755,63 @@ TEST_P(SchemaUpdaterTest, SetOptions_ValueCaptureType) {
           schema.get(),
           {R"(ALTER CHANGE STREAM C SET OPTIONS ( value_capture_type = 'OLD_VALUES'))"}),
       StatusIs(error::InvalidValueCaptureType("OLD_VALUES")));
+  EXPECT_THAT(error::InvalidValueCaptureType("OLD_VALUES").message(),
+              HasSubstr("NEW_ROW_AND_OLD_VALUES"));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto new_schema, UpdateSchema(schema.get(), {R"(
       CREATE CHANGE STREAM C2 FOR ALL
       OPTIONS ( value_capture_type = 'NEW_ROW_AND_OLD_VALUES' ))"}));
   EXPECT_EQ(new_schema->FindChangeStream("C2")->value_capture_type(),
             "NEW_ROW_AND_OLD_VALUES");
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(new_schema, UpdateSchema(schema.get(), {R"(
+      ALTER CHANGE STREAM C SET OPTIONS
+      ( value_capture_type = 'NEW_ROW_AND_OLD_VALUES' ))"}));
+  EXPECT_EQ(new_schema->FindChangeStream("C")->value_capture_type(),
+            "NEW_ROW_AND_OLD_VALUES");
+}
+
+TEST_P(SchemaUpdaterTest, SetOptions_ValueCaptureTypeNullResetsToDefault) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto schema,
+      CreateSchema({
+          R"(CREATE TABLE T (k1 INT64, c1 STRING(100)) PRIMARY KEY (k1))",
+          R"(CREATE CHANGE STREAM C FOR ALL OPTIONS (value_capture_type = 'NEW_ROW'))"}));
+  ASSERT_EQ(schema->FindChangeStream("C")->value_capture_type(), "NEW_ROW");
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto reset_schema,
+      UpdateSchema(schema.get(), {R"(
+          ALTER CHANGE STREAM C SET OPTIONS (value_capture_type = NULL))"}));
+  EXPECT_EQ(reset_schema->FindChangeStream("C")->value_capture_type(),
+            std::nullopt);
+}
+
+TEST_P(SchemaUpdaterTest, PostgreSQL_ValueCaptureTypeNativeSetNullAndReset) {
+  if (GetParam() != POSTGRESQL) {
+    GTEST_SKIP();
+  }
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto schema,
+      CreateSchema({
+          R"(CREATE TABLE T (k1 INT64, c1 STRING(100)) PRIMARY KEY (k1))",
+          R"(CREATE CHANGE STREAM C FOR ALL OPTIONS (value_capture_type = 'NEW_ROW'))"}));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto null_schema,
+      UpdateSchema(schema.get(),
+                   {R"(ALTER CHANGE STREAM C SET (value_capture_type = NULL))"},
+                   "", GetParam(), /*use_gsql_to_pg_translation=*/false));
+  EXPECT_EQ(null_schema->FindChangeStream("C")->value_capture_type(),
+            std::nullopt);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto reset_schema,
+      UpdateSchema(schema.get(),
+                   {R"(ALTER CHANGE STREAM C RESET (value_capture_type))"},
+                   "", GetParam(), /*use_gsql_to_pg_translation=*/false));
+  EXPECT_EQ(reset_schema->FindChangeStream("C")
+                ->value_capture_type()
+                .value_or("OLD_AND_NEW_VALUES"),
+            "OLD_AND_NEW_VALUES");
 }
 
 TEST_P(SchemaUpdaterTest, SetOptions_ExclusionOptions) {

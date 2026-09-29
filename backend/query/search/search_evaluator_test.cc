@@ -78,6 +78,27 @@ TEST(SearchEvaluatorTest, EvaluateInvalidDialect) {
                        HasSubstr("Invalid dialect: invalid_dialect")));
 }
 
+TEST(SearchEvaluatorTest, WordsDialectsUseLanguageTagForQueryCase) {
+  const googlesql::Value tokens = TokenListFromStrings({"fulltext-0", "ı", "z"});
+  for (const std::string& dialect : {"words", "words_phrase"}) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        const googlesql::Value without_tag,
+        SearchEvaluator::Evaluate({tokens, googlesql::Value::String("I z"),
+                                   googlesql::Value::NullBool(),
+                                   googlesql::Value::NullString(),
+                                   googlesql::Value::String(dialect)}));
+    EXPECT_FALSE(without_tag.bool_value()) << dialect;
+
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        const googlesql::Value with_tag,
+        SearchEvaluator::Evaluate({tokens, googlesql::Value::String("I z"),
+                                   googlesql::Value::NullBool(),
+                                   googlesql::Value::String("tr"),
+                                   googlesql::Value::String(dialect)}));
+    EXPECT_TRUE(with_tag.bool_value()) << dialect;
+  }
+}
+
 struct DialectTestCase {
   std::vector<std::string> tokens;
   std::string query;

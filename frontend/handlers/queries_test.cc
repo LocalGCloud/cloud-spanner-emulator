@@ -32,13 +32,18 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "backend/datamodel/types.h"
 #include "common/config.h"
 #include "common/errors.h"
 #include "frontend/converters/partition.h"
+#include "frontend/converters/time.h"
 #include "frontend/converters/types.h"
 #include "frontend/converters/values.h"
 #include "frontend/proto/partition_token.pb.h"
+#include "frontend/proto/resume_token.pb.h"
+#include "tests/common/chunking.h"
 #include "tests/common/proto_matchers.h"
 #include "tests/common/test_env.h"
 #include "googlesql/base/status_macros.h"
@@ -166,6 +171,31 @@ class QueryApiTest : public test::ServerTest,
   }
 
   SessionType GetSessionType() { return GetParam(); }
+
+  // Sends `request` with ExecuteSql and with ExecuteStreamingSql, each with a
+  // call deadline `timeout` from now, and returns their statuses.
+  std::vector<absl::Status> ExecuteSqlWithTimeout(
+      const spanner_api::ExecuteSqlRequest& request, absl::Duration timeout) {
+    std::vector<absl::Status> statuses;
+    {
+      grpc::ClientContext context;
+      context.set_deadline(absl::ToChronoTime(absl::Now() + timeout));
+      spanner_api::ResultSet response;
+      statuses.push_back(test_env()->spanner_client()->ExecuteSql(
+          &context, request, &response));
+    }
+    {
+      grpc::ClientContext context;
+      context.set_deadline(absl::ToChronoTime(absl::Now() + timeout));
+      auto reader =
+          test_env()->spanner_client()->ExecuteStreamingSql(&context, request);
+      spanner_api::PartialResultSet response;
+      while (reader->Read(&response)) {
+      }
+      statuses.push_back(reader->Finish());
+    }
+    return statuses;
+  }
 
   std::string test_session_uri_;
   std::string test_multiplexed_session_uri_;
@@ -373,6 +403,60 @@ TEST_P(QueryApiTest, ExecuteSql) {
                                 values { string_value: "row_3" }
                               }
                             )pb")));
+}
+
+TEST_P(QueryApiTest, FutureReadTimestampPastCallDeadlineFailsAtOnce) {
+  // A query at a future timestamp waits for it. When the call's deadline comes
+  // first, the query fails right away instead of waiting past the deadline.
+  const std::string session_uri =
+      GetSessionUri(GetSessionType() == SessionType::kMultiplexedSession);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto read_timestamp,
+                       TimestampToProto(absl::Now() + absl::Minutes(1)));
+  spanner_api::BeginTransactionRequest begin_request;
+  begin_request.set_session(session_uri);
+  *begin_request.mutable_options()
+       ->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+  spanner_api::Transaction txn;
+  GOOGLESQL_ASSERT_OK(BeginTransaction(begin_request, &txn));
+
+  // The begun transaction comes first: beginning another one in a regular
+  // session ends it.
+  std::vector<spanner_api::TransactionSelector> selectors(3);
+  selectors[0].set_id(txn.id());
+  *selectors[1].mutable_single_use()->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+  *selectors[2].mutable_begin()->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+  for (const spanner_api::TransactionSelector& selector : selectors) {
+    SCOPED_TRACE(selector.DebugString());
+    spanner_api::ExecuteSqlRequest request;
+    request.set_session(session_uri);
+    request.set_sql("SELECT int64_col FROM test_table");
+    *request.mutable_transaction() = selector;
+
+    const absl::Time start = absl::Now();
+    EXPECT_THAT(ExecuteSqlWithTimeout(request, absl::Seconds(10)),
+                testing::Each(StatusIs(absl::StatusCode::kDeadlineExceeded,
+                                       HasSubstr("request deadline"))));
+    EXPECT_LT(absl::Now() - start, absl::Seconds(10));
+  }
+}
+
+TEST_P(QueryApiTest, FutureReadTimestampBeforeCallDeadlineWaits) {
+  const absl::Time read_time = absl::Now() + absl::Milliseconds(200);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto read_timestamp,
+                                 TimestampToProto(read_time));
+  spanner_api::ExecuteSqlRequest request;
+  request.set_session(
+      GetSessionUri(GetSessionType() == SessionType::kMultiplexedSession));
+  request.set_sql("SELECT int64_col FROM test_table");
+  *request.mutable_transaction()->mutable_single_use()->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+
+  EXPECT_THAT(ExecuteSqlWithTimeout(request, absl::Seconds(30)),
+              testing::Each(StatusIs(absl::StatusCode::kOk)));
+  EXPECT_GE(absl::Now(), read_time);
 }
 
 TEST_P(QueryApiTest, ExecuteSqlDataBoostEnabledMissingPartitionTokenFails) {
@@ -598,10 +682,11 @@ TEST_P(QueryApiTest, ExecuteSqlWithDmlAndParameters) {
               }
             }
             stats {
-              query_plan { plan_nodes { display_name: "No query plan" } }
               row_count_exact: 0
             }
           )pb")));
+  EXPECT_EQ(response.stats().query_plan().plan_nodes(0).display_name(),
+            "Apply Mutations");
 }
 
 TEST_P(QueryApiTest, ExecuteSqlWithDmlReturningAndParameters) {
@@ -656,10 +741,11 @@ TEST_P(QueryApiTest, ExecuteSqlWithDmlReturningAndParameters) {
               }
             }
             stats {
-              query_plan { plan_nodes { display_name: "No query plan" } }
               row_count_exact: 0
             }
           )pb")));
+  EXPECT_EQ(response.stats().query_plan().plan_nodes(0).display_name(),
+            "Apply Mutations");
 }
 
 TEST_P(QueryApiTest, ExecuteSqlWithDmlReturningReturnsStats) {
@@ -837,10 +923,11 @@ TEST_P(QueryApiTest, ExecuteSqlWithDmlReturningStar) {
               }
             }
             stats {
-              query_plan { plan_nodes { display_name: "No query plan" } }
               row_count_exact: 0
             }
           )pb")));
+  EXPECT_EQ(response.stats().query_plan().plan_nodes(0).display_name(),
+            "Apply Mutations");
 }
 
 TEST_P(QueryApiTest, ExecuteSqlUpdateReturning) {
@@ -891,10 +978,11 @@ TEST_P(QueryApiTest, ExecuteSqlUpdateReturning) {
               }
             }
             stats {
-              query_plan { plan_nodes { display_name: "No query plan" } }
               row_count_exact: 0
             }
           )pb")));
+  EXPECT_EQ(response.stats().query_plan().plan_nodes(0).display_name(),
+            "Apply Mutations");
 }
 
 TEST_P(QueryApiTest, ExecuteSqlDmlPlanWithoutReturning) {
@@ -940,10 +1028,11 @@ TEST_P(QueryApiTest, ExecuteSqlDmlPlanWithoutReturning) {
               }
             }
             stats {
-              query_plan { plan_nodes { display_name: "No query plan" } }
               row_count_exact: 0
             }
           )pb")));
+  EXPECT_EQ(response.stats().query_plan().plan_nodes(0).display_name(),
+            "Apply Mutations");
 }
 
 TEST_P(QueryApiTest, ExecuteSqlWithDmlAndProtoParameters) {
@@ -991,10 +1080,11 @@ TEST_P(QueryApiTest, ExecuteSqlWithDmlAndProtoParameters) {
               }
             }
             stats {
-              query_plan { plan_nodes { display_name: "No query plan" } }
               row_count_exact: 0
             }
           )pb")));
+  EXPECT_EQ(response.stats().query_plan().plan_nodes(0).display_name(),
+            "Apply Mutations");
 }
 
 TEST_P(QueryApiTest, ExecuteStreamingSql) {
@@ -1194,6 +1284,10 @@ TEST_P(QueryApiTest, ExecuteStreamingSqlWithProtoParameters) {
   if (GetSessionType() == SessionType::kMultiplexedSession) {
     ASSERT_FALSE(response.back().has_precommit_token());
   }
+  // The response ends on a row boundary, where the stream can resume.
+  ASSERT_EQ(response.size(), 1);
+  EXPECT_FALSE(response.front().resume_token().empty());
+  response.front().clear_resume_token();
   EXPECT_THAT(
       response,
       ElementsAre(EqualsProto(
@@ -1291,6 +1385,73 @@ TEST_P(QueryApiTest, AcceptsPlanMode) {
       ASSERT_FALSE(response.back().has_precommit_token());
     }
   }
+}
+
+TEST_P(QueryApiTest, ExecuteStreamingSqlReturnsStatsWithTheLastResponse) {
+  // The result is larger than a streaming chunk, so it takes two responses.
+  spanner_api::ExecuteSqlRequest request = PARSE_TEXT_PROTO(
+      R"pb(
+        transaction { single_use { read_only { strong: true } } }
+        query_mode: PROFILE
+        sql: "SELECT REPEAT('x', 700000) UNION ALL SELECT REPEAT('y', 700000)"
+      )pb");
+  request.set_session(
+      GetSessionUri(GetSessionType() == SessionType::kMultiplexedSession));
+
+  std::vector<spanner_api::PartialResultSet> response;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &response));
+  ASSERT_GE(response.size(), 2);
+  for (int i = 0; i + 1 < response.size(); ++i) {
+    EXPECT_FALSE(response[i].has_stats());
+  }
+  const spanner_api::ResultSetStats& stats = response.back().stats();
+  ASSERT_GT(stats.query_plan().plan_nodes_size(), 0);
+  EXPECT_EQ(stats.query_plan().plan_nodes(0).display_name(),
+            "Serialize Result");
+  EXPECT_TRUE(stats.query_plan().plan_nodes(0).has_execution_stats());
+  EXPECT_EQ(stats.query_stats().fields().at("rows_returned").string_value(),
+            "2");
+  EXPECT_THAT(stats.query_stats().fields().at("elapsed_time").string_value(),
+              testing::MatchesRegex("[0-9]+\\.[0-9]{2} m?secs"));
+}
+
+TEST_P(QueryApiTest, ReturnsWhatTheQueryModeAsksFor) {
+  spanner_api::ExecuteSqlRequest request = PARSE_TEXT_PROTO(
+      R"pb(
+        transaction { single_use { read_only { strong: true } } }
+        sql: "SELECT * FROM test_table"
+      )pb");
+  request.set_session(
+      GetSessionUri(GetSessionType() == SessionType::kMultiplexedSession));
+
+  spanner_api::ResultSet response;
+  request.set_query_mode(spanner_api::ExecuteSqlRequest::NORMAL);
+  GOOGLESQL_ASSERT_OK(ExecuteSql(request, &response));
+  EXPECT_FALSE(response.stats().has_query_plan());
+  EXPECT_FALSE(response.stats().has_query_stats());
+
+  response.Clear();
+  request.set_query_mode(spanner_api::ExecuteSqlRequest::PLAN);
+  GOOGLESQL_ASSERT_OK(ExecuteSql(request, &response));
+  EXPECT_EQ(response.rows_size(), 0);
+  EXPECT_TRUE(response.stats().has_query_plan());
+  EXPECT_FALSE(response.stats().has_query_stats());
+  EXPECT_FALSE(
+      response.stats().query_plan().plan_nodes(0).has_execution_stats());
+
+  response.Clear();
+  request.set_query_mode(spanner_api::ExecuteSqlRequest::WITH_STATS);
+  GOOGLESQL_ASSERT_OK(ExecuteSql(request, &response));
+  EXPECT_FALSE(response.stats().has_query_plan());
+  EXPECT_TRUE(response.stats().query_stats().fields().contains("cpu_time"));
+
+  response.Clear();
+  request.set_query_mode(spanner_api::ExecuteSqlRequest::WITH_PLAN_AND_STATS);
+  GOOGLESQL_ASSERT_OK(ExecuteSql(request, &response));
+  EXPECT_TRUE(response.stats().has_query_plan());
+  EXPECT_FALSE(
+      response.stats().query_plan().plan_nodes(0).has_execution_stats());
+  EXPECT_TRUE(response.stats().query_stats().fields().contains("cpu_time"));
 }
 
 TEST_P(QueryApiTest, DirectedReadsWithROTxnSucceeds) {
@@ -1615,6 +1776,188 @@ TEST_P(PlacementQueryApiTest, RestrictionsCanBeDisabled) {
                     2));
   GOOGLESQL_EXPECT_OK(Execute(txn, "DELETE FROM Singers WHERE SingerId = 1", 3));
   GOOGLESQL_EXPECT_OK(CommitTransaction(txn));
+}
+
+// Streams queries and reads whose results span several PartialResultSets, and
+// resumes them the way client libraries do after a broken stream: by resending
+// the request with the resume token of the last response received.
+class ResumeTokenApiTest : public test::ServerTest {
+ protected:
+  // Enough rows of this size that results span several PartialResultSets, and
+  // several batches of the scrambled order of a query without ORDER BY.
+  static constexpr int kNumRows = 200;
+  static constexpr int kValueSize = 16 * 1024;
+
+  void SetUp() override {
+    GOOGLESQL_ASSERT_OK(CreateTestInstance());
+    GOOGLESQL_ASSERT_OK(CreateTestDatabase());
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(session_,
+                                   CreateTestSession(/*multiplexed=*/false));
+    GOOGLESQL_ASSERT_OK(InsertRows(1, kNumRows));
+  }
+
+  absl::Status InsertRows(int64_t first, int64_t last) {
+    spanner_api::CommitRequest request;
+    request.set_session(session_);
+    request.mutable_single_use_transaction()->mutable_read_write();
+    auto* insert = request.add_mutations()->mutable_insert();
+    insert->set_table("test_table");
+    insert->add_columns("int64_col");
+    insert->add_columns("string_col");
+    for (int64_t key = first; key <= last; ++key) {
+      auto* row = insert->add_values();
+      row->add_values()->set_string_value(absl::StrCat(key));
+      row->add_values()->set_string_value(
+          std::string(kValueSize, 'a' + key % 26));
+    }
+    spanner_api::CommitResponse response;
+    return Commit(request, &response);
+  }
+
+  // Resends `request` with the resume token of each response of `original`,
+  // its complete stream, and expects the resumed stream to return the rows
+  // that follow the response. Returns the number of resumed streams.
+  template <typename Request, typename Execute>
+  int ExpectResumesAfterEveryToken(
+      Request request,
+      const std::vector<spanner_api::PartialResultSet>& original,
+      const Execute& execute) {
+    auto all = backend::test::MergePartialResultSets(original, 2);
+    EXPECT_TRUE(all.ok()) << all.status();
+    int resumed_streams = 0;
+    for (int i = 0; i < original.size(); ++i) {
+      if (original[i].resume_token().empty()) {
+        continue;
+      }
+      ++resumed_streams;
+      auto before = backend::test::MergePartialResultSets(
+          {original.begin(), original.begin() + i + 1}, 2);
+      request.set_resume_token(original[i].resume_token());
+      std::vector<spanner_api::PartialResultSet> resumed;
+      GOOGLESQL_EXPECT_OK(execute(request, &resumed));
+      auto after = backend::test::MergePartialResultSets(resumed, 2);
+      if (!before.ok() || !after.ok()) {
+        ADD_FAILURE() << before.status() << after.status();
+        continue;
+      }
+      EXPECT_TRUE(resumed.front().has_metadata());
+      EXPECT_EQ(before->rows_size() + after->rows_size(), all->rows_size());
+      for (int j = 0; j < after->rows_size() &&
+                      before->rows_size() + j < all->rows_size();
+           ++j) {
+        EXPECT_THAT(after->rows(j),
+                    EqualsProto(all->rows(before->rows_size() + j)));
+      }
+    }
+    return resumed_streams;
+  }
+
+  std::string session_;
+};
+
+TEST_F(ResumeTokenApiTest, ResumesSingleUseQueryAtItsReadTimestamp) {
+  spanner_api::ExecuteSqlRequest request = PARSE_TEXT_PROTO(R"pb(
+    transaction { single_use { read_only { strong: true } } }
+    sql: "SELECT int64_col, string_col FROM test_table"
+  )pb");
+  request.set_session(session_);
+  std::vector<spanner_api::PartialResultSet> original;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &original));
+  ASSERT_GT(original.size(), 2);
+
+  // Rows committed later are not visible to a resumed stream.
+  GOOGLESQL_ASSERT_OK(InsertRows(kNumRows + 1, kNumRows + 10));
+  EXPECT_GT(ExpectResumesAfterEveryToken(
+                request, original,
+                [this](const auto& request, auto* response) {
+                  return ExecuteStreamingSql(request, response);
+                }),
+            1);
+}
+
+TEST_F(ResumeTokenApiTest, ResumesQueryInTheSameTransaction) {
+  spanner_api::ExecuteSqlRequest request = PARSE_TEXT_PROTO(R"pb(
+    transaction { begin { read_write {} } }
+    sql: "SELECT int64_col, string_col FROM test_table"
+  )pb");
+  request.set_session(session_);
+  std::vector<spanner_api::PartialResultSet> original;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &original));
+  ASSERT_GT(original.size(), 2);
+  const std::string transaction_id =
+      original.front().metadata().transaction().id();
+
+  // A resumed stream must not begin another transaction.
+  request.set_resume_token(original.front().resume_token());
+  std::vector<spanner_api::PartialResultSet> resumed;
+  EXPECT_THAT(ExecuteStreamingSql(request, &resumed),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  request.mutable_transaction()->set_id(transaction_id);
+  EXPECT_GT(ExpectResumesAfterEveryToken(
+                request, original,
+                [this](const auto& request, auto* response) {
+                  return ExecuteStreamingSql(request, response);
+                }),
+            1);
+}
+
+TEST_F(ResumeTokenApiTest, ResumesStreamingReadWithLimit) {
+  spanner_api::ReadRequest request = PARSE_TEXT_PROTO(R"pb(
+    transaction { single_use { read_only { strong: true } } }
+    table: "test_table"
+    columns: "int64_col"
+    columns: "string_col"
+    key_set { all: true }
+    limit: 150
+  )pb");
+  request.set_session(session_);
+  std::vector<spanner_api::PartialResultSet> original;
+  GOOGLESQL_ASSERT_OK(StreamingRead(request, &original));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      spanner_api::ResultSet all,
+      backend::test::MergePartialResultSets(original, 2));
+  EXPECT_EQ(all.rows_size(), 150);
+  EXPECT_GT(ExpectResumesAfterEveryToken(
+                request, original,
+                [this](const auto& request, auto* response) {
+                  return StreamingRead(request, response);
+                }),
+            1);
+}
+
+TEST_F(ResumeTokenApiTest, RejectsTokensThatDoNotResumeTheRequest) {
+  spanner_api::ExecuteSqlRequest request = PARSE_TEXT_PROTO(R"pb(
+    transaction { single_use { read_only { strong: true } } }
+    sql: "SELECT int64_col, string_col FROM test_table"
+  )pb");
+  request.set_session(session_);
+  std::vector<spanner_api::PartialResultSet> original;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &original));
+  const std::string token = original.front().resume_token();
+  ASSERT_FALSE(token.empty());
+  std::vector<spanner_api::PartialResultSet> resumed;
+
+  request.set_resume_token("not a token");
+  EXPECT_THAT(ExecuteStreamingSql(request, &resumed),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // The token of another request.
+  spanner_api::ExecuteSqlRequest other_request = request;
+  other_request.set_sql(
+      "SELECT int64_col, string_col FROM test_table WHERE int64_col > 1");
+  other_request.set_resume_token(token);
+  EXPECT_THAT(ExecuteStreamingSql(other_request, &resumed),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  // A token whose rows differ from those that the request returns.
+  ResumeToken changed;
+  ASSERT_TRUE(changed.ParseFromString(token));
+  changed.mutable_rows()->set_rows_fingerprint(
+      changed.rows().rows_fingerprint() + 1);
+  request.set_resume_token(changed.SerializeAsString());
+  EXPECT_THAT(ExecuteStreamingSql(request, &resumed),
+              StatusIs(absl::StatusCode::kFailedPrecondition));
 }
 
 }  // namespace

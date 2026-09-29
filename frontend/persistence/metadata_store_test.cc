@@ -160,6 +160,37 @@ TEST(MetadataStoreTest, SaveAndLoadRoundtrip) {
   std::filesystem::remove_all(dir);
 }
 
+TEST(MetadataStoreTest, UpdatedInstanceSurvivesReload) {
+  const std::string dir = MakeTempDir("updated-instance");
+  const std::string name = "projects/p/instances/i1";
+  const std::string created = "2026-04-10T00:00:00Z";
+  const std::string updated = "2026-04-11T00:00:00Z";
+  {
+    MetadataStore store(dir);
+    store.AddInstance(name, "Original", "emulator-config", 1000,
+                      {{"old", "label"}}, created);
+    store.UpdateInstanceNodeCount(name, 1);
+    store.UpdateInstance(name, "emulator-config", "Updated", 500,
+                         {{"environment", "local"}}, updated);
+    store.UpdateInstanceNodeCount(name, 0);
+    ASSERT_TRUE(store.Save().ok());
+  }
+  {
+    MetadataStore restored(dir);
+    ASSERT_TRUE(restored.Load().ok());
+    const auto instances = restored.instances();
+    const auto& instance = instances.at(name);
+    EXPECT_EQ(instance.display_name, "Updated");
+    EXPECT_EQ(instance.node_count, 0);
+    EXPECT_EQ(instance.processing_units, 500);
+    ASSERT_EQ(instance.labels.size(), 1);
+    EXPECT_EQ(instance.labels.at("environment"), "local");
+    EXPECT_EQ(instance.create_time, created);
+    EXPECT_EQ(instance.update_time, updated);
+  }
+  std::filesystem::remove_all(dir);
+}
+
 TEST(MetadataStoreTest, ReconcilesPendingOperationAfterCrossStoreCrash) {
   const std::string dir = MakeTempDir("pending-operation");
   ::google::longrunning::Operation operation;

@@ -34,6 +34,8 @@ cc_library(
     deps = [
         "//backend/access:read",
         "//backend/access:write",
+        "//backend/datamodel:key",
+        "//backend/datamodel:key_range",
         "//backend/datamodel:key_set",
         "//backend/schema/backfills:schema_backfillers",
         "//backend/schema/catalog:schema",
@@ -65,10 +67,12 @@ cc_test(
     deps = [
         ":change_stream_partition_churner",
         "//backend/access:read",
+        "//backend/access:write",
         "//backend/database",
         "//backend/datamodel:key_set",
         "//backend/schema/updater:schema_updater",
         "//backend/transaction:read_only_transaction",
+        "//backend/transaction:read_write_transaction",
         "//common:clock",
         "//common:feature_flags",
         "//tests/common:proto_matchers",

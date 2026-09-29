@@ -6140,6 +6140,113 @@ TEST(ParseFGAC, GrantPrivilege) {
                HasSubstr("Encountered 'DESTROY' while parsing: privilege")));
 }
 
+TEST(ParseFGAC, GrantColumnPrivileges) {
+  EXPECT_THAT(ParseDDLStatement("GRANT SELECT, UPDATE(location, level) ON "
+                                "TABLE employees, contractors TO ROLE hr"),
+              IsOkAndHolds(test::EqualsProto(R"pb(
+                grant_privilege {
+                  privilege { type: SELECT }
+                  privilege { type: UPDATE column: "location" column: "level" }
+                  target { type: TABLE name: "employees" name: "contractors" }
+                  grantee { type: ROLE name: "hr" }
+                })pb")));
+}
+
+TEST(ParseFGAC, GrantPrivilegeTargets) {
+  EXPECT_THAT(
+      ParseDDLStatement("GRANT SELECT ON CHANGE STREAM cs TO ROLE r"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        grant_privilege {
+          privilege { type: SELECT }
+          target { type: CHANGE_STREAM name: "cs" }
+          grantee { type: ROLE name: "r" }
+        })pb")));
+  EXPECT_THAT(
+      ParseDDLStatement("GRANT EXECUTE ON TABLE FUNCTION READ_cs TO ROLE r"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        grant_privilege {
+          privilege { type: EXECUTE }
+          target { type: TABLE_FUNCTION name: "READ_cs" }
+          grantee { type: ROLE name: "r" }
+        })pb")));
+  EXPECT_THAT(ParseDDLStatement("GRANT EXECUTE ON MODEL m TO ROLE r"),
+              IsOkAndHolds(test::EqualsProto(R"pb(
+                grant_privilege {
+                  privilege { type: EXECUTE }
+                  target { type: MODEL name: "m" }
+                  grantee { type: ROLE name: "r" }
+                })pb")));
+  EXPECT_THAT(ParseDDLStatement("GRANT SELECT ON TABLE sch.t TO ROLE r"),
+              IsOkAndHolds(test::EqualsProto(R"pb(
+                grant_privilege {
+                  privilege { type: SELECT }
+                  target { type: TABLE name: "sch.t" }
+                  grantee { type: ROLE name: "r" }
+                })pb")));
+  EXPECT_THAT(
+      ParseDDLStatement("GRANT SELECT ON LOCALITY GROUP lg TO ROLE r"),
+      StatusIs(StatusCode::kInvalidArgument, HasSubstr("LOCALITY")));
+}
+
+TEST(ParseFGAC, GrantUsageOnSchema) {
+  EXPECT_THAT(
+      ParseDDLStatement("GRANT USAGE ON SCHEMA sch1, DEFAULT TO ROLE r"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        grant_privilege {
+          privilege { type: USAGE }
+          target { type: SCHEMA name: "sch1" name: "" }
+          grantee { type: ROLE name: "r" }
+        })pb")));
+  EXPECT_THAT(
+      ParseDDLStatement("REVOKE USAGE ON SCHEMA DEFAULT FROM ROLE public"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        revoke_privilege {
+          privilege { type: USAGE }
+          target { type: SCHEMA name: "" }
+          grantee { type: ROLE name: "public" }
+        })pb")));
+}
+
+TEST(ParseFGAC, GrantOnAllObjectsInSchema) {
+  EXPECT_THAT(ParseDDLStatement(
+                  "GRANT SELECT ON ALL TABLES IN SCHEMA default, sch TO ROLE r"),
+              IsOkAndHolds(test::EqualsProto(R"pb(
+                grant_privilege {
+                  privilege { type: SELECT }
+                  target { type: TABLE all_in_schema: "" all_in_schema: "sch" }
+                  grantee { type: ROLE name: "r" }
+                })pb")));
+  EXPECT_THAT(
+      ParseDDLStatement("GRANT SELECT ON ALL VIEWS IN SCHEMA sch TO ROLE r"),
+      IsOkAndHolds(test::EqualsProto(R"pb(
+        grant_privilege {
+          privilege { type: SELECT }
+          target { type: VIEW all_in_schema: "sch" }
+          grantee { type: ROLE name: "r" }
+        })pb")));
+  EXPECT_THAT(ParseDDLStatement(
+                  "REVOKE UPDATE ON ALL SEQUENCES IN SCHEMA sch FROM ROLE r"),
+              IsOkAndHolds(test::EqualsProto(R"pb(
+                revoke_privilege {
+                  privilege { type: UPDATE }
+                  target { type: SEQUENCE all_in_schema: "sch" }
+                  grantee { type: ROLE name: "r" }
+                })pb")));
+  EXPECT_THAT(ParseDDLStatement(
+                  "GRANT SELECT ON ALL CHANGE STREAMS IN SCHEMA sch TO ROLE r"),
+              IsOkAndHolds(test::EqualsProto(R"pb(
+                grant_privilege {
+                  privilege { type: SELECT }
+                  target { type: CHANGE_STREAM all_in_schema: "sch" }
+                  grantee { type: ROLE name: "r" }
+                })pb")));
+  EXPECT_THAT(
+      ParseDDLStatement("GRANT SELECT ON ALL MODELS IN SCHEMA sch TO ROLE r"),
+      StatusIs(StatusCode::kInvalidArgument,
+               HasSubstr("Expected TABLES, VIEWS, SEQUENCES or CHANGE "
+                         "STREAMS after ALL but found: MODELS")));
+}
+
 TEST(ParseFGAC, GrantMembership) {
   // Single role, single grantee.
   EXPECT_THAT(ParseDDLStatement("GRANT ROLE MyRole1 TO ROLE MyRole2"),

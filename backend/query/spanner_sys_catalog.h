@@ -22,17 +22,27 @@
 
 #include "googlesql/public/simple_catalog.h"
 #include "absl/container/flat_hash_map.h"
+#include "backend/schema/catalog/schema.h"
+#include "backend/stats/system_stats_collector.h"
 
 namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
 
+// The SPANNER_SYS schema. Columns are in the order of production's
+// INFORMATION_SCHEMA.COLUMNS. PostgreSQL databases see the *_JSON_STRING
+// columns but not the ARRAY<STRUCT<...>> ones.
 class SpannerSysCatalog : public googlesql::SimpleCatalog {
  public:
   static constexpr char kName[] = "SPANNER_SYS";
 
-  explicit SpannerSysCatalog();
+  // The statistics tables read their rows from `stats_collector` when they
+  // are scanned, and are empty if it is null. `schema` determines the dialect
+  // and names the tables and columns of lock statistics.
+  explicit SpannerSysCatalog(
+      const Schema* schema = nullptr,
+      const SystemStatsCollector* stats_collector = nullptr);
 
  private:
   // Explicitly storing the tables because we are using SimpleCatalog::AddTable
@@ -41,6 +51,11 @@ class SpannerSysCatalog : public googlesql::SimpleCatalog {
       tables_by_name_;
 
   void FillOptimizerVersionsTable();
+
+  // Serves the rows of `table` from `stats_collector` at scan time.
+  void ServeStatistics(googlesql::SimpleTable* table,
+                       const SystemStatsCollector* stats_collector,
+                       const Schema* schema);
 };
 
 }  // namespace backend

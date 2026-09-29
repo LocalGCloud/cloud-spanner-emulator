@@ -91,6 +91,39 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "user_split_point_store",
+    srcs = ["user_split_point_store.cc"],
+    hdrs = ["user_split_point_store.h"],
+    deps = [
+        ":storage",
+        "//backend/common:ids",
+        "//backend/datamodel:key",
+        "//backend/datamodel:key_range",
+        "//backend/stats:system_stats",
+        "@com_google_absl//absl/base:no_destructor",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_googlesql//googlesql/base:status",
+        "@com_google_googlesql//googlesql/public:value",
+    ],
+)
+
+cc_test(
+    name = "user_split_point_store_test",
+    srcs = ["user_split_point_store_test.cc"],
+    deps = [
+        ":in_memory_storage",
+        ":user_split_point_store",
+        "//backend/stats:system_stats",
+        "@com_google_absl//absl/time",
+        "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 cc_test(
     name = "sequence_state_store_test",
     srcs = ["sequence_state_store_test.cc"],
@@ -143,6 +176,7 @@ cc_library(
     deps = [
         "//backend/datamodel:key",
         "@com_google_absl//absl/time",
+        "@com_google_googlesql//googlesql/public:uuid_value",
         "@com_google_googlesql//googlesql/public:value",
     ],
 )
@@ -158,6 +192,7 @@ cc_library(
         "@com_google_googlesql//googlesql/public:json_value",
         "@com_google_googlesql//googlesql/public:numeric_value",
         "@com_google_googlesql//googlesql/public:type",
+        "@com_google_googlesql//googlesql/public:uuid_value",
         "@com_google_googlesql//googlesql/public:value",
     ],
 )
@@ -176,6 +211,7 @@ cc_library(
         "//backend/datamodel:key",
         "//backend/datamodel:key_range",
         "//common:errors",
+        "@com_google_absl//absl/functional:function_ref",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -195,11 +231,14 @@ cc_test(
     deps = [
         ":persistent_storage",
         ":iterator",
+        ":key_codec",
+        ":value_codec",
         "//backend/datamodel:key_range",
         "//tests/common:proto_matchers",
         "@com_github_google_benchmark//:benchmark",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@com_google_googletest//:gtest_main",
@@ -207,6 +246,7 @@ cc_test(
         "@com_google_googlesql//googlesql/public:json_value",
         "@com_google_googlesql//googlesql/public:numeric_value",
         "@com_google_googlesql//googlesql/public:type",
+        "@com_google_googlesql//googlesql/public:uuid_value",
         "@com_google_googlesql//googlesql/public:value",
     ],
 )

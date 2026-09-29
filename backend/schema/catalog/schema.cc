@@ -25,6 +25,7 @@
 #include "googlesql/public/types/type.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "backend/schema/catalog/change_stream.h"
@@ -32,6 +33,7 @@
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/catalog/database_options.h"
 #include "backend/schema/catalog/foreign_key.h"
+#include "backend/schema/catalog/grants.h"
 #include "backend/schema/catalog/index.h"
 #include "backend/schema/catalog/locality_group.h"
 #include "backend/schema/catalog/model.h"
@@ -39,6 +41,7 @@
 #include "backend/schema/catalog/placement.h"
 #include "backend/schema/catalog/property_graph.h"
 #include "backend/schema/catalog/proto_bundle.h"
+#include "backend/schema/catalog/role.h"
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/catalog/table.h"
 #include "backend/schema/catalog/udf.h"
@@ -49,6 +52,9 @@
 #include "backend/schema/parser/ddl_parser.h"
 #include "backend/schema/updater/ddl_type_conversion.h"
 #include "common/constants.h"
+#include "google/protobuf/descriptor.h"
+#include "google/protobuf/message.h"
+#include "google/protobuf/repeated_ptr_field.h"
 #include "re2/re2.h"
 
 namespace google {
@@ -247,11 +253,61 @@ const LocalityGroup* Schema::FindLocalityGroup(
   return itr->second;
 }
 
+const Role* Schema::FindRole(const std::string& role_name) const {
+  auto itr = roles_map_.find(role_name);
+  return itr == roles_map_.end() ? nullptr : itr->second;
+}
+
 ddl::ForeignKey::Action FindForeignKeyOnDeleteAction(const ForeignKey* fk) {
   return fk->on_delete_action() == ForeignKey::Action::kCascade
              ? ddl::ForeignKey::CASCADE
              : ddl::ForeignKey::NO_ACTION;
 }
+
+namespace {
+
+void DumpKeyColumn(const KeyColumn* key_column,
+                   ddl::KeyPartClause& key_part_clause) {
+  key_part_clause.set_key_name(key_column->column()->Name());
+  if (!key_column->is_descending() && key_column->is_nulls_last()) {
+    key_part_clause.set_order(ddl::KeyPartClause::ASC_NULLS_LAST);
+  } else if (key_column->is_descending() && !key_column->is_nulls_last()) {
+    key_part_clause.set_order(ddl::KeyPartClause::DESC_NULLS_FIRST);
+  } else {
+    key_part_clause.set_order(key_column->is_descending()
+                                  ? ddl::KeyPartClause::DESC
+                                  : ddl::KeyPartClause::ASC);
+  }
+}
+
+// Adds the options of `options` that are set as SetOptions.
+void DumpIndexOptions(const google::protobuf::Message& options,
+                      google::protobuf::RepeatedPtrField<ddl::SetOption>&
+                          set_options) {
+  const google::protobuf::Reflection* reflection = options.GetReflection();
+  std::vector<const google::protobuf::FieldDescriptor*> fields;
+  reflection->ListFields(options, &fields);
+  for (const google::protobuf::FieldDescriptor* field : fields) {
+    ddl::SetOption* option = set_options.Add();
+    option->set_option_name(field->name());
+    switch (field->cpp_type()) {
+      case google::protobuf::FieldDescriptor::CPPTYPE_BOOL:
+        option->set_bool_value(reflection->GetBool(options, field));
+        break;
+      case google::protobuf::FieldDescriptor::CPPTYPE_INT64:
+        option->set_int64_value(reflection->GetInt64(options, field));
+        break;
+      case google::protobuf::FieldDescriptor::CPPTYPE_STRING:
+        option->set_string_value(reflection->GetString(options, field));
+        break;
+      default:
+        ABSL_LOG(FATAL) << "Unsupported index option type: "  // Crash OK
+                        << field->full_name();
+    }
+  }
+}
+
+}  // namespace
 
 void Schema::DumpIndex(const Index* index,
                        ddl::CreateIndex& create_index) const {
@@ -263,17 +319,7 @@ void Schema::DumpIndex(const Index* index,
     create_index.set_interleave_in_table(index->parent()->Name());
   }
   for (const KeyColumn* key_column : index->key_columns()) {
-    ddl::KeyPartClause* key_part_clause = create_index.add_key();
-    key_part_clause->set_key_name(key_column->column()->Name());
-    if (!key_column->is_descending() && key_column->is_nulls_last()) {
-      key_part_clause->set_order(ddl::KeyPartClause::ASC_NULLS_LAST);
-    } else if (key_column->is_descending() && !key_column->is_nulls_last()) {
-      key_part_clause->set_order(ddl::KeyPartClause::DESC_NULLS_FIRST);
-    } else {
-      key_part_clause->set_order(key_column->is_descending()
-                                     ? ddl::KeyPartClause::DESC
-                                     : ddl::KeyPartClause::ASC);
-    }
+    DumpKeyColumn(key_column, *create_index.add_key());
   }
   for (const Column* stored_column : index->stored_columns()) {
     ddl::StoredColumnDefinition* stored_column_def =
@@ -283,6 +329,64 @@ void Schema::DumpIndex(const Index* index,
   for (const Column* null_filtered_column : index->null_filtered_columns()) {
     create_index.add_null_filtered_column(null_filtered_column->Name());
   }
+}
+
+void Schema::DumpSearchIndex(
+    const Index* index, ddl::CreateSearchIndex& create_search_index) const {
+  ABSL_CHECK_NE(index, nullptr);  // Crash OK
+  create_search_index.set_index_name(index->Name());
+  create_search_index.set_index_base_name(index->indexed_table()->Name());
+  // The TOKENLIST columns are the keys of a search index.
+  for (const KeyColumn* key_column : index->key_columns()) {
+    create_search_index.add_token_column_definition()
+        ->mutable_token_column()
+        ->set_key_name(key_column->column()->Name());
+  }
+  for (const Column* partition_column : index->partition_by()) {
+    ddl::KeyPartClause* partition_by = create_search_index.add_partition_by();
+    partition_by->set_key_name(partition_column->Name());
+    partition_by->set_order(ddl::KeyPartClause::ASC_NULLS_LAST);
+  }
+  for (const KeyColumn* order_by_column : index->order_by()) {
+    DumpKeyColumn(order_by_column, *create_search_index.add_order_by());
+  }
+  for (const Column* null_filtered_column : index->null_filtered_columns()) {
+    create_search_index.add_null_filtered_column(null_filtered_column->Name());
+  }
+  if (index->parent() != nullptr) {
+    create_search_index.set_interleave_in_table(index->parent()->Name());
+  }
+  for (const Column* stored_column : index->stored_columns()) {
+    create_search_index.add_stored_column_definition()->set_name(
+        stored_column->Name());
+  }
+  DumpIndexOptions(index->search_index_options(),
+                   *create_search_index.mutable_set_options());
+}
+
+void Schema::DumpVectorIndex(
+    const Index* index, ddl::CreateVectorIndex& create_vector_index) const {
+  ABSL_CHECK_NE(index, nullptr);  // Crash OK
+  create_vector_index.set_index_name(index->Name());
+  create_vector_index.set_index_base_name(index->indexed_table()->Name());
+  if (!index->key_columns().empty()) {
+    DumpKeyColumn(index->key_columns().front(),
+                  *create_vector_index.mutable_key());
+  }
+  for (const Column* stored_column : index->stored_columns()) {
+    create_vector_index.add_stored_column_definition()->set_name(
+        stored_column->Name());
+  }
+  for (const Column* partition_column : index->partition_by()) {
+    ddl::KeyPartClause* partition_by = create_vector_index.add_partition_by();
+    partition_by->set_key_name(partition_column->Name());
+    partition_by->set_order(ddl::KeyPartClause::ASC_NULLS_LAST);
+  }
+  for (const Column* null_filtered_column : index->null_filtered_columns()) {
+    create_vector_index.add_null_filtered_column(null_filtered_column->Name());
+  }
+  DumpIndexOptions(index->vector_index_options(),
+                   *create_vector_index.mutable_set_options());
 }
 
 template <typename ColumnDef>
@@ -592,6 +696,10 @@ void DumpLocalityGroup(const LocalityGroup* locality_group,
 
 ddl::DDLStatementList Schema::Dump() const {
   ddl::DDLStatementList ddl_statements;
+  for (const Role* role : roles_) {
+    ddl_statements.add_statement()->mutable_create_role()->set_role_name(
+        role->Name());
+  }
   // Do named schemas first since tables, views, sequences, and indexes rely on
   // them.
   for (const NamedSchema* named_schema : named_schemas_) {
@@ -659,7 +767,16 @@ ddl::DDLStatementList Schema::Dump() const {
   }
 
   for (const auto& [unused_name, index] : index_map_) {
-    if (!index->is_managed()) {
+    if (index->is_managed()) {
+      continue;
+    }
+    if (index->is_search_index()) {
+      DumpSearchIndex(
+          index, *ddl_statements.add_statement()->mutable_create_search_index());
+    } else if (index->is_vector_index()) {
+      DumpVectorIndex(
+          index, *ddl_statements.add_statement()->mutable_create_vector_index());
+    } else {
       DumpIndex(index, *ddl_statements.add_statement()->mutable_create_index());
     }
   }
@@ -681,6 +798,8 @@ ddl::DDLStatementList Schema::Dump() const {
     create_function->set_function_name(view->Name());
     if (view->security() == View::INVOKER) {
       create_function->set_sql_security(ddl::Function::INVOKER);
+    } else if (view->security() == View::DEFINER) {
+      create_function->set_sql_security(ddl::Function::DEFINER);
     }
     create_function->set_sql_body(view->body());
     if (view->body_origin().has_value()) {
@@ -721,6 +840,78 @@ ddl::DDLStatementList Schema::Dump() const {
         *ddl_statements.add_statement()->mutable_create_locality_group());
   }
 
+  ddl_statements.MergeFrom(DumpGrants());
+  return ddl_statements;
+}
+
+ddl::DDLStatementList Schema::DumpGrants() const {
+  ddl::DDLStatementList ddl_statements;
+  if (grants_ == nullptr) {
+    return ddl_statements;
+  }
+  for (const Grants::Membership& membership : grants_->memberships()) {
+    ddl::GrantMembership* grant =
+        ddl_statements.add_statement()->mutable_grant_membership();
+    ddl::Grantee* role = grant->add_role();
+    role->set_type(ddl::Grantee::ROLE);
+    role->set_name(membership.role);
+    ddl::Grantee* grantee = grant->add_grantee();
+    grantee->set_type(ddl::Grantee::ROLE);
+    grantee->set_name(membership.member);
+  }
+
+  // One statement per grantee and object lists all their privileges, in the
+  // order they were granted.
+  std::vector<const Grants::Privilege*> statement_keys;
+  std::vector<ddl::GrantPrivilege*> statements;
+  for (const Grants::Privilege& privilege : grants_->privileges()) {
+    ddl::GrantPrivilege* grant = nullptr;
+    for (int i = 0; i < statement_keys.size(); ++i) {
+      if (statement_keys[i]->object == privilege.object &&
+          statement_keys[i]->object_type == privilege.object_type &&
+          statement_keys[i]->grantee == privilege.grantee) {
+        grant = statements[i];
+        break;
+      }
+    }
+    if (grant == nullptr) {
+      grant = ddl_statements.add_statement()->mutable_grant_privilege();
+      grant->mutable_target()->set_type(privilege.object_type);
+      grant->mutable_target()->add_name(PrivilegeObjectName(privilege));
+      ddl::Grantee* grantee = grant->add_grantee();
+      grantee->set_type(ddl::Grantee::ROLE);
+      grantee->set_name(privilege.grantee);
+      statement_keys.push_back(&privilege);
+      statements.push_back(grant);
+    }
+    // Column-level privileges of a type share one column list.
+    ddl::Privilege* entry = nullptr;
+    for (ddl::Privilege& existing : *grant->mutable_privilege()) {
+      if (existing.type() == privilege.type &&
+          existing.column().empty() == (privilege.column == nullptr)) {
+        entry = &existing;
+        break;
+      }
+    }
+    if (entry == nullptr) {
+      entry = grant->add_privilege();
+      entry->set_type(privilege.type);
+    }
+    if (privilege.column != nullptr) {
+      entry->add_column(privilege.column->Name());
+    }
+  }
+
+  if (grants_->public_default_schema_usage_revoked()) {
+    ddl::RevokePrivilege* revoke =
+        ddl_statements.add_statement()->mutable_revoke_privilege();
+    revoke->add_privilege()->set_type(ddl::Privilege::USAGE);
+    revoke->mutable_target()->set_type(ddl::PrivilegeTarget::SCHEMA);
+    revoke->mutable_target()->add_name("");
+    ddl::Grantee* grantee = revoke->add_grantee();
+    grantee->set_type(ddl::Grantee::ROLE);
+    grantee->set_name(kPublicRole);
+  }
   return ddl_statements;
 }
 
@@ -753,7 +944,14 @@ Schema::Schema(const SchemaGraph* graph,
   synonyms_map_.clear();
   locality_groups_.clear();
   locality_groups_map_.clear();
+  roles_.clear();
+  roles_map_.clear();
   for (const SchemaNode* node : graph_->GetSchemaNodes()) {
+    if (const Role* role = node->As<const Role>(); role != nullptr) {
+      roles_.push_back(role);
+      roles_map_[role->Name()] = role;
+      continue;
+    }
     const View* view = node->As<const View>();
     if (view != nullptr) {
       views_.push_back(view);
@@ -837,6 +1035,11 @@ Schema::Schema(const SchemaGraph* graph,
     const DatabaseOptions* database_options = node->As<DatabaseOptions>();
     if (database_options != nullptr) {
       database_options_ = database_options;
+      continue;
+    }
+
+    if (const Grants* grants = node->As<Grants>(); grants != nullptr) {
+      grants_ = grants;
       continue;
     }
     // Columns need not be stored in the schema, they are just owned by the

@@ -61,6 +61,10 @@ struct ReadArg {
   // enabled when enforcement is implemented elsewhere (e.g. queries have this
   // enforced in QueryValidator).
   bool allow_pending_commit_timestamps = false;
+
+  // SELECT FOR UPDATE and the lock_scanned_ranges=exclusive statement hint
+  // hold exclusive locks on the scanned key ranges.
+  bool lock_scanned_ranges_exclusive = false;
 };
 
 // Streams a debug string representation of ReadArg to out.

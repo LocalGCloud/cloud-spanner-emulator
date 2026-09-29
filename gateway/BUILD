@@ -74,8 +74,10 @@ go_library(
         "//common:instance_go_proto",
         "@grpc_ecosystem_grpc_gateway//runtime:go_default_library",
         "@grpc_ecosystem_grpc_gateway//utilities:go_default_library",
+        "@org_golang_google_genproto_googleapis_rpc//code",
         "@org_golang_google_genproto_googleapis_rpc//errdetails",
         "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//proto",
         "@org_golang_google_protobuf//reflect/protoreflect",
     ],
@@ -84,10 +86,19 @@ go_library(
 go_test(
     name = "gateway_test",
     size = "small",
-    srcs = ["gateway_test.go"],
+    srcs = [
+        "gateway_test.go",
+        "ml_provider_test.go",
+        "udf_provider_test.go",
+    ],
+    data = ["//binaries:emulator_main"],
     embed = [":gateway"],
     deps = [
         "//common:database_go_proto",
+        "//common:instance_go_proto",
+        "//common:spanner_go_proto",
         "@grpc_ecosystem_grpc_gateway//utilities:go_default_library",
+        "@org_golang_google_grpc//:go_default_library",
+        "@org_golang_google_protobuf//types/known/structpb",
     ],
 )

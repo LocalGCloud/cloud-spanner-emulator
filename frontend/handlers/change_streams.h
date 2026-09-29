@@ -17,26 +17,73 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_HANDLERS_CHANGE_STREAMS_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_HANDLERS_CHANGE_STREAMS_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
+#include "google/spanner/v1/result_set.pb.h"
 #include "google/spanner/v1/spanner.pb.h"
 #include "absl/flags/declare.h"
 #include "absl/flags/flag.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "backend/query/change_stream/change_stream_query_validator.h"
 #include "backend/query/query_engine.h"
 #include "frontend/entities/session.h"
+#include "frontend/proto/resume_token.pb.h"
 #include "frontend/server/handler.h"
 
 ABSL_DECLARE_FLAG(bool, cloud_spanner_emulator_test_with_fake_partition_table);
+ABSL_DECLARE_FLAG(absl::Duration,
+                  change_streams_partition_query_chop_interval);
 
 namespace google {
 namespace spanner {
 namespace emulator {
 namespace frontend {
+
+// Streams the change records of a change stream query. Each PartialResultSet
+// that ends on a record boundary gets a resume token with the position after
+// its records. A query that resumes a stream skips the records that the
+// stream returned before the position of its resume token.
+class ChangeRecordSender {
+ public:
+  // Starts streaming at the position of `start`.
+  ChangeRecordSender(ServerStream<spanner_api::PartialResultSet>* stream,
+                     ResumeToken start);
+
+  // Sends `responses`, which hold change records with `record_timestamps`.
+  absl::Status Send(std::vector<spanner_api::PartialResultSet> responses,
+                    absl::Span<const absl::Time> record_timestamps);
+
+  // Sends `responses`, which hold change records at `timestamp`.
+  absl::Status Send(std::vector<spanner_api::PartialResultSet> responses,
+                    absl::Time timestamp);
+
+  // Sends `responses`, which hold a heartbeat record at `timestamp`. A stream
+  // that resumes after it continues after `timestamp`.
+  absl::Status SendHeartbeat(
+      std::vector<spanner_api::PartialResultSet> responses,
+      absl::Time timestamp);
+
+ private:
+  absl::Status SendRecords(std::vector<spanner_api::PartialResultSet> responses,
+                           absl::Span<const absl::Time> record_timestamps,
+                           bool heartbeat);
+
+  ServerStream<spanner_api::PartialResultSet>* stream_;
+  // The position after the records sent so far.
+  ResumeToken position_;
+  // How many more records at `skip_timestamp_micros_` the resumed stream
+  // returned already.
+  int64_t skip_timestamp_micros_;
+  int64_t records_to_skip_;
+};
+
 // Sub-handler for change stream queries. There is no direct grpc request
 // registered with this handler. Rather, if an incoming sql query is detected
 // as a change stream query, we wire the query from the generic
@@ -57,23 +104,26 @@ class ChangeStreamsHandler {
             : metadata.partition_table;
   }
 
+  // Executes the change stream query `request`, which resumes the stream that
+  // returned `resume_token`, if any.
   absl::Status ExecuteChangeStreamQuery(
       const spanner_api::ExecuteSqlRequest* request,
       ServerStream<spanner_api::PartialResultSet>* stream,
-      std::shared_ptr<Session> session);
+      std::shared_ptr<Session> session,
+      const std::optional<ResumeToken>& resume_token);
 
   // Execute change stream initial query when partition token is null.
-  absl::Status ExecuteInitialQuery(
-      std::shared_ptr<Session> session,
-      ServerStream<spanner_api::PartialResultSet>* stream);
+  absl::Status ExecuteInitialQuery(std::shared_ptr<Session> session,
+                                   ChangeRecordSender& sender);
 
   absl::StatusOr<absl::Time> TryGetPartitionTokenEndTime(
       std::shared_ptr<Session> session, absl::Time read_ts) const;
 
-  // Execute change stream partition query when partition token is non null.
-  absl::Status ExecutePartitionQuery(
-      ServerStream<spanner_api::PartialResultSet>* stream,
-      std::shared_ptr<Session> session);
+  // Execute change stream partition query when partition token is non null,
+  // returning the records from `start` on.
+  absl::Status ExecutePartitionQuery(absl::Time start,
+                                     ChangeRecordSender& sender,
+                                     std::shared_ptr<Session> session);
 
   backend::Query ConstructPartitionTablePartitionQuery() const;
 
@@ -89,7 +139,7 @@ class ChangeStreamsHandler {
   absl::Status ProcessDataChangeRecordsAndStreamBack(
       backend::QueryResult& result, bool expect_heartbeat, absl::Time scan_end,
       bool& expect_metadata, absl::Time* last_record_time,
-      ServerStream<spanner_api::PartialResultSet>* stream);
+      ChangeRecordSender& sender);
 
   const backend::ChangeStreamQueryValidator::ChangeStreamMetadata& metadata()
       const {

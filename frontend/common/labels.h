@@ -32,8 +32,8 @@ namespace frontend {
 // Labels are free-form key-value pairs that can be attached to a resource.
 //
 // In Cloud Spanner, labels can be attached to instances and sessions. The
-// emulator will validate the provided labels but does not support filtering
-// using labels in the ListInstances or ListSessions apis.
+// emulator validates the provided labels, and the ListInstances and
+// ListSessions filters can match them (see list_filter.h).
 //
 // For more information about labels and their usage, see https://goo.gl/xmQnxf.
 using Labels = std::map<std::string, std::string>;

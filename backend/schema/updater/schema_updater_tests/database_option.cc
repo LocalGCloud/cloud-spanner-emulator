@@ -79,6 +79,36 @@ TEST_P(DatabaseOptionTest, ValidDefaultLeaderOptionName) {
   }
 }
 
+TEST_P(DatabaseOptionTest, DatabaseOptionsSurviveUnrelatedAlter) {
+  std::unique_ptr<const Schema> schema;
+  if (GetParam() == POSTGRESQL) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        schema,
+        CreateSchema({"ALTER DATABASE db SET spanner.default_leader = 'us-east-1'",
+                      "ALTER DATABASE db SET spanner.version_retention_period TO '2h'"},
+                     /*proto_descriptor_bytes=*/"", /*dialect=*/POSTGRESQL,
+                     /*use_gsql_to_pg_translation=*/false));
+  } else {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        schema,
+        CreateSchema({"ALTER DATABASE db SET OPTIONS "
+                      "(default_leader = 'us-east1')",
+                      "ALTER DATABASE db SET OPTIONS "
+                      "(version_retention_period = '2h')"}));
+  }
+
+  ASSERT_NE(schema->options(), nullptr);
+  EXPECT_EQ(schema->version_retention_period(), "2h");
+  const auto options = schema->options()->options();
+  ASSERT_EQ(options.size(), 2);
+  const auto& leader = options.Get(0);
+  EXPECT_EQ(leader.option_name(),
+            GetParam() == POSTGRESQL ? "spanner.internal.cloud_default_leader"
+                                    : "default_leader");
+  EXPECT_EQ(leader.string_value(),
+            GetParam() == POSTGRESQL ? "us-east-1" : "us-east1");
+}
+
 TEST_P(DatabaseOptionTest, ValidReadLeaseRegionsOptionName) {
   std::unique_ptr<const Schema> schema;
   if (GetParam() == POSTGRESQL) {

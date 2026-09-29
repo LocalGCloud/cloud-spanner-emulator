@@ -38,6 +38,12 @@ absl::Status MutationFromProto(
     const google::protobuf::RepeatedPtrField<google::spanner::v1::Mutation>& mutation_pbs,
     backend::Mutation* mutation);
 
+// Rejects writes whose distinct explicitly written cells exceed Spanner's
+// mutation limit. Index, generated-column, delete, and DML effects are not
+// counted here.
+absl::Status ValidateExplicitWriteCellLimit(const backend::Schema& schema,
+                                            const backend::Mutation& mutation);
+
 }  // namespace frontend
 }  // namespace emulator
 }  // namespace spanner

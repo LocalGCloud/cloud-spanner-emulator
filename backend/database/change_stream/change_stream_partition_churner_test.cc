@@ -25,26 +25,33 @@
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
+#include "absl/flags/declare.h"
 #include "absl/flags/flag.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "backend/access/read.h"
+#include "backend/access/write.h"
 #include "backend/database/database.h"
 #include "backend/datamodel/key_set.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_only_transaction.h"
+#include "backend/transaction/read_write_transaction.h"
 #include "common/clock.h"
 #include "common/feature_flags.h"
 #include "tests/common/scoped_feature_flags_setter.h"
 #include "googlesql/base/status_macros.h"
 
+ABSL_DECLARE_FLAG(bool, cloud_spanner_emulator_disable_cs_retention_check);
+
 namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
+
+using ::googlesql_base::testing::IsOkAndHolds;
 
 constexpr char kDatabaseId[] = "test-db";
 
@@ -255,6 +262,31 @@ class ChangeStreamPartitionChurnerTest : public ::testing::Test {
       s = db_->get_change_stream_partition_churner()->ChurnPartitions(
           change_stream_name);
     } while (!s.ok());
+  }
+
+  // Retries while the deletion aborts on a conflict with a churning thread.
+  absl::Status DeleteExpiredRecords(std::string change_stream_name) {
+    absl::Status s;
+    do {
+      s = db_->get_change_stream_partition_churner()->DeleteExpiredRecords(
+          change_stream_name);
+    } while (absl::IsAborted(s));
+    return s;
+  }
+
+  absl::StatusOr<int> CountDataRecords(std::string change_stream_name) {
+    GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<ReadOnlyTransaction> txn,
+                     db_->CreateReadOnlyTransaction(ReadOnlyOptions()));
+    backend::ReadArg read_arg;
+    read_arg.change_stream_for_data_table = change_stream_name;
+    read_arg.columns = {"partition_token"};
+    read_arg.key_set = KeySet::All();
+    std::unique_ptr<backend::RowCursor> cursor;
+    GOOGLESQL_RETURN_IF_ERROR(txn->Read(read_arg, &cursor));
+    int count = 0;
+    while (cursor->Next()) ++count;
+    GOOGLESQL_RETURN_IF_ERROR(cursor->Status());
+    return count;
   }
 
   Clock clock_;
@@ -533,7 +565,7 @@ TEST_F(ChangeStreamPartitionChurnerTest, ChangeStreamSplitAndMerge) {
 }
 
 TEST_F(ChangeStreamPartitionChurnerTest,
-       MutableKeyRangeChangeStreamNoMoveChurn) {
+       MutableKeyRangeChangeStreamMoveChurn) {
   EmulatorFeatureFlags::Flags flags;
   flags.enable_mutable_key_range_change_stream = true;
   test::ScopedEmulatorFeatureFlagsSetter setter(flags);
@@ -576,29 +608,27 @@ TEST_F(ChangeStreamPartitionChurnerTest,
       absl::GetFlag(FLAGS_change_stream_churn_thread_sleep_interval) * 5);
   ChurnPartitionsForChangeStream(change_stream);
 
-  // Verify that:
-  // - The SPLIT partition did churn (it is now stale).
-  // - The MOVE partition did NOT churn (still active, no children, end time is
-  // null).
+  // Both initial partitions churned: the SPLIT partition split into two
+  // children and the MOVE partition moved its key range to a single child.
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(stale_and_active_partitions,
                        GetChangeStreamPartitions(change_stream, db_.get()));
-
-  // The MOVE partition should still be in active_partitions, and have no
-  // children.
-  bool found_move_partition = false;
+  VerifyStaleAndActivePartitions(stale_and_active_partitions);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TestChurnedPartitions moved_partition,
+      GetPartition(stale_and_active_partitions, move_token));
+  EXPECT_NE(moved_partition.end_time, absl::InfinitePast());
+  ASSERT_EQ(moved_partition.children.size(), 1);
+  const std::string move_child_token = moved_partition.children[0];
+  bool found_move_child = false;
   for (const auto& partition : stale_and_active_partitions.active_partitions) {
-    if (partition.partition_token == move_token) {
-      found_move_partition = true;
-      EXPECT_TRUE(partition.children.empty());
+    if (partition.partition_token == move_child_token) {
+      found_move_child = true;
+      EXPECT_THAT(partition.parents, testing::ElementsAre(move_token));
+      EXPECT_EQ(partition.start_time, moved_partition.end_time);
       EXPECT_EQ(partition.next_churn, "MOVE");
     }
   }
-  EXPECT_TRUE(found_move_partition);
-
-  // The MOVE partition should NOT be in stale_partitions.
-  for (const auto& partition : stale_and_active_partitions.stale_partitions) {
-    EXPECT_NE(partition.partition_token, move_token);
-  }
+  EXPECT_TRUE(found_move_child);
 
   // The SPLIT partition should now be in stale_partitions.
   bool found_split_partition_in_stale = false;
@@ -692,16 +722,66 @@ TEST_F(ChangeStreamPartitionChurnerTest,
   }
   EXPECT_TRUE(found_merged_child);
 
-  // Verify the MOVE partition is STILL active and hasn't churned.
-  found_move_partition = false;
+  // The moved child keeps moving, one child at a time.
+  VerifyStaleAndActivePartitions(stale_and_active_partitions);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      TestChurnedPartitions moved_child,
+      GetPartition(stale_and_active_partitions, move_child_token));
+  ASSERT_EQ(moved_child.children.size(), 1);
+  bool found_moved_again = false;
   for (const auto& partition : stale_and_active_partitions.active_partitions) {
-    if (partition.partition_token == move_token) {
-      found_move_partition = true;
-      EXPECT_TRUE(partition.children.empty());
+    if (partition.partition_token == moved_child.children[0]) {
+      found_moved_again = true;
+      EXPECT_THAT(partition.parents, testing::ElementsAre(move_child_token));
       EXPECT_EQ(partition.next_churn, "MOVE");
     }
   }
-  EXPECT_TRUE(found_move_partition);
+  EXPECT_TRUE(found_moved_again);
+}
+
+TEST_F(ChangeStreamPartitionChurnerTest, DeletesRecordsOlderThanRetention) {
+  absl::SetFlag(&FLAGS_cloud_spanner_emulator_disable_cs_retention_check,
+                true);
+  const std::vector<std::string> statements = {
+      "CREATE CHANGE STREAM short_retention FOR T "
+      "OPTIONS (retention_period = '1s')"};
+  absl::Status backfill_status;
+  int completed_statements;
+  absl::Time commit_ts;
+  absl::Status s;
+  do {
+    s = db_->UpdateSchema(SchemaChangeOperation{.statements = statements},
+                          &completed_statements, &commit_ts, &backfill_status);
+    // A churning transaction may be in progress.
+  } while (absl::IsFailedPrecondition(s) || absl::IsAborted(s));
+  GOOGLESQL_ASSERT_OK(s);
+  absl::SetFlag(&FLAGS_cloud_spanner_emulator_disable_cs_retention_check,
+                false);
+
+  do {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        std::unique_ptr<ReadWriteTransaction> txn,
+        db_->CreateReadWriteTransaction(ReadWriteOptions(), RetryState()));
+    Mutation m;
+    m.AddWriteOp(MutationOpType::kInsert, "T", {"k1", "k2"},
+                 {{googlesql::values::Int64(1), googlesql::values::Int64(2)}});
+    s = txn->Write(m);
+    if (s.ok()) s = txn->Commit();
+  } while (absl::IsAborted(s));
+  GOOGLESQL_ASSERT_OK(s);
+  EXPECT_THAT(CountDataRecords("short_retention"), IsOkAndHolds(1));
+  EXPECT_THAT(CountDataRecords("change_stream_one"), IsOkAndHolds(1));
+
+  // Records within the retention period are kept.
+  GOOGLESQL_ASSERT_OK(DeleteExpiredRecords("short_retention"));
+  EXPECT_THAT(CountDataRecords("short_retention"), IsOkAndHolds(1));
+
+  absl::SleepFor(absl::Seconds(2));
+  GOOGLESQL_ASSERT_OK(DeleteExpiredRecords("short_retention"));
+  GOOGLESQL_ASSERT_OK(DeleteExpiredRecords("change_stream_one"));
+  EXPECT_THAT(CountDataRecords("short_retention"), IsOkAndHolds(0));
+  // The default retention period is one day.
+  EXPECT_THAT(CountDataRecords("change_stream_one"), IsOkAndHolds(1));
 }
 
 }  // namespace backend

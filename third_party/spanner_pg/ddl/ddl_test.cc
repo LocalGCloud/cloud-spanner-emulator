@@ -97,6 +97,158 @@ TEST_F(DdlTest, NoStatement) {
       StatusIs(absl::StatusCode::kInvalidArgument, "No statement found."));
 }
 
+TEST_F(DdlTest, DatabaseRoleDdl) {
+  {
+    auto created = base_helper_.Parser()->ParseBatch(
+        interfaces::ParserParamsBuilder("CREATE ROLE reader").Build());
+    GOOGLESQL_ASSERT_OK(created.global_status());
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        DDLStatementList create_statements,
+        base_helper_.Translator()->Translate(created));
+    ASSERT_THAT(create_statements.statement(), SizeIs(1));
+    EXPECT_EQ(create_statements.statement(0).create_role().role_name(), "reader");
+    EXPECT_THAT(base_helper_.Translator()->Translate(
+                    created, {.enable_role_based_access = false}),
+                StatusIs(absl::StatusCode::kFailedPrecondition,
+                         "Role DDL is not enabled."));
+  }
+
+  {
+    auto dropped = base_helper_.Parser()->ParseBatch(
+        interfaces::ParserParamsBuilder("DROP ROLE reader").Build());
+    GOOGLESQL_ASSERT_OK(dropped.global_status());
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        DDLStatementList drop_statements,
+        base_helper_.Translator()->Translate(dropped));
+    ASSERT_THAT(drop_statements.statement(), SizeIs(1));
+    EXPECT_EQ(drop_statements.statement(0).drop_role().role_name(), "reader");
+  }
+
+
+  {
+    auto with_options = base_helper_.Parser()->ParseBatch(
+        interfaces::ParserParamsBuilder("CREATE ROLE reader WITH LOGIN")
+            .Build());
+    GOOGLESQL_ASSERT_OK(with_options.global_status());
+    EXPECT_THAT(base_helper_.Translator()->Translate(with_options),
+                StatusIs(absl::StatusCode::kFailedPrecondition,
+                         testing::HasSubstr("<WITH> clause is not supported")));
+  }
+
+  {
+    auto multiple_roles = base_helper_.Parser()->ParseBatch(
+        interfaces::ParserParamsBuilder("DROP ROLE reader, writer").Build());
+    GOOGLESQL_ASSERT_OK(multiple_roles.global_status());
+    EXPECT_THAT(base_helper_.Translator()->Translate(multiple_roles),
+                StatusIs(absl::StatusCode::kFailedPrecondition,
+                         testing::HasSubstr("only a single role")));
+  }
+}
+
+TEST_F(DdlTest, GrantAndRevokeDdl) {
+  auto translate = [&](const std::string& sql)
+      -> absl::StatusOr<DDLStatementList> {
+    auto parsed = base_helper_.Parser()->ParseBatch(
+        interfaces::ParserParamsBuilder(sql).Build());
+    if (!parsed.global_status().ok()) {
+      return parsed.global_status();
+    }
+    return base_helper_.Translator()->Translate(parsed);
+  };
+  auto proto = [](const std::string& text) {
+    DDLStatementList statements;
+    ABSL_CHECK(google::protobuf::TextFormat::ParseFromString(
+        text, statements.add_statement()));
+    return statements.DebugString();
+  };
+  auto translated = [&](const std::string& sql) {
+    absl::StatusOr<DDLStatementList> statements = translate(sql);
+    ABSL_CHECK_OK(statements.status());
+    return statements->DebugString();
+  };
+
+  EXPECT_EQ(translated("GRANT SELECT, UPDATE(a, b) ON t, sch.u TO r1, PUBLIC"),
+            proto(R"pb(
+              grant_privilege {
+                privilege { type: SELECT }
+                privilege { type: UPDATE column: "a" column: "b" }
+                target { type: TABLE name: "t" name: "sch.u" }
+                grantee { type: ROLE name: "r1" }
+                grantee { type: ROLE name: "public" }
+              })pb"));
+  EXPECT_EQ(translated("REVOKE DELETE ON TABLE t FROM r1"), proto(R"pb(
+              revoke_privilege {
+                privilege { type: DELETE }
+                target { type: TABLE name: "t" }
+                grantee { type: ROLE name: "r1" }
+              })pb"));
+  EXPECT_EQ(translated("GRANT SELECT ON CHANGE STREAM cs TO r1"), proto(R"pb(
+              grant_privilege {
+                privilege { type: SELECT }
+                target { type: CHANGE_STREAM name: "cs" }
+                grantee { type: ROLE name: "r1" }
+              })pb"));
+  EXPECT_EQ(translated("GRANT EXECUTE ON FUNCTION spanner.read_json_cs TO r1"),
+            proto(R"pb(
+              grant_privilege {
+                privilege { type: EXECUTE }
+                target { type: TABLE_FUNCTION name: "read_json_cs" }
+                grantee { type: ROLE name: "r1" }
+              })pb"));
+  EXPECT_EQ(translated("GRANT USAGE ON SCHEMA public, sch TO r1"), proto(R"pb(
+              grant_privilege {
+                privilege { type: USAGE }
+                target { type: SCHEMA name: "" name: "sch" }
+                grantee { type: ROLE name: "r1" }
+              })pb"));
+  EXPECT_EQ(translated("GRANT SELECT ON ALL TABLES IN SCHEMA sch TO r1"),
+            proto(R"pb(
+              grant_privilege {
+                privilege { type: SELECT }
+                target { type: TABLE all_in_schema: "sch" }
+                grantee { type: ROLE name: "r1" }
+              })pb"));
+  EXPECT_EQ(translated("GRANT UPDATE ON SEQUENCE s TO r1"), proto(R"pb(
+              grant_privilege {
+                privilege { type: UPDATE }
+                target { type: SEQUENCE name: "s" }
+                grantee { type: ROLE name: "r1" }
+              })pb"));
+  EXPECT_EQ(translated("GRANT parent, spanner_info_reader TO child"),
+            proto(R"pb(
+              grant_membership {
+                role { type: ROLE name: "parent" }
+                role { type: ROLE name: "spanner_info_reader" }
+                grantee { type: ROLE name: "child" }
+              })pb"));
+  EXPECT_EQ(translated("REVOKE parent FROM child"), proto(R"pb(
+              revoke_membership {
+                role { type: ROLE name: "parent" }
+                grantee { type: ROLE name: "child" }
+              })pb"));
+
+  EXPECT_THAT(translate("GRANT ALL PRIVILEGES ON t TO r1"),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       "<ALL PRIVILEGES> clause is not supported in <GRANT> "
+                       "statement."));
+  EXPECT_THAT(translate("GRANT SELECT ON t TO r1 WITH GRANT OPTION"),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       "<WITH GRANT OPTION> clause is not supported in "
+                       "<GRANT> statement."));
+  EXPECT_THAT(translate("GRANT TRUNCATE ON t TO r1"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Privilege type truncate is not supported in <GRANT> "
+                       "statement."));
+  EXPECT_THAT(translate("GRANT EXECUTE ON FUNCTION read_json_cs TO r1"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       "Namespace 'spanner' must be specified in <GRANT> "
+                       "statement on functions."));
+  EXPECT_THAT(translate("GRANT SELECT ON t TO CURRENT_USER"),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       "Only role names are supported as grantees in <GRANT> "
+                       "statement."));
+}
+
 TEST_F(DdlTest, DisabledNullsOrderingInvalidInput) {
   const std::string input =
       "CREATE INDEX nulls_test_idx ON Nulls ("
@@ -612,6 +764,84 @@ TEST_F(DdlTest, CreateDatabaseForEmulator) {
   EXPECT_THAT(statements->statement().size(), 1);
   EXPECT_THAT(statements->statement().at(0).create_database().db_name(),
               "test_db");
+}
+
+TEST_F(DdlTest, CreateVectorIndexUsingScann) {
+  const std::string input =
+      "CREATE INDEX vi ON t USING scann (embedding) INCLUDE (data) "
+      "WITH (distance_type = 'COSINE', tree_depth = 3, num_leaves = 1000, "
+      "num_branches = 10) WHERE embedding IS NOT NULL";
+
+  interfaces::ParserBatchOutput parsed_statements =
+      base_helper_.Parser()->ParseBatch(
+          interfaces::ParserParamsBuilder(input).Build());
+  GOOGLESQL_ASSERT_OK(parsed_statements.global_status());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      DDLStatementList statements,
+      base_helper_.Translator()->TranslateForEmulator(parsed_statements));
+  ASSERT_THAT(statements.statement(), SizeIs(1));
+  google::spanner::emulator::backend::ddl::CreateVectorIndex expected;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      R"pb(
+        index_name: "vi"
+        index_base_name: "t"
+        key { key_name: "embedding" }
+        stored_column_definition { name: "data" }
+        null_filtered_column: "embedding"
+        set_options { option_name: "distance_type" string_value: "COSINE" }
+        set_options { option_name: "tree_depth" int64_value: 3 }
+        set_options { option_name: "num_leaves" int64_value: 1000 }
+        set_options { option_name: "num_branches" int64_value: 10 }
+      )pb",
+      &expected));
+  google::spanner::emulator::backend::ddl::CreateVectorIndex actual =
+      statements.statement(0).create_vector_index();
+  // The key order depends on the NULLS ordering options.
+  actual.mutable_key()->clear_order();
+  EXPECT_EQ(actual.DebugString(), expected.DebugString());
+}
+
+TEST_F(DdlTest, CreateVectorIndexRejectsUnsupportedClauses) {
+  for (const std::string input : {
+           "CREATE INDEX vi ON t USING hash (embedding)",
+           "CREATE INDEX vi ON t USING scann (embedding) WITH (bogus = 1)",
+           "CREATE INDEX vi ON t USING scann (embedding) "
+           "WITH (tree_depth = 'two')",
+           "CREATE UNIQUE INDEX vi ON t USING scann (embedding)",
+           "CREATE INDEX vi ON t USING scann (embedding, other)",
+       }) {
+    SCOPED_TRACE(input);
+    interfaces::ParserBatchOutput parsed_statements =
+        base_helper_.Parser()->ParseBatch(
+            interfaces::ParserParamsBuilder(input).Build());
+    GOOGLESQL_ASSERT_OK(parsed_statements.global_status());
+    EXPECT_FALSE(base_helper_.Translator()
+                     ->TranslateForEmulator(parsed_statements)
+                     .ok());
+  }
+}
+
+TEST_F(DdlTest, PrintAlterSearchIndex) {
+  DDLStatementList input;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      R"pb(
+        statement { alter_search_index { index_name: "Idx" add_column: "c1" } }
+        statement { alter_search_index { index_name: "Idx" drop_column: "c1" } }
+        statement {
+          alter_search_index { index_name: "Idx" add_stored_column: "c2" }
+        }
+        statement {
+          alter_search_index { index_name: "Idx" drop_stored_column: "c2" }
+        }
+      )pb",
+      &input));
+  EXPECT_THAT(base_helper_.SchemaPrinter()->PrintDDLStatements(input),
+              IsOkAndHolds(ElementsAre(
+                  "ALTER SEARCH INDEX \"Idx\" ADD COLUMN c1",
+                  "ALTER SEARCH INDEX \"Idx\" DROP COLUMN c1",
+                  "ALTER SEARCH INDEX \"Idx\" ADD INCLUDE COLUMN c2",
+                  "ALTER SEARCH INDEX \"Idx\" DROP INCLUDE COLUMN c2")));
 }
 
 TEST_F(DdlTest, DisableAlterChangeStream) {
@@ -1412,6 +1642,60 @@ TEST_F(DdlTest, PlacementStatementsRoundTrip) {
     EXPECT_EQ(retranslated.DebugString(), translated.DebugString())
         << "Printed statement: " << printed[0];
   }
+}
+
+TEST_F(DdlTest, SearchAndVectorIndexesRoundTrip) {
+  const std::vector<std::string> inputs = {
+      "CREATE SEARCH INDEX albums_idx ON albums (title_tokens, body_tokens)",
+      "CREATE SEARCH INDEX albums_idx ON albums (title_tokens) INCLUDE "
+      "(title, \"Body\") PARTITION BY singer_id ORDER BY release_ts DESC "
+      "WHERE release_ts IS NOT NULL WITH (sort_order_sharding = true, "
+      "disable_automatic_uid_column = false)",
+      "CREATE SEARCH INDEX albums_idx ON albums (title_tokens) ORDER BY "
+      "release_ts INTERLEAVE IN singers",
+      "CREATE INDEX vec_idx ON items USING scann (embedding) WITH "
+      "(distance_type = 'COSINE')",
+      "CREATE INDEX vec_idx ON items USING scann (embedding) INCLUDE (name) "
+      "WITH (distance_type = 'DOT_PRODUCT', tree_depth = 3, num_leaves = 10, "
+      "num_branches = 2) WHERE embedding IS NOT NULL",
+  };
+  for (const std::string& input : inputs) {
+    SCOPED_TRACE(input);
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(DDLStatementList translated,
+                         TranslatePlacementDdl(base_helper_, input));
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        std::vector<std::string> printed,
+        base_helper_.SchemaPrinter()->PrintDDLStatements(translated));
+    ASSERT_THAT(printed, SizeIs(1));
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(DDLStatementList retranslated,
+                         TranslatePlacementDdl(base_helper_, printed[0]));
+    EXPECT_EQ(retranslated.DebugString(), translated.DebugString())
+        << "Printed statement: " << printed[0];
+  }
+}
+
+TEST_F(DdlTest, PrintVectorIndex) {
+  DDLStatementList input;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      R"pb(
+        statement {
+          create_vector_index {
+            index_name: "vec_idx"
+            index_base_name: "items"
+            key { key_name: "embedding" order: ASC_NULLS_LAST }
+            stored_column_definition { name: "Name" }
+            set_options { option_name: "distance_type" string_value: "COSINE" }
+            set_options { option_name: "tree_depth" int64_value: 2 }
+            null_filtered_column: "embedding"
+          }
+        }
+      )pb",
+      &input));
+  EXPECT_THAT(base_helper_.SchemaPrinter()->PrintDDLStatements(input),
+              IsOkAndHolds(ElementsAre(
+                  "CREATE INDEX vec_idx ON items USING scann (embedding) "
+                  "INCLUDE (\"Name\") WITH (distance_type = 'COSINE', "
+                  "tree_depth = 2) WHERE (embedding IS NOT NULL)")));
 }
 
 }  // namespace

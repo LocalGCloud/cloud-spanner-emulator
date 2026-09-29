@@ -2996,6 +2996,426 @@ functions {
 }
 functions {
   mapped_name_path {
+    name_path: "approx_cosine_distance"
+  }
+  postgresql_name_paths {
+    name_path: "spanner"
+    name_path: "approx_cosine_distance"
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50111
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_cosine_distance"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 3802
+        name: "jsonb"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_OR_NAMED
+      name: "options"
+    }
+    oid: 50112
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_cosine_distance"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50113
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_cosine_distance"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 3802
+        name: "jsonb"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_OR_NAMED
+      name: "options"
+    }
+    oid: 50114
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_cosine_distance"
+    }
+    deprecated: false
+  }
+  mode: SCALAR
+}
+functions {
+  mapped_name_path {
+    name_path: "approx_dot_product"
+  }
+  postgresql_name_paths {
+    name_path: "spanner"
+    name_path: "approx_dot_product"
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50115
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_dot_product"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 3802
+        name: "jsonb"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_OR_NAMED
+      name: "options"
+    }
+    oid: 50116
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_dot_product"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50117
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_dot_product"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 3802
+        name: "jsonb"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_OR_NAMED
+      name: "options"
+    }
+    oid: 50118
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_dot_product"
+    }
+    deprecated: false
+  }
+  mode: SCALAR
+}
+functions {
+  mapped_name_path {
+    name_path: "approx_euclidean_distance"
+  }
+  postgresql_name_paths {
+    name_path: "spanner"
+    name_path: "approx_euclidean_distance"
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50119
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_euclidean_distance"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1022
+        name: "_float8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 3802
+        name: "jsonb"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_OR_NAMED
+      name: "options"
+    }
+    oid: 50120
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_euclidean_distance"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50121
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_euclidean_distance"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 701
+      name: "float8"
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1021
+        name: "_float4"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 3802
+        name: "jsonb"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_OR_NAMED
+      name: "options"
+    }
+    oid: 50122
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "approx_euclidean_distance"
+    }
+    deprecated: false
+  }
+  mode: SCALAR
+}
+functions {
+  mapped_name_path {
     name_path: "array_concat"
   }
   postgresql_name_paths {
@@ -3758,6 +4178,36 @@ functions {
     postgresql_name_paths {
       name_path: "spanner"
       name_path: "date"
+    }
+    deprecated: false
+  }
+  mode: SCALAR
+}
+functions {
+  mapped_name_path {
+    name_path: "debug_tokenlist"
+  }
+  postgresql_name_paths {
+    name_path: "spanner"
+    name_path: "debug_tokenlist"
+  }
+  signatures {
+    return_type {
+      oid: 25
+      name: "text"
+    }
+    arguments {
+      type {
+        oid: 50001
+        name: "tokenlist"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50110
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "debug_tokenlist"
     }
     deprecated: false
   }
@@ -10217,7 +10667,8 @@ functions {
 }
 functions {
   mapped_name_path {
-    name_path: "regexp_replace"
+    name_path: "pg"
+    name_path: "textregexreplace"
   }
   postgresql_name_paths {
     name_path: "pg"
@@ -11188,6 +11639,231 @@ functions {
 }
 functions {
   mapped_name_path {
+    name_path: "split_substr"
+  }
+  postgresql_name_paths {
+    name_path: "spanner"
+    name_path: "split_substr"
+  }
+  signatures {
+    return_type {
+      oid: 25
+      name: "text"
+    }
+    arguments {
+      type {
+        oid: 25
+        name: "text"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 25
+        name: "text"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50102
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "split_substr"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 25
+      name: "text"
+    }
+    arguments {
+      type {
+        oid: 25
+        name: "text"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 25
+        name: "text"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    oid: 50103
+    postgresql_name_paths {
+      name_path: "spanner"
+      name_path: "split_substr"
+    }
+    deprecated: false
+  }
+  mode: SCALAR
+}
+functions {
+  mapped_name_path {
+    name_path: "pg"
+    name_path: "generate_array"
+  }
+  postgresql_name_paths {
+    name_path: "pg"
+    name_path: "generate_series"
+  }
+  signatures {
+    return_type {
+      oid: 1016
+      name: "_int8"
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    postgresql_name_paths {
+      name_path: "pg"
+      name_path: "generate_series"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 1016
+      name: "_int8"
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 20
+        name: "int8"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    postgresql_name_paths {
+      name_path: "pg"
+      name_path: "generate_series"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 1231
+      name: "_numeric"
+    }
+    arguments {
+      type {
+        oid: 1700
+        name: "numeric"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1700
+        name: "numeric"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    postgresql_name_paths {
+      name_path: "pg"
+      name_path: "generate_series"
+    }
+    deprecated: false
+  }
+  signatures {
+    return_type {
+      oid: 1231
+      name: "_numeric"
+    }
+    arguments {
+      type {
+        oid: 1700
+        name: "numeric"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1700
+        name: "numeric"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    arguments {
+      type {
+        oid: 1700
+        name: "numeric"
+      }
+      cardinality: REQUIRED
+      named_argument_kind: POSITIONAL_ONLY
+    }
+    postgresql_name_paths {
+      name_path: "pg"
+      name_path: "generate_series"
+    }
+    deprecated: false
+  }
+  mode: SCALAR
+}
+functions {
+  mapped_name_path {
     name_path: "sqrt"
   }
   signatures {
@@ -11756,6 +12432,16 @@ functions {
       name: "token_category"
       default_value: "null::text"
     }
+    arguments {
+      type {
+        oid: 16
+        name: "bool"
+      }
+      cardinality: OPTIONAL
+      named_argument_kind: NAMED_ONLY
+      name: "remove_diacritics"
+      default_value: "null::boolean"
+    }
     oid: 50016
     postgresql_name_paths {
       name_path: "spanner"
@@ -11806,6 +12492,16 @@ functions {
       named_argument_kind: NAMED_ONLY
       name: "token_category"
       default_value: "null::text"
+    }
+    arguments {
+      type {
+        oid: 16
+        name: "bool"
+      }
+      cardinality: OPTIONAL
+      named_argument_kind: NAMED_ONLY
+      name: "remove_diacritics"
+      default_value: "null::boolean"
     }
     oid: 50017
     postgresql_name_paths {
@@ -12104,6 +12800,16 @@ functions {
     }
     arguments {
       type {
+        oid: 16
+        name: "bool"
+      }
+      cardinality: OPTIONAL
+      named_argument_kind: NAMED_ONLY
+      name: "support_relative_search"
+      default_value: "null::boolean"
+    }
+    arguments {
+      type {
         oid: 25
         name: "text"
       }
@@ -12129,6 +12835,16 @@ functions {
       }
       cardinality: OPTIONAL
       named_argument_kind: NAMED_ONLY
+      name: "remove_diacritics"
+      default_value: "null::boolean"
+    }
+    arguments {
+      type {
+        oid: 16
+        name: "bool"
+      }
+      cardinality: OPTIONAL
+      named_argument_kind: NAMED_ONLY
       name: "short_tokens_only_for_anchors"
       default_value: "null::boolean"
     }
@@ -12141,16 +12857,6 @@ functions {
       named_argument_kind: NAMED_ONLY
       name: "language_tag"
       default_value: "null::text"
-    }
-    arguments {
-      type {
-        oid: 16
-        name: "bool"
-      }
-      cardinality: OPTIONAL
-      named_argument_kind: NAMED_ONLY
-      name: "remove_diacritics"
-      default_value: "null::boolean"
     }
     oid: 50018
     postgresql_name_paths {
@@ -12195,6 +12901,16 @@ functions {
     }
     arguments {
       type {
+        oid: 16
+        name: "bool"
+      }
+      cardinality: OPTIONAL
+      named_argument_kind: NAMED_ONLY
+      name: "support_relative_search"
+      default_value: "null::boolean"
+    }
+    arguments {
+      type {
         oid: 25
         name: "text"
       }
@@ -12220,6 +12936,16 @@ functions {
       }
       cardinality: OPTIONAL
       named_argument_kind: NAMED_ONLY
+      name: "remove_diacritics"
+      default_value: "null::boolean"
+    }
+    arguments {
+      type {
+        oid: 16
+        name: "bool"
+      }
+      cardinality: OPTIONAL
+      named_argument_kind: NAMED_ONLY
       name: "short_tokens_only_for_anchors"
       default_value: "null::boolean"
     }
@@ -12232,16 +12958,6 @@ functions {
       named_argument_kind: NAMED_ONLY
       name: "language_tag"
       default_value: "null::text"
-    }
-    arguments {
-      type {
-        oid: 16
-        name: "bool"
-      }
-      cardinality: OPTIONAL
-      named_argument_kind: NAMED_ONLY
-      name: "remove_diacritics"
-      default_value: "null::boolean"
     }
     oid: 50019
     postgresql_name_paths {

@@ -70,10 +70,17 @@ TEST(RemoteUdfEvaluatorTest, EvaluatePseudoRandomRemoteFunction) {
 
 TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionSuccess) {
   absl::StatusOr<googlesql::JSONValue> request_body;
+  std::vector<std::string> request_ids;
   httplib::Server svr;
-  svr.Post("/", [&request_body](const httplib::Request& req,
-                                httplib::Response& res) {
+  svr.Post("/", [&request_body, &request_ids](const httplib::Request& req,
+                                              httplib::Response& res) {
     request_body = googlesql::JSONValue::ParseJSONString(req.body);
+    if (request_body.ok() && request_body->GetConstRef().IsObject() &&
+        request_body->GetConstRef().HasMember("requestId") &&
+        request_body->GetConstRef().GetMember("requestId").IsString()) {
+      request_ids.push_back(std::string(
+          request_body->GetConstRef().GetMember("requestId").GetString()));
+    }
     res.status = 200;
     res.set_content(R"({"replies": [1]})", "application/json");
   });
@@ -95,6 +102,9 @@ TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionSuccess) {
   svr.stop();
   server_thread.join();
 
+  ASSERT_EQ(request_ids.size(), 2);
+  EXPECT_FALSE(request_ids[0].empty());
+  EXPECT_NE(request_ids[0], request_ids[1]);
   GOOGLESQL_ASSERT_OK(request_body);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(googlesql::JSONValue expected_request_body,
                        googlesql::JSONValue::ParseJSONString(R"({
@@ -105,6 +115,8 @@ TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionSuccess) {
     "userDefinedContext":{},
     "requestId":"00000000-0000-0000-0000-000000000000",
     "calls":[[123]]})"));
+  expected_request_body.GetRef().GetMember("requestId").SetString(
+      request_ids.back());
   EXPECT_EQ(request_body->GetConstRef().ToString(),
             expected_request_body.GetConstRef().ToString());
 }
@@ -136,6 +148,30 @@ TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionFailure_badStatus) {
   EXPECT_THAT(evaluator({googlesql::Value::Int64(123)}),
               StatusIs(absl::StatusCode::kFailedPrecondition,
                        HasSubstr("Remote function call failed. Status: 404.")));
+
+  svr.stop();
+  server_thread.join();
+}
+
+TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionFailure_httpErrorMessage) {
+  httplib::Server svr;
+  svr.Post("/", [](const httplib::Request&, httplib::Response& res) {
+    res.status = 400;
+    res.set_content(R"({"errorMessage":"provider rejected 13"})",
+                    "application/json");
+  });
+
+  int port = svr.bind_to_any_port("localhost");
+  std::thread server_thread([&svr]() { svr.listen_after_bind(); });
+  svr.wait_until_ready();
+  absl::SetFlag(&FLAGS_remote_functions_host_port,
+                "localhost:" + std::to_string(port));
+
+  auto evaluator = RemoteUdfEvaluator::BuildEvaluator(
+      "some_endpoint", "SomeFunction", googlesql::types::Int64Type());
+  EXPECT_THAT(evaluator({googlesql::Value::Int64(13)}),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       testing::Eq("provider rejected 13")));
 
   svr.stop();
   server_thread.join();
@@ -177,8 +213,57 @@ TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionFailure_errorMessage) {
     "userDefinedContext":{},
     "requestId":"00000000-0000-0000-0000-000000000000",
     "calls":[[123]]})"));
+  ASSERT_TRUE(request_body->GetConstRef().GetMember("requestId").IsString());
+  expected_request_body.GetRef().GetMember("requestId").SetString(
+      request_body->GetConstRef().GetMember("requestId").GetString());
   EXPECT_EQ(request_body->GetConstRef().ToString(),
             expected_request_body.GetConstRef().ToString());
+}
+
+TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionFailure_invalidJson) {
+  httplib::Server svr;
+  svr.Post("/", [](const httplib::Request&, httplib::Response& res) {
+    res.set_content("not-json", "application/json");
+  });
+
+  int port = svr.bind_to_any_port("localhost");
+  std::thread server_thread([&svr]() { svr.listen_after_bind(); });
+  svr.wait_until_ready();
+  absl::SetFlag(&FLAGS_remote_functions_host_port,
+                "localhost:" + std::to_string(port));
+
+  auto evaluator = RemoteUdfEvaluator::BuildEvaluator(
+      "some_endpoint", "SomeFunction", googlesql::types::Int64Type());
+  EXPECT_THAT(evaluator({googlesql::Value::Int64(123)}),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       testing::AllOf(HasSubstr("invalid JSON"),
+                                      HasSubstr("some_endpoint"))));
+
+  svr.stop();
+  server_thread.join();
+}
+
+TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunctionFailure_invalidErrorMessage) {
+  httplib::Server svr;
+  svr.Post("/", [](const httplib::Request&, httplib::Response& res) {
+    res.set_content(R"({"errorMessage": 7})", "application/json");
+  });
+
+  int port = svr.bind_to_any_port("localhost");
+  std::thread server_thread([&svr]() { svr.listen_after_bind(); });
+  svr.wait_until_ready();
+  absl::SetFlag(&FLAGS_remote_functions_host_port,
+                "localhost:" + std::to_string(port));
+
+  auto evaluator = RemoteUdfEvaluator::BuildEvaluator(
+      "some_endpoint", "SomeFunction", googlesql::types::Int64Type());
+  EXPECT_THAT(evaluator({googlesql::Value::Int64(123)}),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       testing::AllOf(HasSubstr("errorMessage must be a string"),
+                                      HasSubstr("some_endpoint"))));
+
+  svr.stop();
+  server_thread.join();
 }
 
 TEST(RemoteUdfEvaluatorTest, EvaluateRemoteFunction_InvalidHostPort) {

@@ -14,14 +14,18 @@
 // limitations under the License.
 //
 
+#include <algorithm>
 #include <limits>
 #include <map>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/log/absl_log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "common/errors.h"
@@ -29,6 +33,7 @@
 #include "frontend/collections/instance_partition_manager.h"
 #include "frontend/collections/operation_manager.h"
 #include "frontend/common/labels.h"
+#include "frontend/common/list_filter.h"
 #include "frontend/common/uris.h"
 #include "frontend/converters/time.h"
 #include "frontend/entities/instance.h"
@@ -62,7 +67,27 @@ instance_api::InstanceConfig GetEmulatorInstanceConfig(
   config.set_name(absl::StrCat("projects/", project_id, "/instanceConfigs/",
                                kEmulatorInstanceConfig));
   config.set_display_name("Emulator Instance Config");
+  config.set_config_type(instance_api::InstanceConfig::GOOGLE_MANAGED);
   return config;
+}
+
+// Evaluates a ListInstances filter: name, display_name and labels.<key>.
+absl::StatusOr<bool> InstanceMatchesFilter(
+    const ListFilter& filter, const instance_api::Instance& instance) {
+  return filter.Matches([&instance](absl::string_view field,
+                                    absl::string_view op,
+                                    absl::string_view value)
+                            -> absl::StatusOr<bool> {
+    if (absl::ConsumePrefix(&field, "labels.")) {
+      return MatchLabel(instance.labels(), field, op, value);
+    }
+    if (field == "name") return CompareString(instance.name(), value, op);
+    if (field == "display_name" || field == "displayname") {
+      return CompareString(instance.display_name(), value, op);
+    }
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported instance filter field: ", field));
+  });
 }
 
 absl::StatusOr<std::string> CanonicalInstanceConfig(
@@ -101,9 +126,32 @@ absl::Status ListInstanceConfigs(
   if (MakeProjectUri(project_id) != request->parent()) {
     return absl::InvalidArgumentError("Project name must be canonical");
   }
-  *response->add_instance_configs() = GetEmulatorInstanceConfig(project_id);
-  for (const auto& config :
-       ctx->env()->ListCustomInstanceConfigs(request->parent())) {
+  if (!request->page_token().empty()) {
+    absl::string_view token_project, token_id;
+    GOOGLESQL_RETURN_IF_ERROR(ParseInstanceConfigUri(
+        request->page_token(), &token_project, &token_id));
+    if (MakeInstanceConfigUri(token_project, token_id) !=
+            request->page_token() ||
+        token_project != project_id) {
+      return absl::InvalidArgumentError(
+          "Page token must be a canonical instance config in the parent project");
+    }
+  }
+  std::vector<instance_api::InstanceConfig> configs =
+      ctx->env()->ListCustomInstanceConfigs(request->parent());
+  configs.push_back(GetEmulatorInstanceConfig(project_id));
+  std::sort(configs.begin(), configs.end(),
+            [](const auto& left, const auto& right) {
+              return left.name() < right.name();
+            });
+  int32_t page_size = request->page_size();
+  if (page_size <= 0 || page_size > 1000) page_size = 1000;
+  for (const auto& config : configs) {
+    if (config.name() < request->page_token()) continue;
+    if (response->instance_configs_size() >= page_size) {
+      response->set_next_page_token(config.name());
+      break;
+    }
     *response->add_instance_configs() = config;
   }
   return absl::OkStatus();
@@ -142,12 +190,21 @@ absl::Status ListInstances(RequestContext* ctx,
     return absl::InvalidArgumentError("Project name must be canonical");
   }
 
-  // Validate that the page_token provided is a valid instance_uri.
+  GOOGLESQL_ASSIGN_OR_RETURN(const ListFilter filter,
+                             ListFilter::Parse(request->filter()));
+  GOOGLESQL_RETURN_IF_ERROR(
+      InstanceMatchesFilter(filter, instance_api::Instance()).status());
+
+  // Validate that the page_token provided resumes at a valid instance_uri.
+  std::string page_start;
   if (!request->page_token().empty()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        page_start,
+        ParseListPageToken(request->page_token(), request->filter()));
     absl::string_view project_id, instance_id;
     GOOGLESQL_RETURN_IF_ERROR(
-        ParseInstanceUri(request->page_token(), &project_id, &instance_id));
-    if (MakeInstanceUri(project_id, instance_id) != request->page_token() ||
+        ParseInstanceUri(page_start, &project_id, &instance_id));
+    if (MakeInstanceUri(project_id, instance_id) != page_start ||
         MakeProjectUri(project_id) != request->parent()) {
       return absl::InvalidArgumentError(
           "Page token must be a canonical instance in the parent project");
@@ -165,15 +222,21 @@ absl::Status ListInstances(RequestContext* ctx,
   }
 
   // Instances returned from instance manager are sorted by instance_uri and
-  // thus we use instance uri of first instance in next page as next_page_token.
+  // thus the next_page_token resumes at the first matching instance of the
+  // next page.
   for (const auto& instance : instances) {
+    if (instance->instance_uri() < page_start) continue;
+    instance_api::Instance proto;
+    instance->ToProto(&proto);
+    GOOGLESQL_ASSIGN_OR_RETURN(const bool matches,
+                               InstanceMatchesFilter(filter, proto));
+    if (!matches) continue;
     if (response->instances_size() >= page_size) {
-      response->set_next_page_token(instance->instance_uri());
+      response->set_next_page_token(
+          MakeListPageToken(request->filter(), instance->instance_uri()));
       break;
     }
-    if (instance->instance_uri() >= request->page_token()) {
-      instance->ToProto(response->add_instances());
-    }
+    *response->add_instances() = std::move(proto);
   }
   return absl::OkStatus();
 }
@@ -431,6 +494,11 @@ absl::Status UpdateInstance(RequestContext* ctx,
 
   instance_api::Instance instance_proto;
   instance->ToProto(&instance_proto);
+  instance_api::UpdateInstanceMetadata operation_metadata;
+  *operation_metadata.mutable_instance() = instance_proto;
+  *operation_metadata.mutable_start_time() = instance_proto.update_time();
+  *operation_metadata.mutable_end_time() = instance_proto.update_time();
+  operation->SetMetadata(operation_metadata);
   operation->SetResponse(instance_proto);
   operation->ToProto(response);
   if (auto* metadata = ctx->env()->metadata_store(); metadata != nullptr) {
@@ -519,6 +587,26 @@ absl::Status DeleteInstance(RequestContext* ctx,
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::vector<std::shared_ptr<Database>> databases,
       ctx->env()->database_manager()->ListDatabases(request->name()));
+  for (const auto& database : databases) {
+    if (database->enable_drop_protection()) {
+      return absl::FailedPreconditionError(absl::StrCat(
+          "Database has drop protection enabled: ", database->database_uri()));
+    }
+  }
+  MetadataStore* metadata = ctx->env()->metadata_store();
+  if (metadata != nullptr) {
+    const auto instances = metadata->instances();
+    if (auto instance = instances.find(request->name());
+        instance != instances.end()) {
+      for (const auto& [database_id, database] : instance->second.databases) {
+        if (database.enable_drop_protection) {
+          return absl::FailedPreconditionError(absl::StrCat(
+              "Database has drop protection enabled: ", request->name(),
+              "/databases/", database_id));
+        }
+      }
+    }
+  }
   if (!ctx->env()->backup_catalog()->ListBackups(request->name()).empty()) {
     return absl::FailedPreconditionError("Instance still has backups");
   }
@@ -540,7 +628,6 @@ absl::Status DeleteInstance(RequestContext* ctx,
 
   // Commit durable deletion before mutating the live managers. Per-root
   // markers make a crash after metadata publication recoverable at startup.
-  MetadataStore* metadata = ctx->env()->metadata_store();
   std::vector<std::string> marked_databases;
   auto cancel_markers = [&]() {
     absl::Status result = absl::OkStatus();

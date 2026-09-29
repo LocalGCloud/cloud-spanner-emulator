@@ -205,8 +205,12 @@ Catalog::Catalog(
     QueryEvaluator* query_evaluator,
     std::optional<std::string> change_stream_internal_lookup,
     const absl::flat_hash_map<std::string, google::protobuf::Value>&
-        secure_context)
+        secure_context,
+    const bool* select_for_update,
+    const SystemStatsCollector* stats_collector, const AccessPolicy* access)
     : schema_(schema),
+      stats_collector_(stats_collector),
+      access_(access),
       function_catalog_(function_catalog),
       type_factory_(type_factory),
       secure_context_(secure_context) {
@@ -264,12 +268,14 @@ Catalog::Catalog(
     if (SDLObjectName::IsFullyQualifiedName(name)) {
       absl::Status status = AddObjectToNamedSchema(
           std::string(SDLObjectName::GetSchemaName(name)),
-          std::make_unique<QueryableTable>(table, reader, options, this,
-                                           type_factory));
+          std::make_unique<QueryableTable>(
+              table, reader, options, this, type_factory,
+              /*is_synonym=*/false, select_for_update));
       LOG_IF(ERROR, !status.ok()) << status.message();
     } else {
       tables_[table->Name()] = std::make_unique<QueryableTable>(
-          table, reader, options, this, type_factory);
+          table, reader, options, this, type_factory,
+          /*is_synonym=*/false, select_for_update);
     }
 
     std::string synonym_name = table->synonym();
@@ -279,11 +285,13 @@ Catalog::Catalog(
             std::string(SDLObjectName::GetSchemaName(synonym_name)),
             std::make_unique<QueryableTable>(table, reader, options, this,
                                              type_factory,
-                                             /*is_synonym=*/true));
+                                             /*is_synonym=*/true,
+                                             select_for_update));
         LOG_IF(ERROR, !status.ok()) << status.message();
       } else {
         tables_[synonym_name] = std::make_unique<QueryableTable>(
-            table, reader, options, this, type_factory, /*is_synonym=*/true);
+            table, reader, options, this, type_factory, /*is_synonym=*/true,
+            select_for_update);
       }
     }
   }
@@ -348,9 +356,11 @@ Catalog::Catalog(
     auto partition_table = change_stream->change_stream_partition_table();
     auto data_table = change_stream->change_stream_data_table();
     tables_[partition_table->Name()] = std::make_unique<QueryableTable>(
-        partition_table, reader, options, this, type_factory);
+        partition_table, reader, options, this, type_factory,
+        /*is_synonym=*/false, select_for_update);
     tables_[data_table->Name()] = std::make_unique<QueryableTable>(
-        data_table, reader, options, this, type_factory);
+        data_table, reader, options, this, type_factory,
+        /*is_synonym=*/false, select_for_update);
   }
   // Register a table valued function for each active change stream
   for (const auto* change_stream : schema->change_streams()) {
@@ -614,7 +624,8 @@ googlesql::Catalog* Catalog::GetInformationSchemaCatalog() const {
   auto spanner_sys_catalog = GetSpannerSysCatalogWithoutLocks();
   if (!information_schema_catalog_) {
     information_schema_catalog_ = std::make_unique<InformationSchemaCatalog>(
-        InformationSchemaCatalog::kName, schema_, spanner_sys_catalog);
+        InformationSchemaCatalog::kName, schema_, spanner_sys_catalog,
+        access_);
   }
   return information_schema_catalog_.get();
 }
@@ -626,7 +637,8 @@ SpannerSysCatalog* Catalog::GetSpannerSysCatalog() const {
 
 SpannerSysCatalog* Catalog::GetSpannerSysCatalogWithoutLocks() const {
   if (!spanner_sys_catalog_) {
-    spanner_sys_catalog_ = std::make_unique<SpannerSysCatalog>();
+    spanner_sys_catalog_ =
+        std::make_unique<SpannerSysCatalog>(schema_, stats_collector_);
   }
   return spanner_sys_catalog_.get();
 }
@@ -636,7 +648,8 @@ googlesql::Catalog* Catalog::GetPGInformationSchemaCatalog() const {
   auto spanner_sys_catalog = GetSpannerSysCatalogWithoutLocks();
   if (!pg_information_schema_catalog_) {
     pg_information_schema_catalog_ = std::make_unique<InformationSchemaCatalog>(
-        InformationSchemaCatalog::kPGName, schema_, spanner_sys_catalog);
+        InformationSchemaCatalog::kPGName, schema_, spanner_sys_catalog,
+        access_);
   }
   return pg_information_schema_catalog_.get();
 }
@@ -670,8 +683,8 @@ googlesql::Catalog* Catalog::GetPGCatalog() const {
   absl::MutexLock lock(mu_);
   if (schema_->dialect() == database_api::DatabaseDialect::POSTGRESQL) {
     if (!pg_catalog_) {
-      pg_catalog_ =
-          std::make_unique<postgres_translator::PGCatalog>(this, schema_);
+      pg_catalog_ = std::make_unique<postgres_translator::PGCatalog>(
+          this, schema_, access_);
     }
     return pg_catalog_.get();
   }

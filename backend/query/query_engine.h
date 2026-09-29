@@ -20,8 +20,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "google/protobuf/struct.pb.h"
+#include "google/spanner/v1/query_plan.pb.h"
 #include "google/spanner/v1/spanner.pb.h"
 #include "googlesql/public/analyzer_options.h"
 #include "googlesql/public/type.h"
@@ -31,11 +33,14 @@
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/time/time.h"
 #include "backend/query/catalog.h"
 #include "backend/query/change_stream/change_stream_query_validator.h"
 #include "backend/query/function_catalog.h"
 #include "backend/query/query_context.h"
 #include "backend/schema/catalog/schema.h"
+#include "backend/stats/operation_stats.h"
+#include "backend/stats/system_stats_collector.h"
 #include "absl/status/status.h"
 
 namespace google {
@@ -72,6 +77,16 @@ const googlesql::ResolvedReturningClause* GetReturningClause(
     const googlesql::ResolvedStatement* resolved_statement);
 
 // QueryResult specifies the output of a query request.
+// The rows that an `EXPORT DATA OPTIONS (format = "CLOUD_SPANNER", ...)`
+// statement writes back to the database, and how to write them.
+struct SpannerExport {
+  std::string table;
+  // True for write_mode 'upsert_ignore_all', false for 'update_ignore_all'.
+  bool upsert = false;
+  std::vector<std::string> columns;
+  std::vector<std::vector<googlesql::Value>> rows;
+};
+
 struct QueryResult {
   // A row cursor containing the query result rows. It's null for DML requests
   // with returning clause.
@@ -88,6 +103,28 @@ struct QueryResult {
 
   // Query execution elapsed time.
   absl::Duration elapsed_time;
+
+  // CPU time spent on the statement, and the part of the elapsed time spent
+  // analyzing and validating it.
+  absl::Duration cpu_time;
+  absl::Duration plan_creation_time;
+
+  // The rows that the statement read from tables, and the logical size of the
+  // rows it returned.
+  int64_t rows_scanned = 0;
+  int64_t bytes_returned = 0;
+
+  // The tables and columns that the statement read and wrote.
+  AccessFootprint footprint;
+
+  // The query plan, in the PLAN, PROFILE and WITH_PLAN_AND_STATS modes. In
+  // PROFILE mode, it includes execution statistics.
+  std::optional<v1::QueryPlan> query_plan;
+
+  // Set for EXPORT DATA statements that write their rows back to Spanner.
+  // Like production, the write is not part of the statement's transaction, so
+  // the caller performs it.
+  std::optional<SpannerExport> spanner_export;
 
   // Set when placement DML restrictions apply and the statement inserted into
   // or deleted from this placement table. Such a statement must be the only
@@ -163,11 +200,17 @@ class QueryEngine {
     function_catalog_.SetSequenceStateStore(store);
   }
 
+  // Sets the collector that serves the SPANNER_SYS statistics tables.
+  void SetSystemStatsCollector(const SystemStatsCollector* stats_collector) {
+    stats_collector_ = stats_collector;
+  }
+
  private:
   static std::string GetTimeZone(const Schema* schema);
 
   googlesql::TypeFactory* type_factory_;
   FunctionCatalog function_catalog_;
+  const SystemStatsCollector* stats_collector_ = nullptr;
 };
 
 }  // namespace backend

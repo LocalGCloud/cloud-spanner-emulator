@@ -16,7 +16,10 @@
 
 #include "frontend/converters/reads.h"
 
+#include <cstdint>
+#include <iterator>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include "google/protobuf/struct.pb.h"
@@ -38,13 +41,16 @@
 #include "backend/transaction/options.h"
 #include "common/errors.h"
 #include "common/limits.h"
+#include "farmhash.h"
 #include "frontend/converters/chunking.h"
 #include "frontend/converters/keys.h"
 #include "frontend/converters/partition.h"
+#include "frontend/converters/resume_tokens.h"
 #include "frontend/converters/time.h"
 #include "frontend/converters/types.h"
 #include "frontend/converters/values.h"
 #include "frontend/proto/partition_token.pb.h"
+#include "frontend/proto/resume_token.pb.h"
 #include "googlesql/base/status_macros.h"
 #include "absl/status/status.h"
 
@@ -68,6 +74,24 @@ absl::Status ResultSetMetadataToProto(backend::RowCursor* cursor,
         << cursor->ColumnType(i) << " at position " << i << " in row cursor";
   }
   return absl::OkStatus();
+}
+
+// Converts the values of the current row of `cursor` to `row_pb`.
+absl::Status RowToProto(backend::RowCursor* cursor,
+                        google::protobuf::ListValue* row_pb) {
+  for (int i = 0; i < cursor->NumColumns(); ++i) {
+    GOOGLESQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
+                               ValueToProto(cursor->ColumnValue(i)));
+  }
+  return absl::OkStatus();
+}
+
+// Returns the fingerprint of the rows before `row`, `rows_fingerprint`,
+// extended by `row`.
+uint64_t ChainRowFingerprint(uint64_t rows_fingerprint,
+                             const google::protobuf::ListValue& row) {
+  return farmhash::Fingerprint(farmhash::Uint128(
+      rows_fingerprint, farmhash::Fingerprint64(row.SerializeAsString())));
 }
 
 absl::Status ValidateStaleness(absl::Duration staleness) {
@@ -229,11 +253,7 @@ absl::Status RowCursorToResultSetProto(backend::RowCursor* cursor, int limit,
   // Iterate over all rows and populate column values into ResultSet.
   int row_count = 0;
   while (cursor->Next()) {
-    auto* row_pb = result_pb->add_rows();
-    for (int i = 0; i < cursor->NumColumns(); ++i) {
-      GOOGLESQL_ASSIGN_OR_RETURN(*row_pb->add_values(),
-                       ValueToProto(cursor->ColumnValue(i)));
-    }
+    GOOGLESQL_RETURN_IF_ERROR(RowToProto(cursor, result_pb->add_rows()));
     ++row_count;
     if (limit > 0 && limit == row_count) {
       break;
@@ -248,6 +268,81 @@ RowCursorToPartialResultSetProtos(backend::RowCursor* cursor, int limit) {
   spanner_api::ResultSet result_set;
   GOOGLESQL_RETURN_IF_ERROR(RowCursorToResultSetProto(cursor, limit, &result_set));
   return ChunkResultSet(result_set, limits::kMaxStreamingChunkSize);
+}
+
+absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
+RowCursorToPartialResultSetProtos(backend::RowCursor* cursor, int limit,
+                                  ResumeToken start) {
+  ResumeToken::RowPosition& position = *start.mutable_rows();
+  spanner_api::ResultSet rows;
+  GOOGLESQL_RETURN_IF_ERROR(
+      ResultSetMetadataToProto(cursor, rows.mutable_metadata()));
+
+  // Skip the rows that the stream returned before `start`. Rows are returned
+  // in the same order when a stream resumes in the same transaction or at the
+  // same read timestamp, unless the query is not deterministic.
+  uint64_t rows_fingerprint = 0;
+  google::protobuf::ListValue row;
+  for (int64_t i = 0; i < position.row_count(); ++i) {
+    if (!cursor->Next()) {
+      GOOGLESQL_RETURN_IF_ERROR(cursor->Status());
+      return error::ResumedRowsChanged();
+    }
+    row.Clear();
+    GOOGLESQL_RETURN_IF_ERROR(RowToProto(cursor, &row));
+    rows_fingerprint = ChainRowFingerprint(rows_fingerprint, row);
+  }
+  if (rows_fingerprint != position.rows_fingerprint()) {
+    return error::ResumedRowsChanged();
+  }
+
+  // Chunk groups of whole rows, so that responses end on row boundaries where
+  // a stream can resume. Only a row that doesn't fit in one response is split.
+  std::vector<spanner_api::PartialResultSet> responses;
+  int64_t rows_size = 0;
+  auto chunk_rows = [&]() -> absl::Status {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::vector<spanner_api::PartialResultSet> chunks,
+        ChunkResultSet(rows, limits::kMaxStreamingChunkSize));
+    // Only the first response has metadata.
+    if (!responses.empty()) {
+      chunks.front().clear_metadata();
+    }
+    responses.insert(responses.end(), std::make_move_iterator(chunks.begin()),
+                     std::make_move_iterator(chunks.end()));
+    rows.Clear();
+    rows_size = 0;
+    return absl::OkStatus();
+  };
+  std::vector<uint64_t> rows_fingerprints;
+  while ((limit <= 0 || position.row_count() + rows_fingerprints.size() <
+                            static_cast<uint64_t>(limit)) &&
+         cursor->Next()) {
+    row.Clear();
+    GOOGLESQL_RETURN_IF_ERROR(RowToProto(cursor, &row));
+    rows_fingerprint = ChainRowFingerprint(rows_fingerprint, row);
+    rows_fingerprints.push_back(rows_fingerprint);
+    const int64_t row_size = row.ByteSizeLong();
+    if (rows.rows_size() > 0 &&
+        rows_size + row_size > limits::kMaxStreamingChunkSize) {
+      GOOGLESQL_RETURN_IF_ERROR(chunk_rows());
+    }
+    *rows.add_rows() = std::move(row);
+    rows_size += row_size;
+  }
+  GOOGLESQL_RETURN_IF_ERROR(chunk_rows());
+
+  const int64_t resumed_rows = position.row_count();
+  const std::vector<int64_t> completed_rows =
+      CompletedRows(responses, cursor->NumColumns());
+  for (int i = 0; i < responses.size(); ++i) {
+    if (completed_rows[i] > 0) {
+      position.set_row_count(resumed_rows + completed_rows[i]);
+      position.set_rows_fingerprint(rows_fingerprints[completed_rows[i] - 1]);
+      responses[i].set_resume_token(start.SerializeAsString());
+    }
+  }
+  return responses;
 }
 
 }  // namespace frontend

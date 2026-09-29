@@ -42,6 +42,13 @@ namespace spanner {
 namespace emulator {
 namespace frontend {
 
+namespace {
+
+// The longest commit delay that a commit request can ask for.
+constexpr absl::Duration kMaxCommitDelay = absl::Milliseconds(500);
+
+}  // namespace
+
 // Begins a new transaction.
 absl::Status BeginTransaction(
     RequestContext* ctx, const spanner_api::BeginTransactionRequest* request,
@@ -56,6 +63,7 @@ absl::Status BeginTransaction(
       std::shared_ptr<Transaction> txn,
       session->CreateMultiUseTransaction(
           request->options(), Session::TransactionActivation::kInitializeOnly));
+  txn->SetTransactionTag(request->request_options().transaction_tag());
 
   // Populate transaction proto in response.
   GOOGLESQL_ASSIGN_OR_RETURN(*response, txn->ToProto());
@@ -88,6 +96,17 @@ REGISTER_GRPC_HANDLER(Spanner, BeginTransaction);
 absl::Status Commit(RequestContext* ctx,
                     const spanner_api::CommitRequest* request,
                     spanner_api::CommitResponse* response) {
+  // The emulator commits immediately, but rejects the delays that Cloud
+  // Spanner rejects.
+  if (request->has_max_commit_delay()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(absl::Duration max_commit_delay,
+                     DurationFromProto(request->max_commit_delay()));
+    if (max_commit_delay < absl::ZeroDuration() ||
+        max_commit_delay > kMaxCommitDelay) {
+      return error::InvalidMaxCommitDelay(max_commit_delay);
+    }
+  }
+
   // Get session information.
   GOOGLESQL_ASSIGN_OR_RETURN(std::shared_ptr<Session> session,
                    GetSession(ctx, request->session()));
@@ -109,6 +128,7 @@ absl::Status Commit(RequestContext* ctx,
   }
 
   GOOGLESQL_ASSIGN_OR_RETURN(std::shared_ptr<Transaction> txn, maybe_txn);
+  txn->SetTransactionTag(request->request_options().transaction_tag());
 
   // Wrap all operations on this transaction so they are atomic .
   return txn->GuardedCall(Transaction::OpType::kCommit, [&]() -> absl::Status {
@@ -126,18 +146,29 @@ absl::Status Commit(RequestContext* ctx,
       return error::CannotCommitAfterRollback();
     }
 
-    // Commit should be indempotent.
-    if (txn->IsCommitted()) {
+    // Returns the commit timestamp and, when requested, commit statistics.
+    auto set_commit_response = [&]() -> absl::Status {
       GOOGLESQL_ASSIGN_OR_RETURN(absl::Time commit_timestamp, txn->GetCommitTimestamp());
       GOOGLESQL_ASSIGN_OR_RETURN(*response->mutable_commit_timestamp(),
                        TimestampToProto(commit_timestamp));
+      if (request->return_commit_stats()) {
+        GOOGLESQL_ASSIGN_OR_RETURN(int64_t mutation_count, txn->GetMutationCount());
+        response->mutable_commit_stats()->set_mutation_count(mutation_count);
+      }
       return absl::OkStatus();
+    };
+
+    // Commit should be indempotent.
+    if (txn->IsCommitted()) {
+      return set_commit_response();
     }
 
     // Process mutations and write to transaction store.
     backend::Mutation mutation;
     GOOGLESQL_RETURN_IF_ERROR(
         MutationFromProto(*txn->schema(), request->mutations(), &mutation));
+    GOOGLESQL_RETURN_IF_ERROR(
+        ValidateExplicitWriteCellLimit(*txn->schema(), mutation));
     GOOGLESQL_RETURN_IF_ERROR(txn->Write(mutation));
 
     if (txn->IsReadWrite() && session->multiplexed() && !is_single_use &&
@@ -149,12 +180,7 @@ absl::Status Commit(RequestContext* ctx,
 
     // Actually commit the request.
     GOOGLESQL_RETURN_IF_ERROR(txn->Commit());
-
-    // Return commit timestamp to user.
-    GOOGLESQL_ASSIGN_OR_RETURN(absl::Time commit_timestamp, txn->GetCommitTimestamp());
-    GOOGLESQL_ASSIGN_OR_RETURN(*response->mutable_commit_timestamp(),
-                     TimestampToProto(commit_timestamp));
-    return absl::OkStatus();
+    return set_commit_response();
   });
 }
 REGISTER_GRPC_HANDLER(Spanner, Commit);

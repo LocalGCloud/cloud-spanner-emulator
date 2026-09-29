@@ -32,6 +32,7 @@ namespace search {
 
 absl::StatusOr<googlesql::Value> BoolTokenizer::Tokenize(
     absl::Span<const googlesql::Value> args) {
+  if (args[0].is_null()) return googlesql::Value::NullTokenList();
   return TokenListFromStrings({std::string(kBoolTokenizer)});
 }
 

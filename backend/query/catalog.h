@@ -46,6 +46,7 @@
 #include "backend/query/queryable_table.h"
 #include "backend/query/queryable_view.h"
 #include "backend/query/spanner_sys_catalog.h"
+#include "backend/schema/catalog/access_policy.h"
 #include "backend/schema/catalog/schema.h"
 #include "common/constants.h"
 
@@ -63,7 +64,12 @@ class PGFunctionCatalog;
 class Catalog : public googlesql::EnumerableCatalog {
  public:
   // 'reader' can be nullptr unless CreateEvaluatorTableIterator is called
-  // on tables in the catalog.
+  // on tables in the catalog. The SPANNER_SYS statistics tables are empty
+  // unless 'stats_collector' is set. 'access' filters the rows of the
+  // information schema for a database role; nullptr shows all rows. If
+  // 'select_for_update' is set, it points to whether the statement locks the
+  // ranges it scans exclusively (FOR UPDATE or the lock_scanned_ranges=exclusive
+  // hint) and must outlive evaluation.
   Catalog(
       const Schema* schema, const FunctionCatalog* function_catalog,
       googlesql::TypeFactory* type_factory,
@@ -73,7 +79,10 @@ class Catalog : public googlesql::EnumerableCatalog {
       RowReader* reader = nullptr, QueryEvaluator* query_evaluator = nullptr,
       std::optional<std::string> change_stream_internal_lookup = std::nullopt,
       const absl::flat_hash_map<std::string, google::protobuf::Value>&
-          secure_context = {});
+          secure_context = {},
+      const bool* select_for_update = nullptr,
+      const SystemStatsCollector* stats_collector = nullptr,
+      const AccessPolicy* access = nullptr);
 
   std::string FullName() const override {
     // The name of the root catalog is "".
@@ -176,6 +185,12 @@ class Catalog : public googlesql::EnumerableCatalog {
 
   // The backend schema (which is the default schema in this catalog).
   const Schema* schema_ = nullptr;
+
+  // Serves the SPANNER_SYS statistics tables. May be null.
+  const SystemStatsCollector* stats_collector_ = nullptr;
+
+  // The privileges that filter the information schema, or nullptr.
+  const AccessPolicy* access_ = nullptr;
 
   // Tables available in the default schema.
   CaseInsensitiveStringMap<std::unique_ptr<const QueryableTable>> tables_;

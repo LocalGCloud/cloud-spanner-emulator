@@ -26,9 +26,11 @@
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/time/time.h"
 #include "frontend/common/uris.h"
 #include "frontend/entities/session.h"
 #include "tests/common/proto_matchers.h"
+#include "grpcpp/server_context.h"
 
 namespace google {
 namespace spanner {
@@ -119,6 +121,14 @@ TEST_F(SessionExistenceTest, WrongInstanceId) {
               googlesql_base::testing::StatusIs(
                   absl::StatusCode::kNotFound,
                   testing::MatchesRegex(".*Instance not found.*")));
+}
+
+TEST(RequestContextTest, DeadlineIsInfiniteWithoutCallDeadline) {
+  EXPECT_EQ(RequestContext(/*env=*/nullptr, /*grpc=*/nullptr).deadline(),
+            absl::InfiniteFuture());
+  grpc::ServerContext grpc_context;
+  EXPECT_EQ(RequestContext(/*env=*/nullptr, &grpc_context).deadline(),
+            absl::InfiniteFuture());
 }
 
 }  // namespace

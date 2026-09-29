@@ -401,6 +401,21 @@ ForwardTransformer::BuildGsqlResolvedFunctionCall(
                                     std::move(argument_list));
   }
 
+  // GoogleSQL has no NOT LIKE function, so `string !~~ pattern` (which is also
+  // how NOT LIKE ... ESCAPE is parsed) becomes NOT (string ~~ pattern).
+  if (funcid == F_TEXTNLIKE) {
+    GOOGLESQL_ASSIGN_OR_RETURN(FuncExpr * like,
+                     internal::makeFuncExpr(F_TEXTLIKE, BOOLOID, args,
+                                            COERCE_EXPLICIT_CALL));
+    List* not_args;
+    GOOGLESQL_ASSIGN_OR_RETURN(not_args,
+                     CheckedPgListMake1(PostgresCastToExpr(like)));
+    Expr* not_expr = makeBoolExpr(NOT_EXPR, not_args, /*location=*/-1);
+    return BuildGsqlResolvedBoolFunctionCall(
+        *internal::PostgresCastNode(BoolExpr, not_expr),
+        expr_transformer_info);
+  }
+
   // Check if there is a custom error message for this function.
   GOOGLESQL_RETURN_IF_ERROR(
       catalog_adapter_->GetEngineSystemCatalog()->GetCustomErrorForProc(
@@ -435,7 +450,8 @@ ForwardTransformer::BuildGsqlResolvedFunctionCall(
       // b/455382891 for more context. Basically, we are transforming
       // `textlike(arg1, like_escape(arg2, '\'))` to `textlike(arg1, arg2)`. If
       // the escape character is not '\', we will return an error.
-      if ((funcid == F_TEXTLIKE || funcid == F_TEXTICLIKE) &&
+      if ((funcid == F_TEXTLIKE || funcid == F_TEXTICLIKE ||
+           funcid == F_TEXTICNLIKE) &&
           list_length(args) == 2) {
         // The first argument of `textlike` is T_Var and its second
         // argument can be a T_Const or T_FuncExpr.

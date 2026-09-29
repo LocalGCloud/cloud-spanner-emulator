@@ -19,6 +19,8 @@
 
 #include <string>
 
+#include "absl/time/time.h"
+
 namespace google {
 namespace spanner {
 namespace emulator {
@@ -45,6 +47,13 @@ bool fault_injection_enabled();
 // once.
 bool disable_query_null_filtered_index_check();
 
+// If true, the SPANNER_SYS statistics tables also show the interval that is
+// still in progress. Production Cloud Spanner shows only intervals that have
+// ended, so statistics appear up to one interval after an operation.
+bool spanner_sys_expose_open_interval();
+
+void set_spanner_sys_expose_open_interval(bool expose);
+
 // If true, read-write transactions enforce the production geo-partitioning
 // (placement) DML limits: an INSERT or DELETE on a placement table must be the
 // only statement in its transaction, and WHERE clauses may reference only the
@@ -53,14 +62,24 @@ bool enforce_placement_dml_restrictions();
 
 void set_enforce_placement_dml_restrictions(bool enforce);
 
-// The probability that the emulator will try to abort the current transaction
-// if a new transaction is requested. A higher value gives higher priority to
-// new transactions. A lower value gives higher priority to the current
-// transaction. A value of zero means that the emulator will never abort the
-// current transaction.
+// The probability that a transaction that requests a lock held by an older
+// transaction tries to abort that transaction instead of waiting for it. The
+// attempt succeeds only if the older transaction is not executing a request.
+// A higher value gives higher priority to new transactions. A value of zero
+// means that locks follow wound-wait: a younger transaction always waits for
+// an older one. Requests that cannot wait, such as schema changes, abort the
+// holder with this probability or abort themselves.
 int abort_current_transaction_probability();
 
 void set_abort_current_transaction_probability(int probability);
+
+// How long a read-write transaction waits for a lock that an older transaction
+// holds before it aborts. An older transaction never waits for a younger one:
+// it aborts (wounds) the younger holder instead. Zero means that a transaction
+// that requests a conflicting lock aborts at once instead of waiting.
+absl::Duration lock_wait_timeout();
+
+void set_lock_wait_timeout_ms(int milliseconds);
 
 // Returns the directory path for persistent data storage.
 // When empty (default), the emulator uses in-memory storage.
@@ -76,6 +95,13 @@ std::string data_dir();
 // database that fails to restore is left in place (default, so an operator
 // can inspect it) or cleaned up automatically.
 bool repair_corrupted_databases();
+
+// How often each database deletes the rows that its row deletion policies
+// (TTL) have expired. A zero or negative interval disables the background
+// deletion.
+absl::Duration row_deletion_policy_sweep_interval();
+
+void set_row_deletion_policy_sweep_interval_seconds(int seconds);
 
 }  // namespace config
 }  // namespace emulator

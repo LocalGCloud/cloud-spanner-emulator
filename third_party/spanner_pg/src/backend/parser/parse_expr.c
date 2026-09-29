@@ -1428,6 +1428,35 @@ transformFuncCall(ParseState *pstate, FuncCall *fn)
 	List	   *targs;
 	ListCell   *args;
 
+	// SPANGRES BEGIN
+	// Spanner documents pg.ilike(string, pattern) and
+	// pg.not_ilike(string, pattern) as function forms of the ILIKE and
+	// NOT ILIKE operators.
+	if (list_length(fn->funcname) == 2 && list_length(fn->args) == 2 &&
+		strcmp(strVal(linitial(fn->funcname)), "pg") == 0 &&
+		fn->agg_order == NIL && fn->agg_filter == NULL && fn->over == NULL &&
+		!fn->agg_within_group && !fn->agg_star && !fn->agg_distinct &&
+		!fn->func_variadic &&
+		!IsA(linitial(fn->args), NamedArgExpr) &&
+		!IsA(lsecond(fn->args), NamedArgExpr))
+	{
+		const char *funcname = strVal(lsecond(fn->funcname));
+		const char *opname = NULL;
+
+		if (strcmp(funcname, "ilike") == 0)
+			opname = "~~*";
+		else if (strcmp(funcname, "not_ilike") == 0)
+			opname = "!~~*";
+		if (opname != NULL)
+			return transformExprRecurse(pstate,
+										(Node *) makeSimpleA_Expr(AEXPR_ILIKE,
+																  opname,
+																  linitial(fn->args),
+																  lsecond(fn->args),
+																  fn->location));
+	}
+	// SPANGRES END
+
 	/* Transform the list of arguments ... */
 	targs = NIL;
 	foreach(args, fn->args)

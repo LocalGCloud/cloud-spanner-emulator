@@ -25,4 +25,28 @@ OPTIONS(distance_type = 'COSINE', tree_depth = 2);
 CREATE INDEX index2 ON Base(MyData);
 ===
 @Dialect=POSTGRESQL
-# The test suite does not currently test the POSTGRESQL dialect.
+CREATE TABLE base (
+  mykey bigint NOT NULL PRIMARY KEY,
+  mydata varchar,
+  embedding float4[] VECTOR LENGTH 2,
+  embedding2 float4[] VECTOR LENGTH 2,
+  embedding3 float8[] VECTOR LENGTH 2
+);
+CREATE INDEX vec_index ON base USING scann (embedding)
+WITH (distance_type = 'COSINE', tree_depth = 2)
+WHERE embedding IS NOT NULL;
+CREATE INDEX vec_index_dot_product ON base USING scann (embedding)
+WITH (distance_type = 'DOT_PRODUCT', tree_depth = 3, num_leaves = 10,
+      num_branches = 2)
+WHERE embedding IS NOT NULL;
+CREATE INDEX vec_index_euclidean ON base USING scann (embedding2)
+WITH (distance_type = 'EUCLIDEAN', tree_depth = 2)
+WHERE embedding2 IS NOT NULL;
+CREATE INDEX vec_index_store ON base USING scann (embedding)
+INCLUDE (mydata)
+WITH (distance_type = 'COSINE', tree_depth = 2)
+WHERE embedding IS NOT NULL;
+CREATE INDEX vec_index_double ON base USING scann (embedding3)
+WITH (distance_type = 'COSINE', tree_depth = 2)
+WHERE embedding3 IS NOT NULL;
+CREATE INDEX index2 ON base(mydata);

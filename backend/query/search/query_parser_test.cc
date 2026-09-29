@@ -220,6 +220,17 @@ TEST(RQueryParserTest, AlphaNumeric) {
   TestParseRQuery("2panner-c10ud-4mulator", "(p 2panner c10ud 4mulator)");
 }
 
+TEST(RQueryParserTest, UnicodeTerms) {
+  TestParseRQuery("Café crème", "(a café crème)");
+  TestParseRQuery("\"Ünïcode Wörds\" | Straße", "(o (p ünïcode wörds) straße)");
+  // Word boundaries split text without spaces into words, and non-ASCII
+  // punctuation separates terms.
+  TestParseRQuery("東京タワー", "(a 東京 タワー)");
+  TestParseRQuery("東京、大阪", "(a 東京 大阪)");
+  TestParseRQuery("Tokyo東京", "(a tokyo 東京)");
+  TestParseRQuery("\x01", "");
+}
+
 TEST(RQueryParserTest, Capital) {
   TestParseRQuery("CLOUD EMULATOR", "(a cloud emulator)");
   TestParseRQuery("CLOud | emulaTOR", "(o cloud emulator)");
@@ -239,9 +250,6 @@ TEST(RQueryParserTest, ParsingError) {
   TestParseFailure("-(cloud spanner) | emulator",
                    "Using parentheses to group query terms is not supported in "
                    "rquery parser");
-
-  // Not support query non-ascii unicode string yet.
-  TestParseFailure("谷歌", "Encountered error");
 }
 
 TEST(RQueryParserTest, EmptyQuery) { TestParseRQuery("", ""); }

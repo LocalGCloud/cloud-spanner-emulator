@@ -39,6 +39,7 @@ namespace {
 using testing::ContainsRegex;
 using testing::HasSubstr;
 using testing::Matcher;
+using googlesql_base::testing::IsOkAndHolds;
 using googlesql_base::testing::StatusIs;
 
 class SearchTest
@@ -143,11 +144,51 @@ class SearchTest
 
 INSTANTIATE_TEST_SUITE_P(
     PerDialectSearchTests, SearchTest,
-    testing::Values(
-        database_api::DatabaseDialect::GOOGLE_STANDARD_SQL),
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    database_api::DatabaseDialect::POSTGRESQL),
     [](const testing::TestParamInfo<SearchTest::ParamType>& info) {
       return database_api::DatabaseDialect_Name(info.param);
     });
+
+TEST_P(SearchTest, NullTokenizerInputsReturnSqlNull) {
+  if (!IsGoogleStandardSql()) {
+    EXPECT_THAT(Query(R"sql(SELECT spanner.token(null::text) IS NULL,
+        spanner.tokenize_bool(null::bool) IS NULL,
+        spanner.tokenize_fulltext(null::text) IS NULL,
+        spanner.tokenize_fulltext(null::text[]) IS NULL,
+        spanner.tokenize_jsonb(null::jsonb) IS NULL,
+        spanner.tokenize_ngrams(null::text) IS NULL,
+        spanner.tokenize_number(null::bigint) IS NULL,
+        spanner.tokenize_substring(null::text) IS NULL,
+        spanner.tokenlist_concat(null::spanner.tokenlist[]) IS NULL)sql"),
+                IsOkAndHoldsRows(
+                    {{true, true, true, true, true, true, true, true, true}}));
+    EXPECT_THAT(Query(R"sql(SELECT spanner.tokenize_fulltext(''::text) IS NULL,
+        spanner.tokenize_jsonb('null'::jsonb) IS NULL)sql"),
+                IsOkAndHoldsRows({{false, false}}));
+    return;
+  }
+  const std::vector<std::string> expressions = {
+      "TOKEN(CAST(NULL AS STRING))",
+      "TOKENIZE_BOOL(CAST(NULL AS BOOL))",
+      "TOKENIZE_FULLTEXT(CAST(NULL AS STRING))",
+      "TOKENIZE_FULLTEXT(CAST(NULL AS ARRAY<STRING>))",
+      "TOKENIZE_JSON(CAST(NULL AS JSON))",
+      "TOKENIZE_NGRAMS(CAST(NULL AS STRING))",
+      "TOKENIZE_NUMBER(CAST(NULL AS INT64))",
+      "TOKENIZE_SUBSTRING(CAST(NULL AS STRING))",
+      "TOKENLIST_CONCAT(CAST(NULL AS ARRAY<TOKENLIST>))",
+  };
+  for (const std::string& expression : expressions) {
+    SCOPED_TRACE(expression);
+    EXPECT_THAT(Query(absl::StrCat("SELECT ", expression, " IS NULL")),
+                IsOkAndHoldsRows({{true}}));
+  }
+  EXPECT_THAT(Query("SELECT TOKENIZE_FULLTEXT('') IS NULL"),
+              IsOkAndHoldsRows({{false}}));
+  EXPECT_THAT(Query("SELECT TOKENIZE_JSON(JSON 'null') IS NULL"),
+              IsOkAndHoldsRows({{false}}));
+}
 
 TEST_P(SearchTest, SearchFunctionSupportOptionalArguments) {
   std::string query1 = R"sql(
@@ -237,6 +278,38 @@ TEST_P(SearchTest, SearchFunctionDefaultDialect) {
           ORDER BY albumid ASC)sql";
   EXPECT_THAT(Query(GetSqlQueryString(query)),
               IsOkAndHoldsRows({{1}, {2}, {4}, {7}}));
+}
+
+TEST_P(SearchTest, TokenizerOptionsAffectSearchQueries) {
+  EXPECT_THAT(
+      Query(GetSqlQueryString(R"sql(SELECT albumid FROM albums WHERE albumid = 0
+                  AND SEARCH(TOKENIZE_FULLTEXT('Crème',
+                                               remove_diacritics => TRUE),
+                             'crème'))sql")),
+      IsOkAndHoldsRows({{0}}));
+  if (!IsGoogleStandardSql()) {
+    GTEST_SKIP() << "The other options are covered for GoogleSQL only.";
+  }
+  EXPECT_THAT(
+      Query(R"sql(SELECT albumid FROM albums WHERE albumid = 0
+                  AND SEARCH(TOKENIZE_FULLTEXT('<h1>Café</h1>',
+                                               content_type => 'text/html'),
+                             'café', dialect => 'words'))sql"),
+      IsOkAndHoldsRows({{0}}));
+  EXPECT_THAT(
+      Query(R"sql(SELECT albumid FROM albums WHERE albumid = 0
+                  AND SEARCH_SUBSTRING(TOKENIZE_SUBSTRING('Café',
+                                              remove_diacritics => TRUE),
+                                       'càfe'))sql"),
+      IsOkAndHoldsRows({{0}}));
+  EXPECT_THAT(
+      Query(R"sql(SELECT albumid FROM albums WHERE albumid = 0
+                  AND SEARCH_NGRAMS(TOKENIZE_NGRAMS('Café',
+                                            ngram_size_min => 4,
+                                            ngram_size_max => 4,
+                                            remove_diacritics => TRUE),
+                                     'càfe', min_ngrams => 1))sql"),
+      IsOkAndHoldsRows({{0}}));
 }
 
 TEST_P(SearchTest, SearchFunctionRQueryDialect) {
@@ -1037,10 +1110,8 @@ TEST_P(SearchTest, ScoreFunctionWrongArguments) {
           WHERE SCORE(summary_tokens, "top", "en-us") >= 1
             AND userid = 1
           ORDER BY albumid ASC)sql";
-  auto expected_error = dialect_ == database_api::DatabaseDialect::POSTGRESQL
-                            ? absl::StatusCode::kNotFound
-                            : absl::StatusCode::kInvalidArgument;
-  EXPECT_THAT(Query(GetSqlQueryString(query)), StatusIs(expected_error));
+  EXPECT_THAT(Query(GetSqlQueryString(query)),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_P(SearchTest, ScoreFunctionDefaultDialectArgument) {
@@ -1086,6 +1157,70 @@ TEST_P(SearchTest, ScoreFunctionInvalidDialect) {
   EXPECT_THAT(Query(GetSqlQueryString(query)),
               StatusIs(absl::StatusCode::kInvalidArgument,
                        HasSubstr("Invalid dialect: invalid_dialect")));
+}
+
+TEST_P(SearchTest, ScoreFunctionSupportsOptionsWithLocalSemantics) {
+  const std::string options_arg =
+      IsGoogleStandardSql() ? "options=>JSON '$0'" : "options=>'$0'::jsonb";
+  for (const std::string& options :
+       {std::string(R"({"version": 2})"),
+        std::string(R"({"token_category_weights": {"title": 2.0}})")}) {
+    std::string query = absl::Substitute(
+        R"sql(
+      SELECT albumid
+      FROM albums
+      WHERE userid = 1 AND SEARCH(summary_tokens, 'top')
+        AND SCORE(summary_tokens, 'top', $0) > 0
+      ORDER BY albumid)sql",
+        absl::Substitute(options_arg, options));
+    EXPECT_THAT(Query(GetSqlQueryString(query)),
+                IsOkAndHoldsRows({{1}, {2}, {4}, {7}}))
+        << options;
+  }
+  if (in_prod_env()) return;
+
+  // The local scorer has no bigram or term frequency statistics.
+  std::string query = absl::Substitute(
+      R"sql(
+      SELECT SCORE(summary_tokens, 'top', $0)
+      FROM albums
+      WHERE userid = 1 AND SEARCH(summary_tokens, 'top'))sql",
+      absl::Substitute(options_arg, R"({"bigram_weight": 3.0})"));
+  EXPECT_THAT(Query(GetSqlQueryString(query)),
+              StatusIs(absl::StatusCode::kUnimplemented));
+}
+
+TEST_P(SearchTest, ScoreNgramsArrayAggregator) {
+  if (!IsGoogleStandardSql()) {
+    GTEST_SKIP() << "array_aggregator is only documented for GoogleSQL";
+  }
+  // Album 2 has the tracks ["track1", "track2"]: the best element matches
+  // "track1" better than the flattened array does.
+  EXPECT_THAT(Query(R"sql(
+      SELECT albumid
+      FROM albums
+      WHERE albumid = 2
+        AND SCORE_NGRAMS(tracks_substring_tokens, "track1",
+                         array_aggregator=>"max_element") >
+            SCORE_NGRAMS(tracks_substring_tokens, "track1",
+                         array_aggregator=>"flatten")
+        AND SCORE_NGRAMS(tracks_substring_tokens, "track1") =
+            SCORE_NGRAMS(tracks_substring_tokens, "track1",
+                         array_aggregator=>"flatten"))sql"),
+              IsOkAndHoldsRows({{2}}));
+
+  EXPECT_THAT(Query(R"sql(
+      SELECT SCORE_NGRAMS(summary_substr_tokens, "top",
+                          array_aggregator=>"max_element")
+      FROM albums
+      WHERE albumid = 1)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(Query(R"sql(
+      SELECT SCORE_NGRAMS(tracks_substring_tokens, "track1",
+                          array_aggregator=>"sum")
+      FROM albums
+      WHERE albumid = 2)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_P(SearchTest, BasicScoreNgrams) {
@@ -1148,6 +1283,115 @@ TEST_P(SearchTest, BasicSnippet) {
       FROM albums
       WHERE userid = 1)sql";
   GOOGLESQL_EXPECT_OK(Query(GetSqlQueryString(query)));
+}
+
+TEST_P(SearchTest, SnippetMatchesDocumentedLayout) {
+  if (IsGoogleStandardSql()) {
+    EXPECT_THAT(
+        Query("SELECT TO_JSON_STRING(SNIPPET('Rock albums rock.', 'rock'))"),
+        IsOkAndHoldsRows(
+            {{R"({"snippets":[{"highlights":[{"begin":"1","end":"5"},)"
+              R"({"begin":"13","end":"17"}],"snippet":"Rock albums rock.",)"
+              R"("source_begin":1,"source_end":18}]})"}}));
+  } else {
+    // JSONB orders object keys by length.
+    EXPECT_THAT(
+        Query("SELECT spanner.snippet('Rock albums rock.', 'rock')::text"),
+        IsOkAndHoldsRows(
+            {{R"({"snippets": [{"snippet": "Rock albums rock.", )"
+              R"("highlights": [{"end": "5", "begin": "1"}, )"
+              R"({"end": "17", "begin": "13"}], "source_end": 18, )"
+              R"("source_begin": 1}]})"}}));
+  }
+}
+
+TEST_P(SearchTest, DebugTokenlist) {
+  EXPECT_THAT(
+      Query(GetSqlQueryString(
+          "SELECT DEBUG_TOKENLIST(TOKENIZE_FULLTEXT('Hello DB #World'))")),
+      IsOkAndHoldsRows({{"hello(boundary), db, [#world, world](boundary)"}}));
+  EXPECT_THAT(Query(GetSqlQueryString(R"sql(
+      SELECT DEBUG_TOKENLIST(summary_tokens)
+      FROM albums
+      WHERE albumid = 1)sql")),
+              IsOkAndHoldsRows({{"global(boundary), top, 50, song(boundary)"}}));
+}
+
+TEST_P(SearchTest, RQueryUnicodeTerms) {
+  EXPECT_THAT(
+      Query(GetSqlQueryString(R"sql(
+          SELECT albumid FROM albums WHERE albumid = 0
+            AND SEARCH(TOKENIZE_FULLTEXT('Café Crème'), 'crème café'))sql")),
+      IsOkAndHoldsRows({{0}}));
+  EXPECT_THAT(
+      Query(GetSqlQueryString(R"sql(
+          SELECT albumid FROM albums WHERE albumid = 0
+            AND SEARCH(TOKENIZE_FULLTEXT('Café Crème'), 'thé | crème'))sql")),
+      IsOkAndHoldsRows({{0}}));
+  EXPECT_THAT(
+      Query(GetSqlQueryString(R"sql(
+          SELECT albumid FROM albums WHERE albumid = 0
+            AND SEARCH(TOKENIZE_FULLTEXT('Café Crème'), 'thé'))sql")),
+      IsOkAndHoldsRows({}));
+  // Text without spaces is split into words, in the value and in the query.
+  EXPECT_THAT(
+      Query(GetSqlQueryString(R"sql(
+          SELECT albumid FROM albums WHERE albumid = 0
+            AND SEARCH(TOKENIZE_FULLTEXT('東京タワーの夜景', language_tag => 'ja'),
+                       '東京タワー'))sql")),
+      IsOkAndHoldsRows({{0}}));
+}
+
+TEST_P(SearchTest, HtmlContentSkipsScriptsAndDecodesEntities) {
+  const std::string tokens = R"sql(TOKENIZE_FULLTEXT(
+      '<style>.secret { }</style><script>var secret;</script><p>caf&eacute; cr&egrave;me</p>',
+      content_type => 'text/html'))sql";
+  EXPECT_THAT(Query(GetSqlQueryString(absl::StrCat(
+                  "SELECT DEBUG_TOKENLIST(", tokens, ")"))),
+              IsOkAndHoldsRows({{"café(boundary), crème(boundary)"}}));
+  EXPECT_THAT(Query(GetSqlQueryString(absl::StrCat(
+                  "SELECT albumid FROM albums WHERE albumid = 0 AND SEARCH(",
+                  tokens, ", 'secret')"))),
+              IsOkAndHoldsRows({}));
+}
+
+TEST_P(SearchTest, ShortTokensOnlyForAnchors) {
+  const std::string tokens =
+      absl::StrCat(IsGoogleStandardSql() ? "TOKENIZE_SUBSTRING"
+                                         : "spanner.tokenize_substring",
+                   "('Heavy Metal', relative_search_types => ",
+                   IsGoogleStandardSql() ? "['word_prefix']"
+                                         : "ARRAY['word_prefix']",
+                   ", short_tokens_only_for_anchors => TRUE)");
+  const std::string search = IsGoogleStandardSql() ? "SEARCH_SUBSTRING"
+                                                   : "spanner.search_substring";
+  EXPECT_THAT(Query(absl::StrCat("SELECT ", search, "(", tokens, ", 'he'), ",
+                                 search, "(", tokens, ", 'heav'), ", search,
+                                 "(", tokens,
+                                 ", 'he', relative_search_type => "
+                                 "'word_prefix')")),
+              IsOkAndHoldsRows({{false, true, true}}));
+}
+
+TEST_P(SearchTest, TokenlistConcatWithMixedRemoveDiacritics) {
+  const std::string concat =
+      IsGoogleStandardSql()
+          ? R"sql(TOKENLIST_CONCAT([
+                TOKENIZE_FULLTEXT('Café'),
+                TOKENIZE_FULLTEXT('Crème', remove_diacritics => TRUE)]))sql"
+          : R"sql(spanner.tokenlist_concat(ARRAY[
+                spanner.tokenize_fulltext('Café'),
+                spanner.tokenize_fulltext('Crème',
+                                          remove_diacritics => TRUE)]))sql";
+  // Queries on the concatenation ignore diacritics in both parts.
+  EXPECT_THAT(Query(IsGoogleStandardSql()
+                        ? absl::StrCat("SELECT SEARCH(", concat,
+                                       ", 'café'), SEARCH(", concat,
+                                       ", 'creme')")
+                        : absl::StrCat("SELECT spanner.search(", concat,
+                                       ", 'café'), spanner.search(", concat,
+                                       ", 'creme')")),
+              IsOkAndHoldsRows({{true, true}}));
 }
 
 TEST_P(SearchTest, InvalidMaxSnippets) {
@@ -1354,6 +1598,53 @@ TEST_P(SearchTest, SearchFailAfterDropSearchIndex) {
                        HasSubstr("index called summary_idx")));
 }
 
+TEST_P(SearchTest, AlterSearchIndexColumns) {
+  GOOGLESQL_ASSERT_OK(UpdateSchema({R"sql(
+      CREATE SEARCH INDEX summary_idx ON albums(summary_tokens))sql"}));
+  GOOGLESQL_ASSERT_OK(UpdateSchema(
+      {"ALTER SEARCH INDEX summary_idx ADD COLUMN summary_substr_tokens",
+       IsGoogleStandardSql()
+           ? "ALTER SEARCH INDEX summary_idx ADD STORED COLUMN length"
+           : "ALTER SEARCH INDEX summary_idx ADD INCLUDE COLUMN length"}));
+  if (IsGoogleStandardSql()) {
+    EXPECT_THAT(GetDatabaseDdl(),
+                IsOkAndHolds(testing::Contains(
+                    "CREATE SEARCH INDEX summary_idx ON albums(summary_tokens, "
+                    "summary_substr_tokens) STORING (length)")));
+  }
+  std::string query = R"sql(
+      SELECT albumid
+      FROM albums@{force_index=summary_idx}
+      WHERE SEARCH_SUBSTRING(summary_substr_tokens, 'son')
+        AND userid = 1
+      ORDER BY albumid ASC)sql";
+  EXPECT_THAT(Query(GetSqlQueryString(query)),
+              IsOkAndHoldsRows({{1}, {2}, {4}, {6}, {7}}));
+
+  GOOGLESQL_ASSERT_OK(UpdateSchema(
+      {"ALTER SEARCH INDEX summary_idx DROP COLUMN summary_tokens",
+       IsGoogleStandardSql()
+           ? "ALTER SEARCH INDEX summary_idx DROP STORED COLUMN length"
+           : "ALTER SEARCH INDEX summary_idx DROP INCLUDE COLUMN length"}));
+  if (IsGoogleStandardSql()) {
+    EXPECT_THAT(GetDatabaseDdl(),
+                IsOkAndHolds(testing::Contains(
+                    "CREATE SEARCH INDEX summary_idx ON "
+                    "albums(summary_substr_tokens)")));
+  }
+  EXPECT_THAT(Query(GetSqlQueryString(query)),
+              IsOkAndHoldsRows({{1}, {2}, {4}, {6}, {7}}));
+
+  EXPECT_THAT(
+      UpdateSchema({"ALTER SEARCH INDEX summary_idx DROP COLUMN "
+                    "summary_substr_tokens"}),
+      StatusIs(absl::StatusCode::kFailedPrecondition,
+               HasSubstr("Cannot drop the last TOKENLIST column")));
+  EXPECT_THAT(UpdateSchema({"ALTER SEARCH INDEX missing_idx ADD COLUMN "
+                            "summary_tokens"}),
+              StatusIs(absl::StatusCode::kNotFound));
+}
+
 TEST_P(SearchTest, ProjectTokenlistFailColRef) {
   std::string query = R"sql(
       SELECT albumid, length_tokens
@@ -1394,6 +1685,9 @@ TEST_P(SearchTest, ProjectAll) {
 }
 
 TEST_P(SearchTest, ArrayIncludesSupported) {
+  if (!IsGoogleStandardSql()) {
+    GTEST_SKIP() << "ARRAY_INCLUDES functions are GoogleSQL only.";
+  }
   std::string query1 = R"sql(
     SELECT a.albumid
     FROM albums@{force_index=albumindex} a
@@ -1426,6 +1720,9 @@ TEST_P(SearchTest, ArrayIncludesSupported) {
 }
 
 TEST_P(SearchTest, ArrayIncludesNullOrEmpty) {
+  if (!IsGoogleStandardSql()) {
+    GTEST_SKIP() << "ARRAY_INCLUDES functions are GoogleSQL only.";
+  }
   std::string query1 = R"sql(
     SELECT a.albumid
     FROM albums@{force_index=albumindex} a

@@ -15,6 +15,29 @@ cc_library(
 )
 
 cc_library(
+    name = "data_dir_lock",
+    srcs = ["data_dir_lock.cc"],
+    hdrs = ["data_dir_lock.h"],
+    deps = [
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_test(
+    name = "data_dir_lock_test",
+    srcs = ["data_dir_lock_test.cc"],
+    deps = [
+        ":data_dir_lock",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
     name = "schema_change_batch",
     hdrs = ["schema_change_batch.h"],
 )
@@ -34,6 +57,7 @@ cc_library(
         "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
         "@com_google_leveldb//:leveldb",
         "@com_google_googlesql//googlesql/base:status",
+        "@com_google_protobuf//:cc_wkt_protos",
         "@json",
     ],
 )

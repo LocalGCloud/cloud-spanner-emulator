@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <memory>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,7 @@
 #include "google/longrunning/operations.pb.h"
 #include "google/spanner/admin/database/v1/backup.pb.h"
 #include "google/spanner/admin/database/v1/backup_schedule.pb.h"
+#include "google/protobuf/timestamp.pb.h"
 #include "frontend/persistence/schema_change_batch.h"
 
 namespace google {
@@ -59,6 +61,28 @@ class BackupCatalog {
     IdCounters id_counters;
     std::string operation_name;
     std::string source_instance_config;
+  };
+  struct ScheduleRun {
+    std::string name;
+    int64_t due_seconds;
+    int64_t next_due_seconds;
+    std::string schedule_serialized;
+  };
+  struct ScheduleEntry {
+    database_api::BackupSchedule schedule;
+    int64_t next_due_seconds;
+  };
+  // The incremental backup chain that an incremental schedule's next backup
+  // extends. Every snapshot in a chain is still a full copy; the chain is
+  // metadata.
+  struct BackupChain {
+    std::string id;
+    // Backups created in the chain so far, its full backup included.
+    int64_t backup_count = 0;
+    // version_time of the chain's full backup.
+    google::protobuf::Timestamp oldest_version_time;
+    // The chain's newest backup. Deleting it ends the chain.
+    std::string newest_backup;
   };
   // Holds the catalog mutex for the lifetime of a validated source snapshot.
   // This serializes LevelDB validation opens and prevents deletion while a
@@ -95,8 +119,12 @@ class BackupCatalog {
 
   absl::Status Load() ABSL_LOCKS_EXCLUDED(mu_);
 
+  // Adds a backup. A scheduled backup with an incremental_backup_chain_id
+  // becomes its schedule's chain's newest backup, and only the newest backup
+  // in a chain reports freeable bytes.
   absl::Status CreateBackup(
-      BackupEntry entry, const google::longrunning::Operation& operation)
+      BackupEntry entry, const google::longrunning::Operation& operation,
+      std::optional<ScheduleRun> schedule_run = std::nullopt)
       ABSL_LOCKS_EXCLUDED(mu_);
   absl::StatusOr<BackupEntry> GetBackup(const std::string& name) const
       ABSL_LOCKS_EXCLUDED(mu_);
@@ -112,25 +140,60 @@ class BackupCatalog {
       ABSL_LOCKS_EXCLUDED(mu_);
   absl::Status UpdateBackup(const database_api::Backup& backup)
       ABSL_LOCKS_EXCLUDED(mu_);
+  // Deletes a backup. In an incremental chain, the next younger backup takes
+  // over the bytes only the deleted backup held, and deleting a chain's
+  // newest backup makes its schedule start a new chain.
   absl::Status DeleteBackup(const std::string& name) ABSL_LOCKS_EXCLUDED(mu_);
 
-  absl::Status CreateBackupSchedule(database_api::BackupSchedule schedule)
+  absl::Status CreateBackupSchedule(database_api::BackupSchedule schedule,
+                                    int64_t next_due_seconds = 0)
       ABSL_LOCKS_EXCLUDED(mu_);
   absl::StatusOr<database_api::BackupSchedule> GetBackupSchedule(
       const std::string& name) const ABSL_LOCKS_EXCLUDED(mu_);
   std::vector<database_api::BackupSchedule> ListBackupSchedules(
       const std::string& parent) const ABSL_LOCKS_EXCLUDED(mu_);
+  std::vector<ScheduleEntry> AllBackupSchedules() const ABSL_LOCKS_EXCLUDED(mu_);
+  // Returns the chain the schedule's next incremental backup would extend.
+  std::optional<BackupChain> GetBackupChain(
+      const std::string& schedule_name) const ABSL_LOCKS_EXCLUDED(mu_);
+  // Updates a schedule. Its next incremental backup starts a new chain.
   absl::Status UpdateBackupSchedule(
-      const database_api::BackupSchedule& schedule) ABSL_LOCKS_EXCLUDED(mu_);
+      const database_api::BackupSchedule& schedule,
+      std::optional<int64_t> next_due_seconds = std::nullopt)
+      ABSL_LOCKS_EXCLUDED(mu_);
+  absl::Status AdvanceBackupSchedule(const std::string& name,
+                                      int64_t expected_due_seconds,
+                                      int64_t next_due_seconds,
+                                      const std::string& expected_schedule)
+      ABSL_LOCKS_EXCLUDED(mu_);
   absl::Status DeleteBackupSchedule(const std::string& name)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   bool persistent() const { return !data_dir_.empty(); }
   std::string SnapshotDirectory(const std::string& backup_name) const;
+  absl::Status PrepareSnapshot(const std::string& backup_name) const;
 
   absl::Status ValidateSnapshot(const std::string& backup_name) const;
 
  private:
+  // What RemoveFromChainLocked changed, so a failed deletion can undo it.
+  struct ChainRemoval {
+    std::string chain_id;
+    std::string younger_backup;
+    int64_t younger_exclusive_size_bytes = 0;
+    std::map<std::string, BackupChain> ended_chains;
+  };
+
+  // Gives the newest backup in the chain its exclusive bytes as freeable
+  // bytes; the older backups free nothing because younger ones need them.
+  void RefreshChainLocked(const std::string& chain_id)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  // Detaches an already erased backup from its chain.
+  ChainRemoval RemoveFromChainLocked(const database_api::Backup& backup)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
+  // Reverts RemoveFromChainLocked once the backup is back in backups_.
+  void UndoChainRemovalLocked(const ChainRemoval& removal)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
   absl::Status SaveLocked() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_);
   absl::Status CleanupStaleSnapshotsLocked(
       const std::map<std::string, BackupEntry>& retained_backups)
@@ -146,6 +209,9 @@ class BackupCatalog {
   std::map<std::string, BackupEntry> backups_ ABSL_GUARDED_BY(mu_);
   std::map<std::string, database_api::BackupSchedule> schedules_
       ABSL_GUARDED_BY(mu_);
+  std::map<std::string, int64_t> schedule_cursors_ ABSL_GUARDED_BY(mu_);
+  // Keyed by schedule name; only incremental schedules with a live chain.
+  std::map<std::string, BackupChain> schedule_chains_ ABSL_GUARDED_BY(mu_);
   std::map<std::string, google::longrunning::Operation> operations_
       ABSL_GUARDED_BY(mu_);
 };

@@ -14,8 +14,10 @@
 // limitations under the License.
 //
 
+#include <string>
 #include <vector>
 
+#include "backend/schema/printer/print_ddl.h"
 #include "backend/schema/updater/schema_updater_tests/base.h"
 
 namespace google {
@@ -25,6 +27,59 @@ namespace backend {
 namespace test {
 
 namespace {
+
+TEST_P(SchemaUpdaterTest, DatabaseRoleState) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto schema, CreateSchema({"CREATE ROLE reader"}, "", GetParam(),
+                                /*use_gsql_to_pg_translation=*/false));
+  ASSERT_NE(schema->FindRole("reader"), nullptr);
+  EXPECT_EQ(schema->FindRole("READER")->Name(), "reader");
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto printed,
+                                 PrintDDLStatements(schema.get()));
+  EXPECT_THAT(printed,
+              testing::Contains(GetParam() ==
+                                        database_api::DatabaseDialect::POSTGRESQL
+                                    ? "CREATE ROLE \"reader\""
+                                    : "CREATE ROLE reader"));
+
+  const std::string drop_statement =
+      GetParam() == database_api::DatabaseDialect::POSTGRESQL
+          ? "DROP ROLE \"READER\""
+          : "DROP ROLE READER";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto dropped, UpdateSchema(schema.get(), {drop_statement}, "", GetParam(),
+                                 /*use_gsql_to_pg_translation=*/false));
+  EXPECT_EQ(dropped->FindRole("reader"), nullptr);
+}
+
+TEST_P(SchemaUpdaterTest, RoleAndTableNamesConflictInEitherOrder) {
+  const std::string table_statement =
+      GetParam() == database_api::DatabaseDialect::POSTGRESQL
+          ? "CREATE TABLE reader (id bigint PRIMARY KEY)"
+          : "CREATE TABLE reader (id INT64) PRIMARY KEY (id)";
+  const std::string uppercase_role_statement =
+      GetParam() == database_api::DatabaseDialect::POSTGRESQL
+          ? "CREATE ROLE \"READER\""
+          : "CREATE ROLE READER";
+
+  auto role_first = CreateSchema({"CREATE ROLE reader", table_statement}, "",
+                                 GetParam(),
+                                 /*use_gsql_to_pg_translation=*/false);
+  EXPECT_EQ(role_first.status(),
+            error::SchemaObjectAlreadyExists("Table", "reader"));
+
+  auto table_first = CreateSchema(
+      {table_statement, uppercase_role_statement}, "", GetParam(),
+      /*use_gsql_to_pg_translation=*/false);
+  EXPECT_EQ(table_first.status(),
+            error::SchemaObjectAlreadyExists("Role", "READER"));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto after_drop,
+      CreateSchema({"CREATE ROLE reader", "DROP ROLE reader", table_statement},
+                   "", GetParam(), /*use_gsql_to_pg_translation=*/false));
+  EXPECT_NE(after_drop->FindTable("reader"), nullptr);
+}
 
 TEST_P(SchemaUpdaterTest, CreationOrder) {
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({

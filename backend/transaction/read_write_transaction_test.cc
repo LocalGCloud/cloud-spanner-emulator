@@ -16,6 +16,7 @@
 
 #include "backend/transaction/read_write_transaction.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -27,9 +28,14 @@
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/flags/declare.h"
+#include "absl/flags/flag.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
+#include "absl/synchronization/barrier.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "backend/access/write.h"
@@ -50,6 +56,8 @@
 #include "tests/common/schema_constructor.h"
 #include "tests/common/scoped_feature_flags_setter.h"
 #include "absl/status/status.h"
+
+ABSL_DECLARE_FLAG(bool, enable_fault_injection);
 
 namespace google {
 namespace spanner {
@@ -107,9 +115,10 @@ class ReadWriteTransactionTest : public testing::Test {
   // Counter to generate TransactionID.
   std::atomic<int> id_counter_ = 0;
 
-  std::unique_ptr<ReadWriteTransaction> CreateReadWriteTransaction() {
+  std::unique_ptr<ReadWriteTransaction> CreateReadWriteTransaction(
+      ReadWriteOptions options = ReadWriteOptions()) {
     return std::make_unique<ReadWriteTransaction>(
-        ReadWriteOptions(), RetryState(), ++id_counter_, &clock_,
+        options, RetryState(), ++id_counter_, &clock_,
         storage_.get(), lock_manager_.get(), versioned_catalog_.get(),
         action_manager_.get());
   }
@@ -188,6 +197,86 @@ TEST_F(ReadWriteTransactionTest, CanReadAfterFlush) {
   EXPECT_THAT(ReadAll(txn3.get(), {"int64_col", "string_col"}),
               IsOkAndHoldsRows({{Int64(1), String("new-value1")},
                                 {Int64(3), String("value3")}}));
+}
+
+TEST_F(ReadWriteTransactionTest, RepeatableReadUsesSnapshotAndAbortsLostUpdate) {
+  Mutation insert;
+  insert.AddWriteOp(MutationOpType::kInsert, "test_table",
+                    {"int64_col", "string_col"},
+                    {{Int64(1), String("v1")}, {Int64(2), String("v2")}});
+  auto setup = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK(setup->Write(insert));
+  GOOGLESQL_ASSERT_OK(setup->Commit());
+
+  ReadWriteOptions repeatable_read;
+  repeatable_read.repeatable_read = true;
+  auto reader = CreateReadWriteTransaction(repeatable_read);
+  EXPECT_THAT(ReadAll(reader.get(), {"int64_col", "string_col"}),
+              IsOkAndHoldsRows({{Int64(1), String("v1")},
+                                {Int64(2), String("v2")}}));
+
+  // A concurrent writer is not blocked by the snapshot read and commits.
+  Mutation update;
+  update.AddWriteOp(MutationOpType::kUpdate, "test_table",
+                    {"int64_col", "string_col"}, {{Int64(1), String("w1")}});
+  auto writer = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK(writer->Write(update));
+  GOOGLESQL_ASSERT_OK(writer->Commit());
+
+  // The repeatable-read transaction still sees its snapshot.
+  EXPECT_THAT(ReadAll(reader.get(), {"int64_col", "string_col"}),
+              IsOkAndHoldsRows({{Int64(1), String("v1")},
+                                {Int64(2), String("v2")}}));
+
+  // Writing the row the other transaction committed after the snapshot is a
+  // lost update and aborts at commit.
+  Mutation overwrite;
+  overwrite.AddWriteOp(MutationOpType::kUpdate, "test_table",
+                       {"int64_col", "string_col"}, {{Int64(1), String("x1")}});
+  GOOGLESQL_ASSERT_OK(reader->Write(overwrite));
+  EXPECT_THAT(reader->Commit(), StatusIs(absl::StatusCode::kAborted));
+
+  auto verify = CreateReadWriteTransaction();
+  EXPECT_THAT(ReadAll(verify.get(), {"int64_col", "string_col"}),
+              IsOkAndHoldsRows({{Int64(1), String("w1")},
+                                {Int64(2), String("v2")}}));
+}
+
+TEST_F(ReadWriteTransactionTest, RepeatableReadAllowsDisjointWrites) {
+  Mutation insert;
+  insert.AddWriteOp(MutationOpType::kInsert, "test_table",
+                    {"int64_col", "string_col"},
+                    {{Int64(1), String("v1")}, {Int64(2), String("v2")}});
+  auto setup = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK(setup->Write(insert));
+  GOOGLESQL_ASSERT_OK(setup->Commit());
+
+  // Both transactions read both rows and each writes a different row: write
+  // skew is allowed under repeatable read.
+  ReadWriteOptions repeatable_read;
+  repeatable_read.repeatable_read = true;
+  auto first = CreateReadWriteTransaction(repeatable_read);
+  auto second = CreateReadWriteTransaction(repeatable_read);
+  GOOGLESQL_ASSERT_OK(ReadAll(first.get(), {"int64_col", "string_col"}));
+  GOOGLESQL_ASSERT_OK(ReadAll(second.get(), {"int64_col", "string_col"}));
+
+  Mutation first_update;
+  first_update.AddWriteOp(MutationOpType::kUpdate, "test_table",
+                          {"int64_col", "string_col"},
+                          {{Int64(1), String("a")}});
+  Mutation second_update;
+  second_update.AddWriteOp(MutationOpType::kUpdate, "test_table",
+                           {"int64_col", "string_col"},
+                           {{Int64(2), String("b")}});
+  GOOGLESQL_ASSERT_OK(first->Write(first_update));
+  GOOGLESQL_ASSERT_OK(second->Write(second_update));
+  GOOGLESQL_EXPECT_OK(first->Commit());
+  GOOGLESQL_EXPECT_OK(second->Commit());
+
+  auto verify = CreateReadWriteTransaction();
+  EXPECT_THAT(ReadAll(verify.get(), {"int64_col", "string_col"}),
+              IsOkAndHoldsRows({{Int64(1), String("a")},
+                                {Int64(2), String("b")}}));
 }
 
 TEST_F(ReadWriteTransactionTest, ReadEmptyDatabase) {
@@ -293,23 +382,31 @@ TEST_F(ReadWriteTransactionTest, CommitWithMultipleChangesToDatabase) {
 }
 
 TEST_F(ReadWriteTransactionTest,
-       ConcurrentReadWriteTransactionsReturnsAborted) {
+       OverlappingReadWriteTransactionsReturnAborted) {
   auto current_probability = config::abort_current_transaction_probability();
   config::set_abort_current_transaction_probability(0);
-  // Started "writes" on first transaction.
+  const absl::Duration current_timeout = config::lock_wait_timeout();
+  config::set_lock_wait_timeout_ms(10);
+  Mutation seed;
+  seed.AddWriteOp(MutationOpType::kInsert, "test_table",
+                  {"int64_col", "string_col"}, {{Int64(1), String("initial")}});
+  auto seeded = CreateReadWriteTransaction();
+  GOOGLESQL_EXPECT_OK(seeded->Write(seed));
+  GOOGLESQL_EXPECT_OK(seeded->Commit());
+
   Mutation m1;
-  m1.AddWriteOp(MutationOpType::kInsert, "test_table",
+  m1.AddWriteOp(MutationOpType::kUpdate, "test_table",
                 {"int64_col", "string_col"}, {{Int64(1), String("value-1")}});
 
   auto txn1 = CreateReadWriteTransaction();
   GOOGLESQL_EXPECT_OK(txn1->Write(m1));
 
-  // Before commiting first transaction, starting another transaction is in
-  // progress. Write for second transaction should consistently ABORT.
+  // The second, younger transaction writes the same row. It waits for the
+  // first to release its lock, and aborts when the wait times out.
   auto txn2 = CreateReadWriteTransaction();
   Mutation m2;
-  m2.AddWriteOp(MutationOpType::kInsert, "test_table",
-                {"int64_col", "string_col"}, {{Int64(2), String("value-2")}});
+  m2.AddWriteOp(MutationOpType::kUpdate, "test_table",
+                {"int64_col", "string_col"}, {{Int64(1), String("value-2")}});
   for (int i = 0; i < 5; i++) {
     EXPECT_THAT(txn2->Write(m2), StatusIs(absl::StatusCode::kAborted));
   }
@@ -323,7 +420,292 @@ TEST_F(ReadWriteTransactionTest,
   GOOGLESQL_EXPECT_OK(txn2->Commit());
   EXPECT_EQ(txn2->state(), ReadWriteTransaction::State::kCommitted);
 
+  config::set_lock_wait_timeout_ms(absl::ToInt64Milliseconds(current_timeout));
   config::set_abort_current_transaction_probability(current_probability);
+}
+
+TEST_F(ReadWriteTransactionTest, YoungerTransactionWaitsForOlderToCommit) {
+  auto current_probability = config::abort_current_transaction_probability();
+  config::set_abort_current_transaction_probability(0);
+  auto update = [](const std::string& value) {
+    Mutation mutation;
+    mutation.AddWriteOp(MutationOpType::kInsertOrUpdate, "test_table",
+                        {"int64_col", "string_col"},
+                        {{Int64(1), String(value)}});
+    return mutation;
+  };
+  auto older = CreateReadWriteTransaction();
+  auto younger = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK(older->Write(update("older")));
+
+  // The younger transaction blocks on the older one's lock instead of
+  // aborting, and proceeds once the older transaction commits.
+  absl::Status younger_status;
+  std::thread younger_thread([&] {
+    younger_status = younger->Write(update("younger"));
+    if (younger_status.ok()) younger_status = younger->Commit();
+  });
+  absl::SleepFor(absl::Milliseconds(50));
+  GOOGLESQL_EXPECT_OK(older->Commit());
+  younger_thread.join();
+  GOOGLESQL_EXPECT_OK(younger_status);
+
+  auto reader = CreateReadWriteTransaction();
+  EXPECT_THAT(ReadAll(reader.get(), {"int64_col", "string_col"}),
+              IsOkAndHoldsRows({{Int64(1), String("younger")}}));
+  config::set_abort_current_transaction_probability(current_probability);
+}
+
+TEST_F(ReadWriteTransactionTest, OlderTransactionWoundsYoungerHolder) {
+  auto update = [](const std::string& value) {
+    Mutation mutation;
+    mutation.AddWriteOp(MutationOpType::kInsertOrUpdate, "test_table",
+                        {"int64_col", "string_col"},
+                        {{Int64(1), String(value)}});
+    return mutation;
+  };
+  auto older = CreateReadWriteTransaction();
+  auto younger = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK(younger->Write(update("younger")));
+
+  GOOGLESQL_ASSERT_OK(older->Write(update("older")));
+  GOOGLESQL_ASSERT_OK(older->Commit());
+  EXPECT_THAT(younger->Commit(), StatusIs(absl::StatusCode::kAborted));
+}
+
+TEST_F(ReadWriteTransactionTest, TwoKeyDeadlockAbortsExactlyOneTransaction) {
+  Mutation seed;
+  seed.AddWriteOp(MutationOpType::kInsert, "test_table",
+                  {"int64_col", "string_col"},
+                  {{Int64(1), String("seed/1")}, {Int64(2), String("seed/2")}});
+  auto setup = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK(setup->Write(seed));
+  GOOGLESQL_ASSERT_OK(setup->Commit());
+
+  // Tags each value with its key, as test_index is a unique index.
+  auto update = [](int64_t key, const std::string& value) {
+    Mutation mutation;
+    mutation.AddWriteOp(MutationOpType::kUpdate, "test_table",
+                        {"int64_col", "string_col"},
+                        {{Int64(key), String(absl::StrCat(value, "/", key))}});
+    return mutation;
+  };
+  // Repeat so that the two conflicting requests race in many runs.
+  for (int run = 0; run < 50; ++run) {
+    SCOPED_TRACE(absl::StrCat("run ", run));
+    const std::string first_value = absl::StrCat("first-", run);
+    const std::string second_value = absl::StrCat("second-", run);
+    auto first = CreateReadWriteTransaction();
+    auto second = CreateReadWriteTransaction();
+    GOOGLESQL_ASSERT_OK(first->Write(update(1, first_value)));
+    GOOGLESQL_ASSERT_OK(second->Write(update(2, second_value)));
+
+    // Each transaction now writes the key the other one holds, then commits.
+    absl::Barrier start(2);
+    absl::Status first_status;
+    absl::Status second_status;
+    std::thread first_thread([&] {
+      start.Block();
+      first_status = first->Write(update(2, first_value));
+      if (first_status.ok()) first_status = first->Commit();
+    });
+    std::thread second_thread([&] {
+      start.Block();
+      second_status = second->Write(update(1, second_value));
+      if (second_status.ok()) second_status = second->Commit();
+    });
+    first_thread.join();
+    second_thread.join();
+
+    ASSERT_NE(first_status.ok(), second_status.ok())
+        << "first: " << first_status << ", second: " << second_status;
+    const bool first_committed = first_status.ok();
+    EXPECT_THAT(first_committed ? second_status : first_status,
+                StatusIs(absl::StatusCode::kAborted));
+
+    // Retrying the aborted transaction succeeds.
+    const std::string& retried_value =
+        first_committed ? second_value : first_value;
+    const int64_t retried_first_key = first_committed ? 2 : 1;
+    auto retry = CreateReadWriteTransaction();
+    GOOGLESQL_ASSERT_OK(retry->Write(update(retried_first_key, retried_value)));
+    GOOGLESQL_ASSERT_OK(
+        retry->Write(update(3 - retried_first_key, retried_value)));
+    GOOGLESQL_ASSERT_OK(retry->Commit());
+
+    auto verify = CreateReadWriteTransaction();
+    EXPECT_THAT(ReadAll(verify.get(), {"int64_col", "string_col"}),
+                IsOkAndHoldsRows(
+                    {{Int64(1), String(absl::StrCat(retried_value, "/1"))},
+                     {Int64(2), String(absl::StrCat(retried_value, "/2"))}}));
+    GOOGLESQL_ASSERT_OK(verify->Commit());
+  }
+}
+
+// Regression tests for the unique index incident: a unique index ended up
+// with a duplicate key in persisted storage although clients saw
+// ALREADY_EXISTS errors. The tests cover the suspected mechanisms: a
+// transaction wounded after its insert passed the unique index check, a batch
+// with duplicate values, and sequential inserts retried with new values.
+TEST_F(ReadWriteTransactionTest,
+       AbortedTransactionLeavesNoUniqueIndexEntryInStorage) {
+  auto insert = [](int64_t key, const std::string& value) {
+    Mutation mutation;
+    mutation.AddWriteOp(MutationOpType::kInsert, "test_table",
+                        {"int64_col", "string_col"},
+                        {{Int64(key), String(value)}});
+    return mutation;
+  };
+  const int previous_probability =
+      config::abort_current_transaction_probability();
+  // 100 makes the second insert wound the first one after it passed the
+  // unique index check; 0 makes the second insert abort itself instead.
+  for (const int probability : {100, 0}) {
+    SCOPED_TRACE(absl::StrCat("probability ", probability));
+    config::set_abort_current_transaction_probability(probability);
+    const std::string value = absl::StrCat("duplicate-", probability);
+    const int64_t first_key = probability + 1;
+    const int64_t second_key = probability + 2;
+    auto first = CreateReadWriteTransaction();
+    auto second = CreateReadWriteTransaction();
+    GOOGLESQL_ASSERT_OK(first->Write(insert(first_key, value)));
+    const absl::Status second_write = second->Write(insert(second_key, value));
+    const absl::Status second_status =
+        second_write.ok() ? second->Commit() : second_write;
+    const absl::Status first_status = first->Commit();
+    ASSERT_NE(first_status.ok(), second_status.ok())
+        << "first: " << first_status << ", second: " << second_status;
+    EXPECT_THAT(first_status.ok() ? second_status : first_status,
+                StatusIs(absl::StatusCode::kAborted));
+    const int64_t committed_key = first_status.ok() ? first_key : second_key;
+    const int64_t aborted_key = first_status.ok() ? second_key : first_key;
+    EXPECT_EQ(committed_key, probability == 100 ? second_key : first_key);
+
+    // Only the committed row reached storage, in the table and the index.
+    auto verify = CreateReadWriteTransaction();
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        std::vector<ValueList> index_rows,
+        ReadAllUsingIndex(verify.get(), "test_index",
+                          {"string_col", "int64_col"}));
+    EXPECT_THAT(index_rows, testing::Contains(ValueList{
+                                String(value), Int64(committed_key)}));
+    EXPECT_THAT(index_rows, testing::Not(testing::Contains(ValueList{
+                                String(value), Int64(aborted_key)})));
+    EXPECT_THAT(ReadUsingIndex(verify.get(), KeySet(Key({Int64(aborted_key)})),
+                               /*index=*/"", {"int64_col"}),
+                IsOkAndHoldsRows({}));
+    GOOGLESQL_ASSERT_OK(verify->Commit());
+
+    // Retrying the aborted insert now violates the unique index.
+    auto retry = CreateReadWriteTransaction();
+    EXPECT_THAT(retry->Write(insert(aborted_key, value)),
+                StatusIs(absl::StatusCode::kAlreadyExists));
+  }
+  config::set_abort_current_transaction_probability(previous_probability);
+}
+
+TEST_F(ReadWriteTransactionTest, BatchWithDuplicateUniqueValuesCommitsNothing) {
+  auto txn = CreateReadWriteTransaction();
+  Mutation mutation;
+  mutation.AddWriteOp(
+      MutationOpType::kInsert, "test_table", {"int64_col", "string_col"},
+      {{Int64(1), String("duplicate")}, {Int64(2), String("duplicate")}});
+  EXPECT_THAT(txn->Write(mutation),
+              StatusIs(absl::StatusCode::kAlreadyExists));
+
+  auto verify = CreateReadWriteTransaction();
+  EXPECT_THAT(ReadAll(verify.get(), {"int64_col"}), IsOkAndHoldsRows({}));
+  EXPECT_THAT(ReadAllUsingIndex(verify.get(), "test_index", {"string_col"}),
+              IsOkAndHoldsRows({}));
+  GOOGLESQL_ASSERT_OK(verify->Commit());
+}
+
+TEST_F(ReadWriteTransactionTest,
+       SequentialInsertsRetriedWithNewValuesKeepTheIndexUnique) {
+  // Like a random data generator: insert a row, and on ALREADY_EXISTS retry
+  // with a new value.
+  constexpr int kRows = 40;
+  for (int key = 0; key < kRows; ++key) {
+    for (int attempt = 0;; ++attempt) {
+      ASSERT_LT(attempt, 10);
+      auto txn = CreateReadWriteTransaction();
+      Mutation mutation;
+      mutation.AddWriteOp(
+          MutationOpType::kInsert, "test_table", {"int64_col", "string_col"},
+          {{Int64(key), String(absl::StrCat("value-", (key + attempt) % 8,
+                                            "-", attempt))}});
+      absl::Status status = txn->Write(mutation);
+      if (status.ok()) status = txn->Commit();
+      if (status.ok()) break;
+      ASSERT_THAT(status, StatusIs(absl::StatusCode::kAlreadyExists));
+    }
+  }
+
+  auto verify = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<ValueList> rows,
+      ReadAllUsingIndex(verify.get(), "test_index", {"string_col"}));
+  EXPECT_EQ(rows.size(), kRows);
+  absl::flat_hash_set<std::string> values;
+  for (const ValueList& row : rows) {
+    EXPECT_TRUE(values.insert(row[0].string_value()).second)
+        << "duplicate " << row[0];
+  }
+  GOOGLESQL_ASSERT_OK(verify->Commit());
+}
+
+TEST_F(ReadWriteTransactionTest, DisjointWritesCanCommitWhileBothAreActive) {
+  Mutation first_mutation;
+  first_mutation.AddWriteOp(MutationOpType::kInsert, "test_table",
+                            {"int64_col", "string_col"},
+                            {{Int64(1), String("value-1")}});
+  Mutation second_mutation;
+  second_mutation.AddWriteOp(MutationOpType::kInsert, "test_table",
+                             {"int64_col", "string_col"},
+                             {{Int64(2), String("value-2")}});
+
+  auto first = CreateReadWriteTransaction();
+  auto second = CreateReadWriteTransaction();
+  GOOGLESQL_ASSERT_OK(first->Write(first_mutation));
+  GOOGLESQL_ASSERT_OK(second->Write(second_mutation));
+  GOOGLESQL_ASSERT_OK(second->Commit());
+  GOOGLESQL_ASSERT_OK(first->Commit());
+
+  auto reader = CreateReadWriteTransaction();
+  EXPECT_THAT(ReadAll(reader.get(), {"int64_col", "string_col"}),
+              IsOkAndHoldsRows({{Int64(1), String("value-1")},
+                                {Int64(2), String("value-2")}}));
+}
+
+TEST_F(ReadWriteTransactionTest, FaultInjectionRetriesAfterFirstCommitAbort) {
+  struct RestoreFaultInjectionFlag {
+    bool previous = absl::GetFlag(FLAGS_enable_fault_injection);
+    ~RestoreFaultInjectionFlag() {
+      absl::SetFlag(&FLAGS_enable_fault_injection, previous);
+    }
+  } restore_flag;
+  absl::SetFlag(&FLAGS_enable_fault_injection, true);
+  ASSERT_TRUE(config::fault_injection_enabled());
+
+  bool injected_abort = false;
+  for (int i = 1; i <= 500; ++i) {
+    auto txn = CreateReadWriteTransaction();
+    Mutation mutation;
+    mutation.AddWriteOp(MutationOpType::kInsert, "test_table",
+                        {"int64_col", "string_col"},
+                        {{Int64(i), String(std::to_string(i))}});
+    GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+
+    absl::Status first_commit = txn->Commit();
+    if (first_commit.code() == absl::StatusCode::kAborted) {
+      injected_abort = true;
+      GOOGLESQL_ASSERT_OK(txn->Write(mutation));
+      GOOGLESQL_ASSERT_OK(txn->Commit());
+      break;
+    }
+    GOOGLESQL_ASSERT_OK(first_commit);
+  }
+  EXPECT_TRUE(injected_abort) << "No injected first-commit abort in 500 attempts";
 }
 
 TEST_F(ReadWriteTransactionTest, ConcurrentTransactionsEventuallySucceed) {
@@ -442,6 +824,11 @@ TEST_F(ReadWriteTransactionTest, OneTransactionDoesNotBlockAllOthers) {
   // Start another read/write transaction that will read and update the same
   // value. We do this in a retry loop to make sure it eventually succeeds.
   // This is how all read/write transactions on Spanner should be executed.
+  // Each attempt is a new, younger transaction that waits for the idle one
+  // until the wait times out, unless it wounds the idle transaction per
+  // --abort_current_transaction_probability. Shorten the waits.
+  const absl::Duration current_timeout = config::lock_wait_timeout();
+  config::set_lock_wait_timeout_ms(10);
   auto attempts = 0;
   while (true) {
     auto other_txn = CreateReadWriteTransaction();
@@ -467,6 +854,7 @@ TEST_F(ReadWriteTransactionTest, OneTransactionDoesNotBlockAllOthers) {
       FAIL() << "Transaction did not succeed after 1000 attempts.";
     }
   }
+  config::set_lock_wait_timeout_ms(absl::ToInt64Milliseconds(current_timeout));
 
   // Verify that the first transaction was aborted.
   EXPECT_EQ(cur_txn->state(), ReadWriteTransaction::State::kAborted);

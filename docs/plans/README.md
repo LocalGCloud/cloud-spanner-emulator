@@ -13,3 +13,5 @@ current behavior, see [capabilities](../capabilities.md),
 | 2026-06-01 | [ZetaSQL `constexpr` build fix for GCC 12](2026-06-01-zetasql-constexpr-fix.md) |
 | 2026-08-25 | [Feature coverage inventory design](2026-08-25-spanner-feature-parity-coverage-design.md) |
 | 2026-09-24 | [Open items from the documentation review](2026-09-24-open-review-items.md) (task brief) |
+| 2026-09-27 | [Partial-feature support plan](../superpowers/plans/2026-09-27-spanner-partial-feature-support.md) and [independent audit prompt](../feature-coverage-independent-audit-prompt.md) (both superseded 2026-09-28) |
+| 2026-09-27 | [Developer-usability audit worksheet](2026-09-27-usability-audit-worksheet.md), with post-implementation results, and [closure plan](2026-09-27-usability-closure-plan.md) (completed 2026-09-28) |

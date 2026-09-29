@@ -18,6 +18,7 @@
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_FRONTEND_SERVER_REQUEST_CONTEXT_H_
 
 #include "absl/status/statusor.h"
+#include "absl/time/time.h"
 #include "frontend/server/environment.h"
 #include "grpcpp/server_context.h"
 
@@ -35,6 +36,10 @@ class RequestContext {
   // Accessors.
   ServerEnv* env() { return env_; }
   grpc::ServerContext* grpc() { return grpc_; }
+
+  // Returns the deadline of the gRPC call, or absl::InfiniteFuture() if the
+  // call has none.
+  absl::Time deadline() const;
 
  private:
   // Server environment shared by all requests.

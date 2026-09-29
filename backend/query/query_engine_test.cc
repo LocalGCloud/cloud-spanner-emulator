@@ -911,9 +911,10 @@ TEST_P(QueryEngineTest, ExecuteSqlSelectsOneColumnFromTable) {
   EXPECT_THAT(GetColumnNames(*result.rows), ElementsAre("string_col"));
   EXPECT_THAT(GetColumnTypes(*result.rows), ElementsAre(StringType()));
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(String("one")),
-                                                ElementsAre(String("two")),
-                                                ElementsAre(String("four")))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(String("one")),
+                  ElementsAre(String("two")),
+                  ElementsAre(String("four")))));
 }
 
 TEST_P(QueryEngineTest, PlanSqlSelectsOneColumnFromTable) {
@@ -1106,9 +1107,10 @@ TEST_P(QueryEngineTest, ExecuteSqlSelectsOneColumnFromTableWithForceIndexHint) {
   EXPECT_THAT(GetColumnNames(*result.rows), ElementsAre("string_col"));
   EXPECT_THAT(GetColumnTypes(*result.rows), ElementsAre(StringType()));
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(String("one")),
-                                                ElementsAre(String("two")),
-                                                ElementsAre(String("four")))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(String("one")),
+                  ElementsAre(String("two")),
+                  ElementsAre(String("four")))));
 }
 
 TEST_P(QueryEngineTest,
@@ -1125,9 +1127,10 @@ TEST_P(QueryEngineTest,
   EXPECT_THAT(GetColumnNames(*result.rows), ElementsAre("string_col"));
   EXPECT_THAT(GetColumnTypes(*result.rows), ElementsAre(StringType()));
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(String("one")),
-                                                ElementsAre(String("two")),
-                                                ElementsAre(String("four")))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(String("one")),
+                  ElementsAre(String("two")),
+                  ElementsAre(String("four")))));
 }
 
 TEST_P(QueryEngineTest, ExecuteSqlSelectsAllColumnsFromTable) {
@@ -2580,6 +2583,10 @@ TEST_P(QueryEngineTest, TestMlQuery_Http) {
   }
 
   GOOGLESQL_ASSERT_OK(last_request_body);
+  // Each request carries a distinct opaque ID.
+  ASSERT_TRUE(last_request_body->GetConstRef().GetMember("requestId").IsString());
+  expected_request_body.GetRef().GetMember("requestId").SetString(
+      last_request_body->GetConstRef().GetMember("requestId").GetString());
   EXPECT_EQ(last_request_body->GetConstRef().ToString(),
             expected_request_body.GetConstRef().ToString());
 }
@@ -2636,6 +2643,9 @@ TEST_P(QueryEngineTest, TestRemoteUDF_Http) {
     "calls":[[1]]
   })"));
   GOOGLESQL_ASSERT_OK(last_request_body);
+  ASSERT_TRUE(last_request_body->GetConstRef().GetMember("requestId").IsString());
+  expected_request_body.GetRef().GetMember("requestId").SetString(
+      last_request_body->GetConstRef().GetMember("requestId").GetString());
   EXPECT_EQ(last_request_body->GetConstRef().ToString(),
             expected_request_body.GetConstRef().ToString());
 }
@@ -2686,9 +2696,10 @@ TEST_P(QueryEngineTest, TestPropertyGraphBasicQuery) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(2)),
-                                                ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(4)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(2)),
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(4)))));
 }
 
 TEST_P(QueryEngineTest, TestSafeToJsonWithGraphNode) {
@@ -2706,9 +2717,10 @@ TEST_P(QueryEngineTest, TestSafeToJsonWithGraphNode) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(String("1")),
-                                                ElementsAre(String("2")),
-                                                ElementsAre(String("4")))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(String("1")),
+                  ElementsAre(String("2")),
+                  ElementsAre(String("4")))));
 }
 
 TEST_P(QueryEngineTest, TestSafeToJsonWithGraphEdge) {
@@ -2747,9 +2759,10 @@ TEST_P(QueryEngineTest, TestPropertyGraphWithDistinct) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(2)),
-                                                ElementsAre(Int64(4)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(2)),
+                  ElementsAre(Int64(4)))));
 }
 
 TEST_P(QueryEngineTest, TestPropertyGraphBasicQueryWithDynamicLabel) {
@@ -2808,9 +2821,10 @@ TEST_P(QueryEngineTest, TestSQLPGQBasicQuery) {
                                                     property_graph_reader()}));
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(2)),
-                                                ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(4)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(2)),
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(4)))));
 }
 
 TEST_P(QueryEngineTest, TestPropertyGraphPathAggQuery) {
@@ -2830,9 +2844,10 @@ TEST_P(QueryEngineTest, TestPropertyGraphPathAggQuery) {
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(
       GetAllColumnValues(std::move(result.rows)),
-      IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(2), Int64(1)),
-                                        ElementsAre(Int64(1), Int64(2)),
-                                        ElementsAre(Int64(4), Int64(1)))));
+      IsOkAndHolds(UnorderedElementsAre(
+          ElementsAre(Int64(2), Int64(1)),
+          ElementsAre(Int64(1), Int64(2)),
+          ElementsAre(Int64(4), Int64(1)))));
 }
 
 TEST_P(QueryEngineTest, TestPropertyGraphPathFilterQuery) {
@@ -2851,9 +2866,10 @@ TEST_P(QueryEngineTest, TestPropertyGraphPathFilterQuery) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(2)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(2)))));
 }
 
 TEST_P(QueryEngineTest,
@@ -2894,7 +2910,7 @@ TEST_P(QueryEngineTest, TestGraphQuantifiedTraversalSingleBound) {
       query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
                                                     property_graph_reader()}));
   ASSERT_NE(result.rows, nullptr);
-  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,1,4,2,1,)");
+  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,4,2,1,1,)");
 }
 
 TEST_P(QueryEngineTest, TestGraphQuantifiedTraversalSameBounds) {
@@ -2912,7 +2928,7 @@ TEST_P(QueryEngineTest, TestGraphQuantifiedTraversalSameBounds) {
       query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
                                                     property_graph_reader()}));
   ASSERT_NE(result.rows, nullptr);
-  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,1,4,2,)");
+  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,4,2,1,)");
 }
 
 TEST_P(QueryEngineTest, TestGraphQuantifiedTraversalLowerAndUpperBounds) {
@@ -2931,7 +2947,7 @@ TEST_P(QueryEngineTest, TestGraphQuantifiedTraversalLowerAndUpperBounds) {
                                                     property_graph_reader()}));
   ASSERT_NE(result.rows, nullptr);
   EXPECT_EQ(ToString(result),
-            R"(id(INT64) : 4,4,4,2,2,1,1,1,4,4,4,4,2,2,1,1,)");
+            R"(id(INT64) : 4,4,4,4,4,4,4,2,2,2,2,1,1,1,1,1,)");
 }
 
 TEST_P(QueryEngineTest, TestGraphQuantifiedAnyTraversalSingleBound) {
@@ -2949,7 +2965,7 @@ TEST_P(QueryEngineTest, TestGraphQuantifiedAnyTraversalSingleBound) {
       query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
                                                     property_graph_reader()}));
   ASSERT_NE(result.rows, nullptr);
-  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,1,4,2,1,)");
+  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,4,2,1,1,)");
 }
 
 TEST_P(QueryEngineTest, TestGraphQuantifiedAnyTraversalSameBounds) {
@@ -2967,7 +2983,7 @@ TEST_P(QueryEngineTest, TestGraphQuantifiedAnyTraversalSameBounds) {
       query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
                                                     property_graph_reader()}));
   ASSERT_NE(result.rows, nullptr);
-  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,1,4,2,)");
+  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,4,2,1,)");
 }
 
 TEST_P(QueryEngineTest, TestGraphQuantifiedAnyTraversalLowerAndUpperBounds) {
@@ -2985,7 +3001,7 @@ TEST_P(QueryEngineTest, TestGraphQuantifiedAnyTraversalLowerAndUpperBounds) {
       query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
                                                     property_graph_reader()}));
   ASSERT_NE(result.rows, nullptr);
-  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,2,2,1,4,4,2,1,1,)");
+  EXPECT_EQ(ToString(result), R"(id(INT64) : 4,4,4,2,2,2,1,1,1,)");
 }
 
 TEST_P(QueryEngineTest, TestJsonbArrayElements) {
@@ -3417,15 +3433,9 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateProtoWithEnumColumnInTable) {
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       auto enum_type,
       MakeEnumType(proto_schema(), "emulator.tests.common.TestEnum"));
-  const googlesql::Type* array_proto_type;
-  GOOGLESQL_ASSERT_OK(type_factory()->MakeArrayType(proto_type, &array_proto_type));
-  const googlesql::Type* array_enum_type;
-  GOOGLESQL_ASSERT_OK(type_factory()->MakeArrayType(enum_type, &array_enum_type));
   MockRowWriter writer;
 
-  Simple simple_proto2;
-  simple_proto2.set_field("Two");
-
+  // An UPDATE writes only the key and the SET columns.
   Simple simple_proto_updated;
   simple_proto_updated.set_field("Updated");
   EXPECT_CALL(
@@ -3436,18 +3446,10 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateProtoWithEnumColumnInTable) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "test_table"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"int64_col", "proto_col",
-                                             "enum_col", "array_proto_col",
-                                             "array_enum_col"}),
-              Field(
-                  &MutationOp::rows,
-                  UnorderedElementsAre(ValueList{
-                      Int64(2), Proto(proto_type, simple_proto_updated),
-                      Enum(enum_type, TestEnum::TEST_ENUM_TWO),
-                      Array(array_proto_type->AsArray(),
-                            {Proto(proto_type, simple_proto2)}),
-                      Array(array_enum_type->AsArray(),
-                            {Enum(enum_type, TestEnum::TEST_ENUM_TWO)})})))))))
+                    std::vector<std::string>{"int64_col", "proto_col"}),
+              Field(&MutationOp::rows,
+                    UnorderedElementsAre(ValueList{
+                        Int64(2), Proto(proto_type, simple_proto_updated)})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
   EXPECT_THAT(
@@ -3457,8 +3459,6 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateProtoWithEnumColumnInTable) {
                                 QueryContext{proto_schema(), &reader, &writer}),
       IsOkAndHolds(Field(&QueryResult::modified_row_count, 1)));
 
-  Simple simple_proto3;
-  simple_proto3.set_field("Four");
   EXPECT_CALL(
       writer,
       Write(Property(
@@ -3467,18 +3467,10 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateProtoWithEnumColumnInTable) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "test_table"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"int64_col", "proto_col",
-                                             "enum_col", "array_proto_col",
-                                             "array_enum_col"}),
-              Field(
-                  &MutationOp::rows,
-                  UnorderedElementsAre(ValueList{
-                      Int64(4), Proto(proto_type, simple_proto3),
-                      Enum(enum_type, TestEnum::TEST_ENUM_ONE),
-                      Array(array_proto_type->AsArray(),
-                            {Proto(proto_type, simple_proto3)}),
-                      Array(array_enum_type->AsArray(),
-                            {Enum(enum_type, TestEnum::TEST_ENUM_FOUR)})})))))))
+                    std::vector<std::string>{"int64_col", "enum_col"}),
+              Field(&MutationOp::rows,
+                    UnorderedElementsAre(ValueList{
+                        Int64(4), Enum(enum_type, TestEnum::TEST_ENUM_ONE)})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
   EXPECT_THAT(query_engine().ExecuteSql(
@@ -3530,9 +3522,6 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateArrayProtoWithArrayEnumColumnInTable) {
   GOOGLESQL_ASSERT_OK(type_factory()->MakeArrayType(proto_type, &array_proto_type));
   const googlesql::Type* array_enum_type;
   GOOGLESQL_ASSERT_OK(type_factory()->MakeArrayType(enum_type, &array_enum_type));
-  Simple simple_proto2;
-  simple_proto2.set_field("Two");
-
   Simple simple_proto_updated;
   simple_proto_updated.set_field("Updated");
   MockRowWriter writer;
@@ -3544,18 +3533,12 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateArrayProtoWithArrayEnumColumnInTable) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "test_table"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"int64_col", "proto_col",
-                                             "enum_col", "array_proto_col",
-                                             "array_enum_col"}),
-              Field(
-                  &MutationOp::rows,
-                  UnorderedElementsAre(ValueList{
-                      Int64(2), Proto(proto_type, simple_proto2),
-                      Enum(enum_type, TestEnum::TEST_ENUM_TWO),
-                      Array(array_proto_type->AsArray(),
-                            {Proto(proto_type, simple_proto_updated)}),
-                      Array(array_enum_type->AsArray(),
-                            {Enum(enum_type, TestEnum::TEST_ENUM_TWO)})})))))))
+                    std::vector<std::string>{"int64_col", "array_proto_col"}),
+              Field(&MutationOp::rows,
+                    UnorderedElementsAre(ValueList{
+                        Int64(2),
+                        Array(array_proto_type->AsArray(),
+                              {Proto(proto_type, simple_proto_updated)})})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
 
@@ -3566,8 +3549,6 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateArrayProtoWithArrayEnumColumnInTable) {
               WHERE array_enum_col[OFFSET(0)] = 'TEST_ENUM_TWO')sql"},
                   QueryContext{proto_schema(), &reader, &writer}),
               IsOkAndHolds(Field(&QueryResult::modified_row_count, 1)));
-  Simple simple_proto3;
-  simple_proto3.set_field("Four");
   EXPECT_CALL(
       writer,
       Write(Property(
@@ -3576,18 +3557,13 @@ TEST_P(QueryEngineTest, ExecuteSqlUpdateArrayProtoWithArrayEnumColumnInTable) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "test_table"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"int64_col", "proto_col",
-                                             "enum_col", "array_proto_col",
-                                             "array_enum_col"}),
-              Field(
-                  &MutationOp::rows,
-                  UnorderedElementsAre(ValueList{
-                      Int64(4), Proto(proto_type, simple_proto3),
-                      Enum(enum_type, TestEnum::TEST_ENUM_FOUR),
-                      Array(array_proto_type->AsArray(),
-                            {Proto(proto_type, simple_proto3)}),
-                      Array(array_enum_type->AsArray(),
-                            {Enum(enum_type, TestEnum::TEST_ENUM_ONE)})})))))))
+                    std::vector<std::string>{"int64_col", "array_enum_col"}),
+              Field(&MutationOp::rows,
+                    UnorderedElementsAre(ValueList{
+                        Int64(4),
+                        Array(array_enum_type->AsArray(),
+                              {Enum(enum_type,
+                                    TestEnum::TEST_ENUM_ONE)})})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
 
@@ -3613,7 +3589,8 @@ TEST_P(QueryEngineTest, ParameterProtoField) {
       QueryResult result,
       query_engine().ExecuteSql(query, QueryContext{proto_schema(), &reader}));
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(1)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1)))));
 }
 
 TEST_P(QueryEngineTest, ParameterEnums) {
@@ -3631,7 +3608,8 @@ TEST_P(QueryEngineTest, ParameterEnums) {
       QueryResult result,
       query_engine().ExecuteSql(query, QueryContext{proto_schema(), &reader}));
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(2)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(2)))));
 }
 // Tests for @{parameter_sensitive=always|never|auto} query hint.
 struct ParameterSensitiveHintInfo {
@@ -4443,9 +4421,10 @@ TEST_P(QueryEngineTest, ExecuteSqlSelectsFromNamedSchemaTable) {
   EXPECT_THAT(GetColumnNames(*result.rows), ElementsAre("int64_col"));
   EXPECT_THAT(GetColumnTypes(*result.rows), ElementsAre(Int64Type()));
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(2)),
-                                                ElementsAre(Int64(4)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(2)),
+                  ElementsAre(Int64(4)))));
 }
 
 TEST_P(QueryEngineTest, ExecuteSqlSelectsFromNamedSchemaTableWithSynonym) {
@@ -4489,9 +4468,10 @@ TEST_P(QueryEngineTest, ExecuteSqlSelectsFromNamedSchemaTableWithSynonym) {
   EXPECT_THAT(GetColumnNames(*result.rows), ElementsAre("int64_col"));
   EXPECT_THAT(GetColumnTypes(*result.rows), ElementsAre(Int64Type()));
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(2)),
-                                                ElementsAre(Int64(4)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(2)),
+                  ElementsAre(Int64(4)))));
 }
 
 TEST_P(QueryEngineTest, PlanSqlSelectsFromNamedSchemaTable) {
@@ -4672,9 +4652,10 @@ TEST_P(QueryEngineTest, ExecuteSqlSelectsFromNamedSchemaView) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(1)),
-                                                ElementsAre(Int64(2)),
-                                                ElementsAre(Int64(4)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1)),
+                  ElementsAre(Int64(2)),
+                  ElementsAre(Int64(4)))));
 }
 
 TEST_P(QueryEngineTest, ExecuteSqlInsertWithNamedSchemaSequence) {
@@ -4817,9 +4798,10 @@ TEST_P(QueryEngineTest, ExecuteColumnExpressionUDF) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(2)),
-                                                ElementsAre(Int64(3)),
-                                                ElementsAre(Int64(5)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(2)),
+                  ElementsAre(Int64(3)),
+                  ElementsAre(Int64(5)))));
 }
 
 TEST_P(QueryEngineTest, ExecuteUDFWithDefault) {
@@ -4850,14 +4832,16 @@ TEST_P(QueryEngineTest, ExecuteUDFWithDefault) {
                                 QueryContext{schema.get(), &reader}));
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(2)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(2)))));
 
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
       result, query_engine().ExecuteSql(Query{"SELECT test_udf(3)"},
                                         QueryContext{schema.get(), &reader}));
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(4)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(4)))));
 }
 
 TEST_P(QueryEngineTest, ExecuteScalarSubqueryUDF) {
@@ -4890,9 +4874,10 @@ TEST_P(QueryEngineTest, ExecuteScalarSubqueryUDF) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(5)),
-                                                ElementsAre(Int64(6)),
-                                                ElementsAre(Int64(8)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(5)),
+                  ElementsAre(Int64(6)),
+                  ElementsAre(Int64(8)))));
 }
 
 TEST_P(QueryEngineTest, UsingArrayUnnestingWithUDF) {
@@ -4975,9 +4960,10 @@ TEST_P(QueryEngineTest, ExecuteChainedUDFs) {
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(
       GetAllColumnValues(std::move(result.rows)),
-      IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(1), Int64(4)),
-                                        ElementsAre(Int64(2), Int64(6)),
-                                        ElementsAre(Int64(3), Int64(8)))));
+      IsOkAndHolds(UnorderedElementsAre(
+          ElementsAre(Int64(1), Int64(4)),
+          ElementsAre(Int64(2), Int64(6)),
+          ElementsAre(Int64(3), Int64(8)))));
 }
 
 TEST_P(QueryEngineTest, UDFOnViewCallingAnotherUDF) {
@@ -5014,9 +5000,10 @@ TEST_P(QueryEngineTest, UDFOnViewCallingAnotherUDF) {
 
   ASSERT_NE(result.rows, nullptr);
   EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(UnorderedElementsAre(ElementsAre(Int64(4)),
-                                                ElementsAre(Int64(6)),
-                                                ElementsAre(Int64(8)))));
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(4)),
+                  ElementsAre(Int64(6)),
+                  ElementsAre(Int64(8)))));
 }
 
 TEST_P(QueryEngineTest, UDFCallingSequenceInsert) {
@@ -5294,6 +5281,61 @@ TEST_P(QueryEngineTest, DMLWithLockScannedRanges) {
                                                    .reader = reader(),
                                                    .writer = &writer,
                                                    .is_read_only_txn = false}));
+}
+
+// Counts the reads that lock their scanned ranges exclusively.
+class LockModeRecordingReader : public RowReader {
+ public:
+  explicit LockModeRecordingReader(RowReader* delegate)
+      : delegate_(delegate) {}
+
+  absl::Status Read(const ReadArg& read_arg,
+                    std::unique_ptr<RowCursor>* cursor) override {
+    ++reads;
+    if (read_arg.lock_scanned_ranges_exclusive) {
+      ++exclusive_reads;
+    }
+    return delegate_->Read(read_arg, cursor);
+  }
+
+  int reads = 0;
+  int exclusive_reads = 0;
+
+ private:
+  RowReader* delegate_;
+};
+
+TEST_P(QueryEngineTest, ExclusiveLockHintLocksScannedRangesLikeForUpdate) {
+  const bool postgresql = GetParam() == POSTGRESQL;
+  const std::string exclusive = postgresql
+                                    ? "/*@lock_scanned_ranges=exclusive*/"
+                                    : "@{lock_scanned_ranges=EXCLUSIVE}";
+  const std::string shared = postgresql ? "/*@lock_scanned_ranges=shared*/"
+                                        : "@{lock_scanned_ranges=shared}";
+  const std::string query = "SELECT string_col FROM test_table";
+  const std::string update =
+      "UPDATE test_table SET string_col = 'new' WHERE int64_col = 1";
+  MockRowWriter writer;
+  for (const auto& [sql, locks_exclusively] :
+       std::vector<std::pair<std::string, bool>>{
+           {exclusive + query, true},
+           {query + " FOR UPDATE", true},
+           {shared + query, false},
+           {query, false},
+           {exclusive + update, true},
+           {shared + update, false},
+       }) {
+    SCOPED_TRACE(sql);
+    LockModeRecordingReader recording_reader(reader());
+    GOOGLESQL_ASSERT_OK(query_engine().ExecuteSql(
+        Query{sql}, QueryContext{.schema = schema(),
+                                 .reader = &recording_reader,
+                                 .writer = &writer,
+                                 .is_read_only_txn = false}));
+    EXPECT_GT(recording_reader.reads, 0);
+    EXPECT_EQ(recording_reader.exclusive_reads,
+              locks_exclusively ? recording_reader.reads : 0);
+  }
 }
 
 class DefaultValuesTest : public QueryEngineTest {
@@ -5613,14 +5655,13 @@ TEST_P(DefaultKeyTest, InsertOnConflictDoUpdateDmlDefaultKey) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "players_default_key"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"prefix", "player_id", "balance",
-                                             "account_id"}),
+                    std::vector<std::string>{"prefix", "player_id", "balance"}),
               Field(&MutationOp::rows,
                     // (excluded.balance + excluded.prefix + "
                     // "players_default_key.prefix) * 10 =
                     // (10 + 100 + 100) * 10 = 2100
-                    UnorderedElementsAre(ValueList{Int64(100), Int64(1),
-                                                   Int64(2100), Int64(0)})))))))
+                    UnorderedElementsAre(
+                        ValueList{Int64(100), Int64(1), Int64(2100)})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
   EXPECT_THAT(query_engine().ExecuteSql(
@@ -5656,10 +5697,10 @@ TEST_P(DefaultKeyTest, InsertOnConflictDoUpdateDmlWithParams) {
                       Field(&MutationOp::table, "players_default_key"),
                       Field(&MutationOp::columns,
                             std::vector<std::string>{"prefix", "player_id",
-                                                     "balance", "account_id"}),
+                                                     "balance"}),
                       Field(&MutationOp::rows,
                             UnorderedElementsAre(ValueList{
-                                Int64(1), Int64(1), Int64(50), Int64(1)})))))))
+                                Int64(1), Int64(1), Int64(50)})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
@@ -5700,19 +5741,17 @@ TEST_P(DefaultKeyTest, InsertOnConflictDoUpdateDmlDefaultKeyNullKeys) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "players_default_key"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"prefix", "player_id", "balance",
-                                             "account_id"}),
+                    std::vector<std::string>{"prefix", "player_id", "balance"}),
               Field(&MutationOp::rows,
                     UnorderedElementsAre(
                         // SET balance = (excluded.balance + excluded.prefix +
                         //  players_default_key.prefix) * 10 =
                         // (3 + 100 + 2) * 10 = 1050
-                        ValueList{Int64(2), Int64(2), Int64(1050), NullInt64()},
+                        ValueList{Int64(2), Int64(2), Int64(1050)},
                         // SET balance = (excluded.balance + excluded.prefix +
                         //  players_default_key.prefix) * 10 =
                         // (3 + 100 + 1) * 10 = 1040
-                        ValueList{Int64(1), Int64(1), Int64(1040),
-                                  Int64(1)})))))))
+                        ValueList{Int64(1), Int64(1), Int64(1040)})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
@@ -5791,14 +5830,13 @@ TEST_P(DefaultKeyTest, InsertOnConflictDoUpdateDmlDefaultKeyUniqueIndex) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "players_default_key"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"prefix", "player_id", "balance",
-                                             "account_id"}),
+                    std::vector<std::string>{"prefix", "player_id", "balance"}),
               Field(&MutationOp::rows,
                     // balance = (excluded.balance + excluded.prefix + "
                     // "players_default_key.prefix) * 10 =
                     // (1 + 100 + 100) * 10 = 2010
-                    UnorderedElementsAre(ValueList{Int64(100), Int64(1),
-                                                   Int64(2010), Int64(0)})))))))
+                    UnorderedElementsAre(
+                        ValueList{Int64(100), Int64(1), Int64(2010)})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
   EXPECT_THAT(query_engine().ExecuteSql(
@@ -5952,7 +5990,8 @@ TEST_P(GeneratedPrimaryKeyTest, ExecuteSqlUpdatesRows) {
                       Field(&MutationOp::type, MutationOpType::kUpdate),
                       Field(&MutationOp::table, "test_table"),
                       Field(&MutationOp::columns,
-                            std::vector<std::string>{"k1_pk", "k2", "k4"}),
+                            std::vector<std::string>{
+                                "k1_pk", "k3gen_storedpk", "k4"}),
                       Field(&MutationOp::rows,
                             UnorderedElementsAre(
                                 ValueList{Int64(2), Int64(2), Int64(8)},
@@ -6035,7 +6074,8 @@ TEST_P(GeneratedPrimaryKeyTest, ExecuteUpdateWithReturning) {
                       Field(&MutationOp::type, MutationOpType::kUpdate),
                       Field(&MutationOp::table, "test_table"),
                       Field(&MutationOp::columns,
-                            std::vector<std::string>{"k1_pk", "k2", "k4"}),
+                            std::vector<std::string>{
+                                "k1_pk", "k3gen_storedpk", "k4"}),
                       Field(&MutationOp::rows,
                             UnorderedElementsAre(
                                 ValueList{Int64(2), Int64(2), Int64(8)},
@@ -6188,7 +6228,8 @@ TEST_P(GeneratedPrimaryKeyTest, InsertOnConflictDoUpdateGPKReadsStoredGPK) {
                          Field(&MutationOp::type, MutationOpType::kUpdate),
                          Field(&MutationOp::table, "test_table"),
                          Field(&MutationOp::columns,
-                               std::vector<std::string>{"k1_pk", "k2", "k4"}),
+                               std::vector<std::string>{
+                                   "k1_pk", "k3gen_storedpk", "k4"}),
                          Field(&MutationOp::rows,
                                UnorderedElementsAre(ValueList{
                                    Int64(2), Int64(2), Int64(1002)})))))))
@@ -6245,7 +6286,7 @@ TEST_P(GeneratedPrimaryKeyTest, InsertOnConflictDoUpdateGPKReadsNonStoredGPK) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "test_table"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"k1_pk", "k2", "k4"}),
+                    std::vector<std::string>{"k1_pk", "k3gen_storedpk", "k4"}),
               // k4 = (excluded.k6gen_nonstored + excluded.k4 +
               // test_table.k6gen_nonstored) = (10 + 8 + 4) = 22  // NOLINT
               Field(&MutationOp::rows, UnorderedElementsAre(ValueList{
@@ -6297,10 +6338,11 @@ TEST_P(GeneratedPrimaryKeyTest,
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "test_table"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"k1_pk", "k2", "k4"}),
-              // k2 = (excluded.k2 + test_table.k2) = (2 + 1)
+                    std::vector<std::string>{"k1_pk", "k2", "k3gen_storedpk"}),
+              // k2 = (excluded.k2 + test_table.k2) = (2 + 1), and the
+              // generated key follows it.
               Field(&MutationOp::rows, UnorderedElementsAre(ValueList{
-                                           Int64(1), Int64(3), Int64(1)})))))))
+                                           Int64(1), Int64(3), Int64(3)})))))))
       .Times(1)
       .WillOnce(Return(absl::OkStatus()));
   EXPECT_THAT(query_engine().ExecuteSql(
@@ -6728,10 +6770,10 @@ TEST_P(TimestampKeyTest, OnConflictDoUpdateSetPCTValueIsAllowed) {
               AllOf(Field(&MutationOp::type, MutationOpType::kUpdate),
                     Field(&MutationOp::table, "timestamp_key_table"),
                     Field(&MutationOp::columns,
-                          std::vector<std::string>{"k", "ts", "val", "ts_val"}),
+                          std::vector<std::string>{"k", "ts", "ts_val"}),
                     Field(&MutationOp::rows,
                           UnorderedElementsAre(ValueList{
-                              Int64(1), NullTimestamp(), Int64(1),
+                              Int64(1), NullTimestamp(),
                               String("spanner.commit_timestamp()")})))))))
       .Times(2)
       .WillOnce(Return(absl::OkStatus()));
@@ -6778,9 +6820,9 @@ TEST_P(TimestampKeyTest, OnConflictDoUpdateWithReadNonPCTValues) {
               Field(&MutationOp::type, MutationOpType::kUpdate),
               Field(&MutationOp::table, "timestamp_key_table"),
               Field(&MutationOp::columns,
-                    std::vector<std::string>{"k", "ts", "val", "ts_val"}),
+                    std::vector<std::string>{"k", "ts", "ts_val"}),
               Field(&MutationOp::rows, UnorderedElementsAre(ValueList{
-                                           Int64(1), NullTimestamp(), Int64(1),
+                                           Int64(1), NullTimestamp(),
                                            TimestampFromUnixMicros(1)})))))))
       .Times(2)
       .WillOnce(Return(absl::OkStatus()));
@@ -6876,205 +6918,257 @@ TEST_P(TimestampKeyTest, OnConflictReturningCommitTimestampValueIsNotAllowed) {
               "expression.")));
 }
 
-TEST_P(QueryEngineTest, TestMockGraphAlgoPageRank) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
+// The graph algorithm tests run on test_graph: nodes 1, 2 and 4 and the edges
+// 1->2, 2->4, 4->1 and 1->4.
+class GraphAlgorithmTest : public QueryEngineTest {
+ protected:
+  absl::StatusOr<std::vector<std::vector<googlesql::Value>>> RunGraphQuery(
+      absl::string_view sql) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        QueryResult result,
+        query_engine().ExecuteSql(
+            Query{std::string(sql)},
+            QueryContext{property_graph_schema(), property_graph_reader()}));
+    return GetAllColumnValues(std::move(result.rows));
   }
+};
 
-  Query query{R"sql(EXPORT DATA OPTIONS (
-  uri = "gs://my-bucket-name/my-output.csv",
-  format = "csv"
-) AS
-GRAPH test_graph
-CALL PageRank() YIELD node, score
-RETURN node, score)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
+INSTANTIATE_TEST_SUITE_P(
+    GraphAlgorithmTests, GraphAlgorithmTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL),
+    [](const testing::TestParamInfo<GraphAlgorithmTest::ParamType>& info) {
+      return database_api::DatabaseDialect_Name(info.param);
+    });
+
+TEST_P(GraphAlgorithmTest, PageRank) {
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL PageRank() YIELD node, score
+      RETURN node.id, CAST(ROUND(score * 1000000) AS INT64) AS score)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(386862)),
+                  ElementsAre(Int64(2), Int64(214416)),
+                  ElementsAre(Int64(4), Int64(398721)))));
+  // Personalized PageRank from node 2.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL PageRank(
+        source_nodes => ARRAY {MATCH (n {id: 2}) RETURN n},
+        damping_factor => 0.5, max_iterations => 1)
+      YIELD node, score
+      RETURN node.id, score)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), googlesql::values::Double(0)),
+                  ElementsAre(Int64(2), googlesql::values::Double(0.5)),
+                  ElementsAre(Int64(4), googlesql::values::Double(0.5)))));
+}
+
+TEST_P(GraphAlgorithmTest, Centrality) {
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL BetweennessCentrality() YIELD node, centrality
+      RETURN node.id, centrality)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), googlesql::values::Double(1)),
+                  ElementsAre(Int64(2), googlesql::values::Double(0)),
+                  ElementsAre(Int64(4), googlesql::values::Double(1)))));
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL ClosenessCentrality(mode => 'EXACT') YIELD node, centrality
+      RETURN node.id,
+             CAST(ROUND(centrality * 1000) AS INT64) AS centrality)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(1000)),
+                  ElementsAre(Int64(2), Int64(667)),
+                  ElementsAre(Int64(4), Int64(667)))));
+}
+
+TEST_P(GraphAlgorithmTest, Clustering) {
+  for (absl::string_view algorithm :
+       {"WeaklyConnectedComponents()", "ModularityClustering(resolution => 0)",
+        "CorrelationClustering(resolution => 0)"}) {
+    EXPECT_THAT(RunGraphQuery(absl::StrCat(
+                    "GRAPH test_graph CALL ", algorithm,
+                    " YIELD node, cluster RETURN node.id, cluster")),
+                IsOkAndHolds(UnorderedElementsAre(
+                    ElementsAre(Int64(1), Int64(0)),
+                    ElementsAre(Int64(2), Int64(0)),
+                    ElementsAre(Int64(4), Int64(0)))))
+        << algorithm;
+  }
+  // Label propagation starts from the node indexes and keeps the labels it
+  // converges to: node 4 holds label 2 and pulls the others over.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL LabelPropagation() YIELD node, cluster
+      RETURN node.id, cluster)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(2)),
+                  ElementsAre(Int64(2), Int64(2)),
+                  ElementsAre(Int64(4), Int64(2)))));
+  // Without edges every node is its own component.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL WeaklyConnectedComponents(edge_labels => ['NoSuchLabel'])
+      YIELD node, cluster
+      RETURN node.id, cluster)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(0)),
+                  ElementsAre(Int64(2), Int64(1)),
+                  ElementsAre(Int64(4), Int64(2)))));
+  // The three nodes form a triangle.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL CliqueFinding(min_density => 1.0) YIELD node, clique
+      RETURN node.id, clique)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(0)),
+                  ElementsAre(Int64(2), Int64(0)),
+                  ElementsAre(Int64(4), Int64(0)))));
+}
+
+TEST_P(GraphAlgorithmTest, Similarity) {
+  // Undirected neighborhoods: 1 -> {2, 4}, 2 -> {1, 4}.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL JaccardSimilarity(
+        source_nodes => ARRAY {MATCH (n {id: 1}) RETURN n},
+        target_nodes => ARRAY {MATCH (n) WHERE n.id != 1 RETURN n})
+      YIELD source_node, target_node, similarity
+      RETURN source_node.id AS source_id, target_node.id AS target_id,
+             similarity)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(2),
+                              googlesql::values::Double(1.0 / 3)),
+                  ElementsAre(Int64(1), Int64(4),
+                              googlesql::values::Double(1.0 / 3)))));
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL CommonNeighborsSimilarity(
+        source_nodes => ARRAY {MATCH (n {id: 1}) RETURN n},
+        target_nodes => ARRAY {MATCH (n {id: 2}) RETURN n})
+      YIELD source_node, target_node, similarity
+      RETURN similarity)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(googlesql::values::Double(1)))));
+}
+
+TEST_P(GraphAlgorithmTest, ShortestPath) {
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL ShortestPath(
+        source_nodes => ARRAY {MATCH (n {id: 2}) RETURN n},
+        target_nodes => ARRAY {MATCH (n) RETURN n})
+      YIELD source_node, target_node, path, cost
+      RETURN source_node.id AS source_id, target_node.id AS target_id,
+             PATH_LENGTH(path) AS length, cost)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(2), Int64(1), Int64(2),
+                              googlesql::values::Double(2)),
+                  ElementsAre(Int64(2), Int64(2), Int64(0),
+                              googlesql::values::Double(0)),
+                  ElementsAre(Int64(2), Int64(4), Int64(1),
+                              googlesql::values::Double(1)))));
+}
+
+TEST_P(GraphAlgorithmTest, CallPerUsesTheWorkingTable) {
+  // Only the nodes are selected, so every node is its own component.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      MATCH (n) RETURN n
+      NEXT
+      CALL PER () WeaklyConnectedComponents() YIELD node, cluster
+      RETURN node.id, cluster)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(0)),
+                  ElementsAre(Int64(2), Int64(1)),
+                  ElementsAre(Int64(4), Int64(2)))));
+  // Edges whose end nodes were selected connect them.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      MATCH (n)-[e WHERE e.to_id = 2]->(m) RETURN n, e, m
+      NEXT
+      CALL PER () WeaklyConnectedComponents() YIELD node, cluster
+      RETURN node.id, cluster)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(0)),
+                  ElementsAre(Int64(2), Int64(0)))));
+  // Edges whose end nodes were not selected are dropped.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      MATCH (n)-[e WHERE e.to_id = 2]->(m) RETURN n, e
+      NEXT
+      CALL PER () WeaklyConnectedComponents() YIELD node, cluster
+      RETURN node.id, cluster)sql"),
+              IsOkAndHolds(UnorderedElementsAre(
+                  ElementsAre(Int64(1), Int64(0)))));
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      MATCH (n) RETURN n
+      NEXT
+      CALL PER () PageRank(node_labels => ['Test']) YIELD node, score
+      RETURN node.id)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("node_labels is only supported when CALL is "
+                                 "used without PER ()")));
+}
+
+TEST_P(GraphAlgorithmTest, ExportData) {
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      EXPORT DATA OPTIONS (
+        uri = "gs://my-bucket-name/my-output.csv",
+        format = "csv"
+      ) AS
+      GRAPH test_graph
+      CALL PageRank(node_labels => ['Test']) YIELD node, score
+      RETURN node.id, score)sql"),
               IsOkAndHolds(ElementsAre()));
 }
 
-TEST_P(QueryEngineTest, TestMockGraphAlgoWeaklyConnectedComponents) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-
-  Query query{R"sql(EXPORT DATA OPTIONS (
-  uri = "gs://my-bucket-name/my-output.csv",
-  format = "csv"
-) AS
-GRAPH test_graph
-CALL WeaklyConnectedComponents() YIELD node, component
-RETURN node, component)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoShortestPath) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-
-  Query query{R"sql(EXPORT DATA OPTIONS (
-  format = "CLOUD_SPANNER",
-  table = "Account",
-  write_mode = "update_ignore_all"
-) AS
-GRAPH test_graph
-CALL ShortestPath() YIELD source_node, target_node, distance
-RETURN source_node, target_node, distance)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoBetweennessCentrality) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL BetweennessCentrality() YIELD node, score RETURN node, score)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoClosenessCentrality) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL ClosenessCentrality() YIELD node, score RETURN node, score)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoModularityClustering) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL ModularityClustering() YIELD node, cluster RETURN node, cluster)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoCorrelationClustering) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL CorrelationClustering() YIELD node, cluster RETURN node, cluster)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoLabelPropagation) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL LabelPropagation() YIELD node, cluster RETURN node, cluster)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoCliqueFinding) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL CliqueFinding() YIELD node, clique RETURN node, clique)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoJaccardSimilarity) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL JaccardSimilarity() YIELD source_node, target_node, similarity RETURN source_node, target_node, similarity)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoCosineSimilarity) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL CosineSimilarity() YIELD source_node, target_node, similarity RETURN source_node, target_node, similarity)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoCommonNeighborsSimilarity) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL CommonNeighborsSimilarity() YIELD source_node, target_node, similarity RETURN source_node, target_node, similarity)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
-}
-
-TEST_P(QueryEngineTest, TestMockGraphAlgoTotalNeighborsSimilarity) {
-  if (GetParam() == POSTGRESQL) {
-    GTEST_SKIP();
-  }
-  Query query{
-      R"sql(EXPORT DATA OPTIONS (format = "csv", uri = "gs://foo") AS GRAPH test_graph CALL TotalNeighborsSimilarity() YIELD source_node, target_node, similarity RETURN source_node, target_node, similarity)sql"};
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
-      QueryResult result,
-      query_engine().ExecuteSql(query, QueryContext{property_graph_schema(),
-                                                    property_graph_reader()}));
-  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
-              IsOkAndHolds(ElementsAre()));
+TEST_P(GraphAlgorithmTest, InvalidArguments) {
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL PageRank(damping_factor => 1.5) YIELD node, score
+      RETURN node.id)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("PageRank: damping_factor must be in the "
+                                 "range [0, 1)")));
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL ClosenessCentrality(mode => 'FAST') YIELD node, centrality
+      RETURN node.id)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("mode must be EXACT or HYBRID")));
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL PageRank(max_idle_time => 'soon') YIELD node, score
+      RETURN node.id)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("max_idle_time must be a duration")));
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL PageRank(edge_weight_property => 'no_such_property')
+      YIELD node, score
+      RETURN node.id)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("edge_weight_property")));
+  // CorrelationClustering requires a resolution.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL CorrelationClustering() YIELD node, cluster
+      RETURN node.id)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL PageRank(no_such_argument => 1) YIELD node, score
+      RETURN node.id)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  // Like other graph queries, algorithm queries cannot return graph elements.
+  EXPECT_THAT(RunGraphQuery(R"sql(
+      GRAPH test_graph
+      CALL PageRank() YIELD node, score
+      RETURN node, score)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

@@ -29,14 +29,18 @@
 #include "google/spanner/v1/transaction.pb.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/time/time.h"
 #include "absl/types/optional.h"
 #include "absl/types/variant.h"
 #include "backend/common/ids.h"
 #include "backend/query/query_engine.h"
 #include "backend/schema/catalog/schema.h"
+#include "backend/stats/operation_stats.h"
+#include "backend/stats/system_stats_collector.h"
 #include "backend/transaction/read_only_transaction.h"
 #include "backend/transaction/read_write_transaction.h"
+#include "backend/schema/catalog/access_policy.h"
 #include "common/clock.h"
 #include "frontend/entities/database.h"
 #include "absl/status/status.h"
@@ -46,7 +50,23 @@ namespace spanner {
 namespace emulator {
 namespace frontend {
 
+class Database;
+
 namespace spanner_api = ::google::spanner::v1;
+
+// Attributes of a request that the SPANNER_SYS statistics record.
+struct RequestStatsInfo {
+  std::string request_tag;
+  // The ID of the session that sent the request.
+  std::string session_id;
+  // The request used a partition token.
+  bool partitioned = false;
+  // HIGH, MEDIUM or LOW.
+  std::string priority;
+  std::string client_ip_address;
+  std::string api_client_header;
+  std::string user_agent_header;
+};
 
 // Transaction represents a database transaction within the frontend.
 //
@@ -108,12 +128,14 @@ class Transaction {
         outcome;
   };
 
-  Transaction(std::variant<std::unique_ptr<backend::ReadWriteTransaction>,
+  Transaction(std::shared_ptr<Database> database_owner,
+              std::variant<std::unique_ptr<backend::ReadWriteTransaction>,
                            std::unique_ptr<backend::ReadOnlyTransaction>>
                   backend_transaction,
               const backend::QueryEngine* query_engine,
               const spanner_api::TransactionOptions& options,
-              const Usage& usage);
+              const Usage& usage, const std::string& creator_role = "");
+  ~Transaction();
 
   // Mark the transaction as closed. This indicates that the transaction is no
   // longer valid in the context of its owning session.  For example, prior
@@ -136,6 +158,12 @@ class Transaction {
   absl::Status Read(const backend::ReadArg& read_arg,
                     std::unique_ptr<backend::RowCursor>* cursor);
 
+  // Like Read, and records the read in the SPANNER_SYS statistics once
+  // `cursor` is destroyed.
+  absl::Status Read(const backend::ReadArg& read_arg,
+                    std::unique_ptr<backend::RowCursor>* cursor,
+                    const RequestStatsInfo& stats_info);
+
   // Calls ExecuteSql using the backend transaction and query engine in normal
   // query mode.
   absl::StatusOr<backend::QueryResult> ExecuteSql(const backend::Query& query);
@@ -145,8 +173,24 @@ class Transaction {
   absl::StatusOr<backend::QueryResult> ExecuteSql(
       const backend::Query& query, v1::ExecuteSqlRequest_QueryMode query_mode);
 
+  // Like ExecuteSql, and records the statement in the SPANNER_SYS statistics
+  // and lists it as an active query while it executes. Statements executed
+  // in PLAN mode are not recorded.
+  absl::StatusOr<backend::QueryResult> ExecuteSql(
+      const backend::Query& query, v1::ExecuteSqlRequest_QueryMode query_mode,
+      const RequestStatsInfo& stats_info);
+
+  // Sets the tag that the SPANNER_SYS statistics record for this read-write
+  // transaction. The first non-empty tag is kept.
+  void SetTransactionTag(absl::string_view tag) ABSL_LOCKS_EXCLUDED(mu_);
+
   // Calls Write using the backend transaction.
   absl::Status Write(const backend::Mutation& mutation);
+
+  // Returns an error unless the transaction's database role may read the
+  // named change stream with its read function.
+  absl::Status CheckChangeStreamReadAccess(
+      const std::string& change_stream_name) const;
 
   // Calls Commit using the backend transaction.
   absl::Status Commit();
@@ -159,6 +203,10 @@ class Transaction {
 
   // Returns the commit timestamp from the backend transaction.
   absl::StatusOr<absl::Time> GetCommitTimestamp() const;
+
+  // Returns the CommitStats mutation count of a committed read-write
+  // transaction.
+  absl::StatusOr<int64_t> GetMutationCount() const;
 
   bool IsClosed() const ABSL_LOCKS_EXCLUDED(mu_);
 
@@ -249,6 +297,21 @@ class Transaction {
   // Returns true if the transaction is in the given state.
   bool HasState(const backend::ReadWriteTransaction::State& state) const;
 
+  // Returns the collector of the database's SPANNER_SYS statistics.
+  backend::SystemStatsCollector* stats_collector() const;
+
+  // Records the end of this read-write transaction attempt, if `op` ended it
+  // with `status`: by committing, by failing to commit, or by aborting.
+  void MaybeRecordAttempt(OpType op, const absl::Status& status);
+
+  // Returns the access policy of the transaction's database role against its
+  // schema, or nullopt if the transaction has no role and is unrestricted.
+  absl::StatusOr<std::optional<backend::AccessPolicy>> GetAccessPolicy() const;
+
+  // Keeps backend resources alive until the transaction and its lock handle
+  // have been destroyed, including when a multiplexed manager retains it.
+  std::shared_ptr<Database> database_owner_;
+
   // The underlying backend transaction.
   std::variant<std::unique_ptr<backend::ReadWriteTransaction>,
                std::unique_ptr<backend::ReadOnlyTransaction>>
@@ -274,6 +337,9 @@ class Transaction {
   // Options for the transaction from the original rpc request.
   const spanner_api::TransactionOptions options_;
 
+  // The database role of the session that created the transaction, or empty.
+  const std::string creator_role_;
+
   // Mutex to guard state below.
   mutable absl::Mutex mu_;
 
@@ -298,6 +364,15 @@ class Transaction {
   // Number of SQL statements that ran successfully in this read-write
   // transaction. Used to enforce the geo-partitioning (placement) DML limits.
   int64_t executed_sql_statements_ ABSL_GUARDED_BY(mu_) = 0;
+
+  // The tag, operations and outcome of this read-write transaction attempt,
+  // for the SPANNER_SYS statistics.
+  std::string transaction_tag_ ABSL_GUARDED_BY(mu_);
+  backend::AccessFootprint attempt_footprint_ ABSL_GUARDED_BY(mu_);
+  absl::Duration commit_latency_ ABSL_GUARDED_BY(mu_);
+  bool attempt_recorded_ ABSL_GUARDED_BY(mu_) = false;
+  // The attempt retries an aborted attempt.
+  bool retry_ = false;
 
   // Placement table of an INSERT or DELETE that ran in this read-write
   // transaction. Such a statement must be the only statement in the

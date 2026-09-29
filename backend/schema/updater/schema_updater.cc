@@ -100,6 +100,8 @@
 #include "backend/schema/catalog/placement.h"
 #include "backend/schema/catalog/property_graph.h"
 #include "backend/schema/catalog/proto_bundle.h"
+#include "backend/schema/catalog/grants.h"
+#include "backend/schema/catalog/role.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/catalog/table.h"
@@ -110,8 +112,10 @@
 #include "backend/schema/graph/schema_graph_editor.h"
 #include "backend/schema/graph/schema_node.h"
 #include "backend/schema/parser/ddl_parser.h"
+#include "backend/schema/printer/print_ddl.h"
 #include "backend/schema/updater/ddl_type_conversion.h"
 #include "backend/schema/updater/global_schema_names.h"
+#include "backend/schema/updater/grant_resolver.h"
 #include "backend/schema/updater/schema_validation_context.h"
 #include "backend/schema/updater/sql_expression_validators.h"
 #include "backend/schema/verifiers/check_constraint_verifiers.h"
@@ -266,12 +270,25 @@ class SchemaUpdaterImpl {
   // Initializes potentially failing components after construction.
   absl::Status Init();
 
-  // Applies the given `statement` on to `latest_schema_`. Please note that
-  // it can return a nullptr if the statement is a no-op and no changes are
-  // made.
+  // Applies the given parsed `ddl_statement` on to `latest_schema_`. Please
+  // note that it can return a nullptr if the statement is a no-op and no
+  // changes are made.
   absl::StatusOr<std::unique_ptr<const Schema>> ApplyDDLStatement(
-      absl::string_view statement, absl::string_view proto_descriptor_bytes,
+      ddl::DDLStatement* ddl_statement,
+      absl::string_view proto_descriptor_bytes,
       const database_api::DatabaseDialect& dialect);
+
+  // Returns the schema changes that together apply `ddl_statement`. The schema
+  // graph editor cannot drop and add nodes in one change, so a statement that
+  // rebuilds a schema object is applied as a drop followed by a create; every
+  // other statement is a single change.
+  absl::StatusOr<std::vector<ddl::DDLStatement>> SchemaChangesForStatement(
+      const ddl::DDLStatement& ddl_statement);
+
+  // Returns the DROP SEARCH INDEX and CREATE SEARCH INDEX statements that
+  // rebuild a search index with a TOKENLIST key column added or dropped.
+  absl::StatusOr<std::vector<ddl::DDLStatement>> RebuildSearchIndexStatements(
+      const ddl::AlterSearchIndex& alter_index);
 
   // Run any pending schema actions resulting from the schema change statements.
   absl::Status RunPendingActions(
@@ -601,6 +618,7 @@ class SchemaUpdaterImpl {
       const ChangeStream* change_stream);
   absl::Status AlterIndex(const ddl::AlterIndex& alter_index);
   absl::Status AlterVectorIndex(const ddl::AlterVectorIndex& alter_index);
+  absl::Status AlterSearchIndex(const ddl::AlterSearchIndex& alter_index);
   absl::Status AlterSetInterleave(
       const ddl::AlterTable::SetInterleaveClause& set_interleave_clause,
       const Table* table);
@@ -643,6 +661,14 @@ class SchemaUpdaterImpl {
                            const Table* table);
 
   absl::Status DropTable(const ddl::DropTable& drop_table);
+
+  absl::Status CreateRole(const std::string& role_name);
+  absl::Status DropRole(const std::string& role_name);
+  // Applies a GRANT or REVOKE statement for privileges or role memberships.
+  absl::Status GrantOrRevoke(const ddl::DDLStatement& statement,
+                             const database_api::DatabaseDialect& dialect);
+  // Edits the Grants node of the schema, adding it if needed.
+  absl::Status EditGrants(absl::FunctionRef<void(Grants::Editor*)> edit);
 
   absl::Status DropIndex(const ddl::DropIndex& drop_index);
 
@@ -878,16 +904,9 @@ absl::Status ValidateDdlStatement(const ddl::DDLStatement& ddl,
 
 absl::StatusOr<std::unique_ptr<const Schema>>
 SchemaUpdaterImpl::ApplyDDLStatement(
-    absl::string_view statement, absl::string_view proto_descriptor_bytes,
+    ddl::DDLStatement* ddl_statement, absl::string_view proto_descriptor_bytes,
     const database_api::DatabaseDialect& dialect) {
-  if (statement.empty()) {
-    return error::EmptyDDLStatement();
-  }
-
   GOOGLESQL_RET_CHECK(!editor_->HasModifications());
-  GOOGLESQL_ASSIGN_OR_RETURN(std::unique_ptr<ddl::DDLStatement> ddl_statement,
-                   ParseDDLByDialect(statement, dialect));
-  GOOGLESQL_RETURN_IF_ERROR(ValidateDdlStatement(*ddl_statement, dialect));
   // Apply the statement to the schema graph.
   auto proto_bundle = latest_schema_->proto_bundle();
   switch (ddl_statement->statement_case()) {
@@ -1048,6 +1067,11 @@ SchemaUpdaterImpl::ApplyDDLStatement(
     }
     case ddl::DDLStatement::kAlterVectorIndex: {
       GOOGLESQL_RETURN_IF_ERROR(AlterVectorIndex(ddl_statement->alter_vector_index()));
+      break;
+    }
+    case ddl::DDLStatement::kAlterSearchIndex: {
+      GOOGLESQL_RETURN_IF_ERROR(
+          AlterSearchIndex(ddl_statement->alter_search_index()));
       break;
     }
     case ddl::DDLStatement::kAlterSchema: {
@@ -1230,14 +1254,35 @@ SchemaUpdaterImpl::ApplyDDLStatement(
       GOOGLESQL_RETURN_IF_ERROR(RenameTable(ddl_statement->rename_table()));
       break;
     }
-    case ddl::DDLStatement::kCreateRole:
-    case ddl::DDLStatement::kDropRole:
+    case ddl::DDLStatement::kCreateRole: {
+      const std::string& name = ddl_statement->create_role().role_name();
+      if (replaying_committed_ddl_ &&
+          latest_schema_->FindRole(name) != nullptr) {
+        return nullptr;
+      }
+      GOOGLESQL_RETURN_IF_ERROR(CreateRole(name));
+      break;
+    }
+    case ddl::DDLStatement::kDropRole: {
+      const std::string& name = ddl_statement->drop_role().role_name();
+      if (replaying_committed_ddl_ &&
+          latest_schema_->FindRole(name) == nullptr) {
+        return nullptr;
+      }
+      GOOGLESQL_RETURN_IF_ERROR(DropRole(name));
+      break;
+    }
     case ddl::DDLStatement::kGrantPrivilege:
     case ddl::DDLStatement::kRevokePrivilege:
     case ddl::DDLStatement::kGrantMembership:
     case ddl::DDLStatement::kRevokeMembership: {
-      // At the moment we don't do anything with FGAC statements, we simply
-      // allow them to be parsed.
+      absl::Status status = GrantOrRevoke(*ddl_statement, dialect);
+      // Earlier emulator versions accepted GRANT and REVOKE statements without
+      // validating them. Committed ones that are no longer valid are skipped.
+      if (!status.ok() && replaying_committed_ddl_) {
+        return nullptr;
+      }
+      GOOGLESQL_RETURN_IF_ERROR(status);
       break;
     }
     default:
@@ -1267,72 +1312,84 @@ SchemaUpdaterImpl::ApplyDDLStatements(
 
   for (const auto& statement : schema_change_operation.statements) {
     GOOGLESQL_VLOG(2) << "Applying statement " << statement;
-
-    // Set up the SchemaValidationContext before passing it to `editor_`. This
-    // includes setting the old schema snapshot and a callback to construct
-    // a temporary schema snapshot of the pending new schema. The temporary
-    // schema snapshot does not own the new schema nodes but will remain alive
-    // for the lifetime of `editor_` and `statement_context_`. The callback
-    // mechanism is needed because 1) SchemaUpdater doesn't know at which point
-    // SchemaGraphEditor will validate the new schema and 2) SchemaGraphEditor
-    // or SchemaValidationContext cannot take a dependency on Schema.
-    std::unique_ptr<const Schema> new_tmp_schema = nullptr;
-    SchemaValidationContext statement_context{
-        storage_, &global_names_, type_factory_, schema_change_timestamp_,
-        schema_change_operation.database_dialect};
-    statement_context_ = &statement_context;
-    statement_context_->SetOldSchemaSnapshot(latest_schema_);
-    statement_context_->SetTempNewSchemaSnapshotConstructor(
-        [this,
-         &new_tmp_schema](const SchemaGraph* unowned_graph) -> const Schema* {
-          new_tmp_schema = std::make_unique<const Schema>(
-              unowned_graph, latest_schema_->proto_bundle(),
-              latest_schema_->dialect(), database_id_);
-          return new_tmp_schema.get();
-        });
-
-    // Initialize the editor that will be used to stage the schema changes.
-    editor_ = std::make_unique<SchemaGraphEditor>(
-        latest_schema_->GetSchemaGraph(), statement_context_);
-
-    // If there is a semantic validation error, then we return right away.
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        auto new_schema,
-        ApplyDDLStatement(statement,
-                          schema_change_operation.proto_descriptor_bytes,
-                          schema_change_operation.database_dialect));
-
-    // This indicates that the statement was a no-op, e.g., a CREATE SEQUENCE IF
-    // NOT EXISTS statement for an existent sequence.
-    if (new_schema == nullptr) {
-      ++statement_index;
-      continue;
+    if (statement.empty()) {
+      return error::EmptyDDLStatement();
     }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::unique_ptr<ddl::DDLStatement> ddl_statement,
+        ParseDDLByDialect(statement, schema_change_operation.database_dialect));
+    GOOGLESQL_RETURN_IF_ERROR(ValidateDdlStatement(
+        *ddl_statement, schema_change_operation.database_dialect));
+    GOOGLESQL_ASSIGN_OR_RETURN(std::vector<ddl::DDLStatement> schema_changes,
+                     SchemaChangesForStatement(*ddl_statement));
 
-    intermediate_schema_statement_indexes_.push_back(statement_index);
-    // We save every schema snapshot as verifiers/backfillers from the
-    // current/next statement may need to refer to the previous/current
-    // schema snapshots.
-    statement_context_->SetValidatedNewSchemaSnapshot(new_schema.get());
-    latest_schema_ = new_schema.get();
-    intermediate_schemas_.emplace_back(std::move(new_schema));
-    pg_oid_assigner_->MarkNextPostgresqlOidForIntermediateSchema();
+    for (ddl::DDLStatement& schema_change : schema_changes) {
+      // Set up the SchemaValidationContext before passing it to `editor_`.
+      // This includes setting the old schema snapshot and a callback to
+      // construct a temporary schema snapshot of the pending new schema. The
+      // temporary schema snapshot does not own the new schema nodes but will
+      // remain alive for the lifetime of `editor_` and `statement_context_`.
+      // The callback mechanism is needed because 1) SchemaUpdater doesn't know
+      // at which point SchemaGraphEditor will validate the new schema and 2)
+      // SchemaGraphEditor or SchemaValidationContext cannot take a dependency
+      // on Schema.
+      std::unique_ptr<const Schema> new_tmp_schema = nullptr;
+      SchemaValidationContext statement_context{
+          storage_, &global_names_, type_factory_, schema_change_timestamp_,
+          schema_change_operation.database_dialect};
+      statement_context_ = &statement_context;
+      statement_context_->SetOldSchemaSnapshot(latest_schema_);
+      statement_context_->SetTempNewSchemaSnapshotConstructor(
+          [this,
+           &new_tmp_schema](const SchemaGraph* unowned_graph) -> const Schema* {
+            new_tmp_schema = std::make_unique<const Schema>(
+                unowned_graph, latest_schema_->proto_bundle(),
+                latest_schema_->dialect(), database_id_);
+            return new_tmp_schema.get();
+          });
 
-    // If everything was OK, make this the new schema snapshot for processing
-    // the next statement and save the pending schema snapshot and backfill
-    // work.
-    pending_work.emplace_back(std::move(statement_context));
+      // Initialize the editor that will be used to stage the schema changes.
+      editor_ = std::make_unique<SchemaGraphEditor>(
+          latest_schema_->GetSchemaGraph(), statement_context_);
 
-    if (storage_ != nullptr) {
-      for (auto& table_id : dropped_tables_) {
-        storage_->MarkDroppedTable(schema_change_timestamp_, table_id);
+      // If there is a semantic validation error, then we return right away.
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          auto new_schema,
+          ApplyDDLStatement(&schema_change,
+                            schema_change_operation.proto_descriptor_bytes,
+                            schema_change_operation.database_dialect));
+
+      // This indicates that the statement was a no-op, e.g., a CREATE SEQUENCE
+      // IF NOT EXISTS statement for an existent sequence.
+      if (new_schema == nullptr) {
+        continue;
       }
-      dropped_tables_.clear();
-      for (auto& [table_id, column_id] : dropped_columns_) {
-        storage_->MarkDroppedColumn(schema_change_timestamp_, table_id,
-                                    column_id);
+
+      intermediate_schema_statement_indexes_.push_back(statement_index);
+      // We save every schema snapshot as verifiers/backfillers from the
+      // current/next statement may need to refer to the previous/current
+      // schema snapshots.
+      statement_context_->SetValidatedNewSchemaSnapshot(new_schema.get());
+      latest_schema_ = new_schema.get();
+      intermediate_schemas_.emplace_back(std::move(new_schema));
+      pg_oid_assigner_->MarkNextPostgresqlOidForIntermediateSchema();
+
+      // If everything was OK, make this the new schema snapshot for processing
+      // the next statement and save the pending schema snapshot and backfill
+      // work.
+      pending_work.emplace_back(std::move(statement_context));
+
+      if (storage_ != nullptr) {
+        for (auto& table_id : dropped_tables_) {
+          storage_->MarkDroppedTable(schema_change_timestamp_, table_id);
+        }
+        dropped_tables_.clear();
+        for (auto& [table_id, column_id] : dropped_columns_) {
+          storage_->MarkDroppedColumn(schema_change_timestamp_, table_id,
+                                      column_id);
+        }
+        dropped_columns_.clear();
       }
-      dropped_columns_.clear();
     }
     ++statement_index;
   }
@@ -1426,7 +1483,20 @@ template <typename Modifier>
 absl::Status SchemaUpdaterImpl::SetDatabaseOptions(
     const ::google::protobuf::RepeatedPtrField<ddl::SetOption>& set_options,
     const database_api::DatabaseDialect& dialect, Modifier* modifier) {
-  modifier->set_options(set_options);
+  auto merged_options = modifier->get()->options();
+  for (const ddl::SetOption& option : set_options) {
+    auto existing = std::find_if(
+        merged_options.begin(), merged_options.end(),
+        [&](const ddl::SetOption& saved) {
+          return saved.option_name() == option.option_name();
+        });
+    if (existing == merged_options.end()) {
+      *merged_options.Add() = option;
+    } else {
+      *existing = option;
+    }
+  }
+  modifier->set_options(std::move(merged_options));
   for (const ddl::SetOption& option : set_options) {
     if (absl::StripPrefix(option.option_name(), "spanner.internal.cloud_") ==
         ddl::kDefaultSequenceKindOptionName) {
@@ -1486,6 +1556,10 @@ absl::Status SchemaUpdaterImpl::SetChangeStreamOptions(
   modifier->set_options(set_options);
   for (const ddl::SetOption& option : set_options) {
     if (option.has_null_value()) {
+      if (option.option_name() ==
+          ddl::kChangeStreamValueCaptureTypeOptionName) {
+        modifier->set_value_capture_type(std::nullopt);
+      }
       continue;
     }
     if (option.option_name() == ddl::kChangeStreamRetentionPeriodOptionName) {
@@ -5921,6 +5995,93 @@ absl::Status SchemaUpdaterImpl::AlterIndex(const ddl::AlterIndex& alter_index) {
   return absl::OkStatus();
 }
 
+absl::StatusOr<std::vector<ddl::DDLStatement>>
+SchemaUpdaterImpl::SchemaChangesForStatement(
+    const ddl::DDLStatement& ddl_statement) {
+  if (ddl_statement.has_alter_search_index()) {
+    const ddl::AlterSearchIndex& alter_index =
+        ddl_statement.alter_search_index();
+    if (alter_index.has_add_column() || alter_index.has_drop_column()) {
+      return RebuildSearchIndexStatements(alter_index);
+    }
+  }
+  return std::vector<ddl::DDLStatement>{ddl_statement};
+}
+
+absl::StatusOr<std::vector<ddl::DDLStatement>>
+SchemaUpdaterImpl::RebuildSearchIndexStatements(
+    const ddl::AlterSearchIndex& alter_index) {
+  const Index* index = latest_schema_->FindIndex(alter_index.index_name());
+  if (index == nullptr || !index->is_search_index()) {
+    return error::IndexNotFound(alter_index.index_name());
+  }
+
+  // TOKENLIST columns are the index keys, so the index is rebuilt from its own
+  // definition with the key list changed.
+  std::vector<ddl::DDLStatement> statements(2);
+  statements[0].mutable_drop_search_index()->set_index_name(index->Name());
+  GOOGLESQL_RETURN_IF_ERROR(
+      ddl::ParseDDLStatement(PrintIndex(index), &statements[1]));
+  GOOGLESQL_RET_CHECK(statements[1].has_create_search_index());
+  auto* token_columns = statements[1]
+                            .mutable_create_search_index()
+                            ->mutable_token_column_definition();
+  const bool add = alter_index.has_add_column();
+  const std::string& column_name =
+      add ? alter_index.add_column() : alter_index.drop_column();
+  auto existing = absl::c_find_if(
+      *token_columns, [&](const ddl::TokenColumnDefinition& token_column) {
+        return token_column.token_column().key_name() == column_name;
+      });
+  if (add) {
+    if (existing != token_columns->end()) {
+      return error::ColumnInIndexAlreadyExists(index->Name(), column_name);
+    }
+    if (index->indexed_table()->FindColumn(column_name) == nullptr) {
+      return error::ColumnNotFound(index->indexed_table()->Name(),
+                                   column_name);
+    }
+    token_columns->Add()->mutable_token_column()->set_key_name(column_name);
+  } else {
+    if (existing == token_columns->end()) {
+      return error::ColumnNotFoundInIndex(index->Name(), column_name);
+    }
+    if (token_columns->size() == 1) {
+      return error::SearchIndexRequiresTokenlistColumn(index->Name());
+    }
+    token_columns->erase(existing);
+  }
+  // Dropping an index does not release its name, so release it for the
+  // recreated index.
+  global_names_.RemoveName(index->Name());
+  return statements;
+}
+
+absl::Status SchemaUpdaterImpl::AlterSearchIndex(
+    const ddl::AlterSearchIndex& alter_index) {
+  const Index* index = latest_schema_->FindIndex(alter_index.index_name());
+  if (index == nullptr || !index->is_search_index()) {
+    return error::IndexNotFound(alter_index.index_name());
+  }
+
+  // TOKENLIST key column changes are applied by RebuildSearchIndexStatements.
+  ddl::AlterIndex alter_stored;
+  alter_stored.set_index_name(alter_index.index_name());
+  switch (alter_index.alter_type_case()) {
+    case ddl::AlterSearchIndex::kAddStoredColumn:
+      alter_stored.mutable_add_stored_column()->set_column_name(
+          alter_index.add_stored_column());
+      break;
+    case ddl::AlterSearchIndex::kDropStoredColumn:
+      alter_stored.set_drop_stored_column(alter_index.drop_stored_column());
+      break;
+    default:
+      GOOGLESQL_RET_CHECK_FAIL() << "Invalid alter search index type: "
+                       << absl::StrCat(alter_index);
+  }
+  return AlterIndex(alter_stored);
+}
+
 absl::Status SchemaUpdaterImpl::AlterVectorIndex(
     const ddl::AlterVectorIndex& alter_index) {
   const Index* index = latest_schema_->FindIndex(alter_index.index_name());
@@ -6360,6 +6521,135 @@ absl::Status SchemaUpdaterImpl::DropTable(const ddl::DropTable& drop_table) {
     dropped_tables_.push_back(table->id());
   }
   return status;
+}
+
+absl::Status SchemaUpdaterImpl::CreateRole(const std::string& role_name) {
+  GOOGLESQL_RETURN_IF_ERROR(
+      GlobalSchemaNames::ValidateSchemaName("Role", role_name));
+  if (!replaying_committed_ddl_) {
+    if (IsSystemRole(role_name) ||
+        absl::StartsWithIgnoreCase(role_name, "spanner_")) {
+      return error::InvalidSchemaName("Role", role_name);
+    }
+    if (latest_schema_->roles().size() >= limits::kMaxRolesPerDatabase) {
+      return error::TooManyRolesPerDatabase(role_name,
+                                            limits::kMaxRolesPerDatabase);
+    }
+  }
+  if (latest_schema_->FindRole(role_name) != nullptr) {
+    return error::SchemaObjectAlreadyExists("Role", role_name);
+  }
+  GOOGLESQL_RETURN_IF_ERROR(global_names_.AddName("Role", role_name));
+  return AddNode(std::make_unique<const Role>(role_name));
+}
+
+absl::Status SchemaUpdaterImpl::DropRole(const std::string& role_name) {
+  if (IsSystemRole(role_name)) {
+    return error::CannotDropSystemRole(role_name);
+  }
+  const Role* role = latest_schema_->FindRole(role_name);
+  if (role == nullptr) {
+    return error::DatabaseRoleNotFound(role_name);
+  }
+  // Dropping the role removes its memberships, and the Grants node revokes
+  // the privileges of the dropped role. Committed DDL from before privileges
+  // were validated may drop a role that still holds privileges.
+  const Grants* grants = latest_schema_->grants();
+  if (grants != nullptr && !replaying_committed_ddl_ &&
+      absl::c_any_of(grants->privileges(),
+                     [&](const Grants::Privilege& privilege) {
+                       return privilege.grantee_role == role;
+                     })) {
+    return error::CannotDropRoleWithPrivileges(role->Name());
+  }
+  GOOGLESQL_RETURN_IF_ERROR(DropNode(role));
+  global_names_.RemoveName(role->Name());
+  return absl::OkStatus();
+}
+
+absl::Status SchemaUpdaterImpl::GrantOrRevoke(
+    const ddl::DDLStatement& statement,
+    const database_api::DatabaseDialect& dialect) {
+  GrantResolver resolver(latest_schema_, dialect);
+  switch (statement.statement_case()) {
+    case ddl::DDLStatement::kGrantPrivilege: {
+      const ddl::GrantPrivilege& grant = statement.grant_privilege();
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::vector<Grants::Privilege> privileges,
+          resolver.ResolvePrivileges(grant.privilege(), grant.target(),
+                                     grant.grantee()));
+      return EditGrants([&](Grants::Editor* editor) {
+        for (const Grants::Privilege& privilege : privileges) {
+          // `public` holds USAGE on the default schema unless it was revoked.
+          if (privilege.object_type == ddl::PrivilegeTarget::SCHEMA &&
+              privilege.object == nullptr && privilege.grantee == kPublicRole) {
+            editor->set_public_default_schema_usage_revoked(false);
+          } else {
+            editor->AddPrivilege(privilege);
+          }
+        }
+      });
+    }
+    case ddl::DDLStatement::kRevokePrivilege: {
+      const ddl::RevokePrivilege& revoke = statement.revoke_privilege();
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::vector<Grants::Privilege> privileges,
+          resolver.ResolvePrivileges(revoke.privilege(), revoke.target(),
+                                     revoke.grantee()));
+      return EditGrants([&](Grants::Editor* editor) {
+        for (const Grants::Privilege& privilege : privileges) {
+          if (privilege.object_type == ddl::PrivilegeTarget::SCHEMA &&
+              privilege.object == nullptr && privilege.grantee == kPublicRole) {
+            editor->set_public_default_schema_usage_revoked(true);
+          } else {
+            editor->RemovePrivilege(privilege);
+          }
+        }
+      });
+    }
+    case ddl::DDLStatement::kGrantMembership: {
+      const ddl::GrantMembership& grant = statement.grant_membership();
+      GOOGLESQL_ASSIGN_OR_RETURN(std::vector<Grants::Membership> memberships,
+                                 resolver.ResolveMemberships(
+                                     grant.role(), grant.grantee(),
+                                     /*is_grant=*/true));
+      return EditGrants([&](Grants::Editor* editor) {
+        for (const Grants::Membership& membership : memberships) {
+          editor->AddMembership(membership);
+        }
+      });
+    }
+    case ddl::DDLStatement::kRevokeMembership: {
+      const ddl::RevokeMembership& revoke = statement.revoke_membership();
+      GOOGLESQL_ASSIGN_OR_RETURN(std::vector<Grants::Membership> memberships,
+                                 resolver.ResolveMemberships(
+                                     revoke.role(), revoke.grantee(),
+                                     /*is_grant=*/false));
+      return EditGrants([&](Grants::Editor* editor) {
+        for (const Grants::Membership& membership : memberships) {
+          editor->RemoveMembership(membership);
+        }
+      });
+    }
+    default:
+      GOOGLESQL_RET_CHECK_FAIL() << "Not a GRANT or REVOKE statement: "
+                                 << statement.statement_case();
+  }
+}
+
+absl::Status SchemaUpdaterImpl::EditGrants(
+    absl::FunctionRef<void(Grants::Editor*)> edit) {
+  if (const Grants* grants = latest_schema_->grants(); grants != nullptr) {
+    return AlterNode<Grants>(grants,
+                             [&](Grants::Editor* editor) -> absl::Status {
+                               edit(editor);
+                               return absl::OkStatus();
+                             });
+  }
+  auto grants = std::make_unique<Grants>();
+  Grants::Editor editor(grants.get());
+  edit(&editor);
+  return AddNode(std::move(grants));
 }
 
 absl::Status SchemaUpdaterImpl::DropIndex(const ddl::DropIndex& drop_index) {

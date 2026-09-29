@@ -63,8 +63,10 @@ AddTablesFromMetadata(
   std::vector<googlesql::SimpleTable::NameAndType> columns;
   for (auto it = metadata_entries.cbegin(); it != metadata_entries.cend();
        ++it) {
-    if (absl::StartsWith(it->spanner_type, "ARRAY<STRUCT")) {
-      // Struct array is not supported. Ignore such columns.
+    if (absl::StartsWith(it->spanner_type, "ARRAY<STRUCT") &&
+        !spanner_to_gsql_type.contains(it->spanner_type)) {
+      // Struct arrays are only supported where the mapping provides their
+      // type. Ignore other such columns.
       continue;
     }
     // This is a table we're in the process of creating so add the next

@@ -27,7 +27,10 @@
 #include "googlesql/public/value.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
+#include "backend/query/change_stream/queryable_change_stream_tvf.h"
 #include "backend/query/spanner_sys_catalog.h"
+#include "backend/schema/catalog/access_policy.h"
 #include "backend/schema/catalog/model.h"
 #include "backend/schema/catalog/schema.h"
 #include "third_party/spanner_pg/ddl/spangres_schema_printer.h"
@@ -53,19 +56,51 @@ struct IndexColumnsMetaEntry;
 // In production, SPANNER_SYS schemas are also exposed which are not available
 // in the emulator.
 //
+// A database role that is not a member of spanner_info_reader sees only the
+// rows about the objects and privileges it has access to, as documented for
+// each table.
+//
 // This class is tested via tests/conformance/cases/information_schema.cc
 class InformationSchemaCatalog : public googlesql::SimpleCatalog {
  public:
   static constexpr char kName[] = "INFORMATION_SCHEMA";
   static constexpr char kPGName[] = "PG_INFORMATION_SCHEMA";
 
+  // `access` is the fine-grained access control policy of the database role
+  // that reads the tables, or nullptr if the reader has no database role.
   explicit InformationSchemaCatalog(
       const std::string& catalog_name, const Schema* default_schema,
-      const SpannerSysCatalog* spanner_sys_catalog);
+      const SpannerSysCatalog* spanner_sys_catalog,
+      const AccessPolicy* access = nullptr);
 
  private:
+  // A row of a table that lists granted privileges.
+  struct PrivilegeRow {
+    // The values by column name. Columns missing from the table of a dialect
+    // are ignored, and columns without a value are NULL.
+    absl::flat_hash_map<std::string, googlesql::Value> values;
+
+    // The role that holds the privilege.
+    std::string grantee;
+
+    // Whether the database role may see the object of the privilege.
+    bool object_visible = true;
+  };
+
+  // The rows of a privilege table that a database role sees.
+  enum class PrivilegeFilter {
+    // Privileges on objects that the role may see.
+    kVisibleObject,
+    // Privileges granted to the effective roles of the role.
+    kEffectiveGrantee,
+    // Privileges granted to the effective roles of the role other than public.
+    kEffectiveGranteeExceptPublic,
+  };
+
   const Schema* default_schema_;
   const SpannerSysCatalog* spanner_sys_catalog_;
+  // The policy that filters rows, or nullptr if all rows are visible.
+  const AccessPolicy* access_;
   const ::google::spanner::admin::database::v1::DatabaseDialect dialect_;
   absl::flat_hash_map<std::string, std::unique_ptr<googlesql::SimpleTable>>
       tables_by_name_;
@@ -86,6 +121,30 @@ class InformationSchemaCatalog : public googlesql::SimpleCatalog {
   inline googlesql::Value DialectTableCatalog();
   inline std::pair<std::string, std::string>
   GetSchemaAndNameForInformationSchema(std::string table_name);
+
+  // Row filtering: whether the database role may see an object. All objects
+  // are visible without a policy.
+  bool CanSeeTable(const Table* table) const;
+  bool CanSeeTablePrivileges(const Table* table) const;
+  bool CanSeeColumn(const Column* column) const;
+  bool CanSeeView(const View* view) const;
+  // `index` is nullptr for the primary key of `table`.
+  bool CanSeeIndex(const Table* table, const Index* index,
+                   bool table_delete_suffices) const;
+  bool CanSeeSequence(const Sequence* sequence) const;
+  bool CanSeeChangeStream(const ChangeStream* change_stream) const;
+  // `routine` is a user-defined function or the change stream of a read
+  // function.
+  bool CanSeeRoutine(const SchemaNode* routine) const;
+  bool CanSeeModel(const Model* model) const;
+  bool CanSeePropertyGraph(const PropertyGraph* property_graph) const;
+  bool CanSeeRole(absl::string_view role) const;
+  bool CanSeeGrantee(absl::string_view grantee, bool include_public) const;
+
+  // Returns the read function of a change stream, which has the signature that
+  // queries use.
+  std::unique_ptr<QueryableChangeStreamTvf> CreateReadFunction(
+      const ChangeStream* change_stream);
 
   void AddProtoBundleToSchemataTable();
   googlesql::Value GetProtoBundleValue();
@@ -137,6 +196,20 @@ class InformationSchemaCatalog : public googlesql::SimpleCatalog {
   void FillPlacementOptionsTable();
 
   void FillPropertyGraphsTable();
+
+  void FillRolesTable();
+  void FillRoleGranteesTable();
+  void FillPrivilegeTable(absl::string_view table_name,
+                          absl::Span<const PrivilegeRow> privilege_rows,
+                          PrivilegeFilter filter);
+  void FillTablePrivilegesTables();
+  void FillColumnPrivilegesTables();
+  void FillChangeStreamPrivilegesTables();
+  void FillRoutinePrivilegesTables();
+  void FillModelPrivilegesTables();
+  void FillRoutinesAndParametersTables();
+  void FillTableSynonymsTable();
+  void FillInformationSchemaCatalogNameTable();
 };
 
 }  // namespace backend

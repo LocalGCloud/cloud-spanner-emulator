@@ -311,6 +311,29 @@ TEST_F(ChangeStreamTest, AddOneInsertOpAndCheckResultWriteOpContent) {
   ASSERT_EQ(operation->values[18], googlesql::Value(Bool(false)));
 }
 
+TEST_F(ChangeStreamTest, TransactionTagPropagated) {
+  set_up_partition_token_for_change_stream_partition_table(change_stream_,
+                                                           store());
+  std::vector<WriteOp> buffered_write_ops;
+  buffered_write_ops.push_back(
+      Insert(table_, Key({Int64(1)}), base_columns_,
+             {Int64(1), String("value"), String("value2")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> change_stream_write_ops,
+      BuildChangeStreamWriteOps(schema_.get(), buffered_write_ops, store(), 1,
+                                /*exclude_txn_from_change_streams=*/false,
+                                /*row_deletion_policy_txn=*/false,
+                                /*transaction_tag=*/"custom_txn_tag"));
+  ASSERT_EQ(change_stream_write_ops.size(), 1);
+  WriteOp op = change_stream_write_ops[0];
+  auto* operation = std::get_if<InsertOp>(&op);
+  ASSERT_NE(operation, nullptr);
+  // Verify transaction_tag
+  ASSERT_EQ(operation->values[17], googlesql::Value(String("custom_txn_tag")));
+  // Verify is_system_transaction
+  ASSERT_EQ(operation->values[18], googlesql::Value(Bool(false)));
+}
+
 TEST_F(ChangeStreamTest, AddTwoInsertForDiffSetCols) {
   set_up_partition_token_for_change_stream_partition_table(change_stream_,
                                                            store());
@@ -1448,6 +1471,59 @@ TEST_F(ChangeStreamTest, TimestampValueAndTypes) {
   ASSERT_EQ(mod_keys.element(1),
             googlesql::Value(String(
                 "{\"commit_ts\":\"1970-01-21T14:09:51.123Z\",\"k\":\"43\"}")));
+}
+
+TEST_F(ChangeStreamTest, RowDeletionPolicyTxnRecordsSystemTxnTtlDeletes) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::unique_ptr<const Schema> ttl_schema,
+      emulator::test::CreateSchemaFromDDL(
+          {R"(
+            CREATE TABLE TtlTable (
+              int64_col INT64 NOT NULL,
+              ts TIMESTAMP,
+            ) PRIMARY KEY (int64_col),
+              ROW DELETION POLICY (OLDER_THAN(ts, INTERVAL 1 DAY)))",
+           "CREATE CHANGE STREAM AllDeletes FOR TtlTable",
+           "CREATE CHANGE STREAM NoTtlDeletes FOR TtlTable "
+           "OPTIONS (exclude_ttl_deletes = true)"},
+          &type_factory_));
+  const Table* ttl_table = ttl_schema->FindTable("TtlTable");
+  const ChangeStream* all_deletes = ttl_schema->FindChangeStream("AllDeletes");
+  set_up_partition_token_for_change_stream_partition_table(all_deletes,
+                                                           store());
+  set_up_partition_token_for_change_stream_partition_table(
+      ttl_schema->FindChangeStream("NoTtlDeletes"), store());
+  GOOGLESQL_ASSERT_OK(store()->Insert(
+      ttl_table, Key({Int64(1)}),
+      {ttl_table->FindColumn("int64_col"), ttl_table->FindColumn("ts")},
+      {Int64(1), googlesql::Value::NullTimestamp()}));
+  const std::vector<WriteOp> buffered_write_ops = {
+      Delete(ttl_table, Key({Int64(1)}))};
+
+  // Only the change stream that records TTL deletes gets a record, tagged as
+  // written by the row deletion policy system transaction.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> ttl_write_ops,
+      BuildChangeStreamWriteOps(ttl_schema.get(), buffered_write_ops, store(),
+                                1, /*exclude_txn_from_change_streams=*/false,
+                                /*row_deletion_policy_txn=*/true));
+  ASSERT_EQ(ttl_write_ops.size(), 1);
+  ASSERT_EQ(TableOf(ttl_write_ops[0]), all_deletes->change_stream_data_table());
+  const InsertOp& ttl_record = std::get<InsertOp>(ttl_write_ops[0]);
+  EXPECT_EQ(ttl_record.values[13], String("DELETE"));
+  EXPECT_EQ(ttl_record.values[17], String(kRowDeletionPolicyTransactionTag));
+  EXPECT_EQ(ttl_record.values[18], Bool(true));
+
+  // A user delete is recorded by both change streams as a user transaction.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<WriteOp> user_write_ops,
+      BuildChangeStreamWriteOps(ttl_schema.get(), buffered_write_ops, store(),
+                                1, /*exclude_txn_from_change_streams=*/false));
+  ASSERT_EQ(user_write_ops.size(), 2);
+  for (const WriteOp& op : user_write_ops) {
+    EXPECT_EQ(std::get<InsertOp>(op).values[17], String(""));
+    EXPECT_EQ(std::get<InsertOp>(op).values[18], Bool(false));
+  }
 }
 
 }  // namespace

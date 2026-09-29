@@ -33,6 +33,7 @@
 
 #include <string.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -42,6 +43,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/flags/flag.h"
@@ -228,10 +230,21 @@ class PostgreSQLToSpannerDDLTranslatorImpl
                            google::spanner::emulator::backend::ddl::CreateIndex& out,
                            const TranslationOptions& options);
 
+    // Translates <CREATE INDEX ... USING scann> into a vector index.
+    absl::Status Translate(
+        const IndexStmt& create_index_statement,
+        google::spanner::emulator::backend::ddl::CreateVectorIndex& out);
+
     absl::Status Translate(const AlterTableStmt& alter_index_statement,
                            google::spanner::emulator::backend::ddl::AlterIndex& out);
 
    protected:
+    std::string GetIndexName(const IndexStmt& create_index_statement) const;
+
+    absl::Status PopulateVectorIndexOptions(
+        const List* index_options,
+        OptionList* options_out) const;
+
     absl::StatusOr<absl::string_view> GetColumnName(
         const NullTest& null_test, absl::string_view parent_statement) const;
 
@@ -386,6 +399,10 @@ class PostgreSQLToSpannerDDLTranslatorImpl
   absl::Status TranslateCreateIndex(const IndexStmt& create_index_statement,
                                     const TranslationOptions& options,
                                     google::spanner::emulator::backend::ddl::CreateIndex& out) const;
+  absl::Status TranslateCreateVectorIndex(
+      const IndexStmt& create_index_statement,
+      const TranslationOptions& options,
+      google::spanner::emulator::backend::ddl::CreateVectorIndex& out) const;
   absl::Status TranslateAlterIndex(const AlterTableStmt& alter_index_statement,
                                    const TranslationOptions& options,
                                    google::spanner::emulator::backend::ddl::AlterIndex& out) const;
@@ -394,6 +411,25 @@ class PostgreSQLToSpannerDDLTranslatorImpl
                                 google::spanner::emulator::backend::ddl::AlterVectorIndex& out) const;
   absl::Status TranslateCreateSchema(const CreateSchemaStmt& create_statement,
                                      google::spanner::emulator::backend::ddl::CreateSchema& out) const;
+  // Translates GRANT or REVOKE of privileges. The output fields are shared by
+  // the GrantPrivilege and RevokePrivilege protos.
+  absl::Status TranslateGrantStatement(
+      const GrantStmt& grant_statement,
+      google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Privilege>&
+          privileges_out,
+      google::spanner::emulator::backend::ddl::PrivilegeTarget& target_out,
+      google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Grantee>&
+          grantees_out) const;
+  // Translates GRANT or REVOKE of role memberships.
+  absl::Status TranslateGrantRoleStatement(
+      const GrantRoleStmt& grant_role_statement,
+      google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Grantee>&
+          roles_out,
+      google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Grantee>&
+          grantees_out) const;
+  absl::Status TranslateGrantee(
+      const RoleSpec& role_spec, absl::string_view statement_type,
+      google::spanner::emulator::backend::ddl::Grantee& out) const;
   absl::Status TranslateVacuum(const VacuumStmt& vacuum_statement,
                                const TranslationOptions& options,
                                google::spanner::emulator::backend::ddl::Analyze& out) const;
@@ -587,6 +623,11 @@ class PostgreSQLToSpannerDDLTranslatorImpl
       const CreateSearchIndexStmt& create_search_index_stmt,
       const TranslationOptions& options,
       google::spanner::emulator::backend::ddl::CreateSearchIndex& out) const;
+
+  absl::Status TranslateAlterSearchIndex(
+      const AlterSearchIndexStmt& alter_search_index_stmt,
+      const TranslationOptions& options,
+      google::spanner::emulator::backend::ddl::AlterSearchIndex& out) const;
 
   absl::Status TranslateStorageOption(
       const LocalityGroupOption* storage,
@@ -2949,6 +2990,13 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateCreateIndex(
   options)); return absl::OkStatus();
 }
 
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateCreateVectorIndex(
+    const IndexStmt& create_index_statement, const TranslationOptions& options,
+    google::spanner::emulator::backend::ddl::CreateVectorIndex& out) const {
+  CreateIndexStatementTranslator translator(*this, options);
+  return translator.Translate(create_index_statement, out);
+}
+
 absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateAlterIndex(
     const AlterTableStmt& alter_index_statement, const TranslationOptions& options,
     google::spanner::emulator::backend::ddl::AlterIndex& out) const {
@@ -3025,6 +3073,153 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateCreateSchema(
     out.set_existence_modifier(google::spanner::emulator::backend::ddl::CreateSchema::IF_NOT_EXISTS);
   }
   out.set_schema_name(create_statement.schemaname);
+  return absl::OkStatus();
+}
+
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateGrantee(
+    const RoleSpec& role_spec, absl::string_view statement_type,
+    google::spanner::emulator::backend::ddl::Grantee& out) const {
+  GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(role_spec));
+  out.set_type(google::spanner::emulator::backend::ddl::Grantee::ROLE);
+  switch (role_spec.roletype) {
+    case ROLESPEC_CSTRING:
+      GOOGLESQL_RET_CHECK_NE(role_spec.rolename, nullptr);
+      out.set_name(role_spec.rolename);
+      return absl::OkStatus();
+    case ROLESPEC_PUBLIC:
+      out.set_name("public");
+      return absl::OkStatus();
+    default:
+      return UnsupportedTranslationError(absl::Substitute(
+          "Only role names are supported as grantees in <$0> statement.",
+          statement_type));
+  }
+}
+
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateGrantStatement(
+    const GrantStmt& grant_statement,
+    google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Privilege>&
+        privileges_out,
+    google::spanner::emulator::backend::ddl::PrivilegeTarget& target_out,
+    google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Grantee>&
+        grantees_out) const {
+  using ::google::spanner::emulator::backend::ddl::Privilege;
+  using ::google::spanner::emulator::backend::ddl::PrivilegeTarget;
+  GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(grant_statement));
+  const absl::string_view statement_type =
+      grant_statement.is_grant ? "GRANT" : "REVOKE";
+
+  for (const AccessPriv* access_priv :
+       StructList<AccessPriv*>(grant_statement.privileges)) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(
+        *access_priv, grant_statement.is_grant, /*is_privilege=*/true));
+    // `ALL (columns)` has no privilege name.
+    if (access_priv->priv_name == nullptr) {
+      return UnsupportedTranslationError(absl::Substitute(
+          "<ALL PRIVILEGES> clause is not supported in <$0> statement.",
+          statement_type));
+    }
+    Privilege::Type type;
+    if (!Privilege::Type_Parse(absl::AsciiStrToUpper(access_priv->priv_name),
+                               &type)) {
+      return absl::InvalidArgumentError(
+          absl::Substitute("Privilege type $0 is not supported in <$1> "
+                           "statement.",
+                           access_priv->priv_name, statement_type));
+    }
+    Privilege* privilege = privileges_out.Add();
+    privilege->set_type(type);
+    for (const String* column : StructList<String*>(access_priv->cols)) {
+      privilege->add_column(column->sval);
+    }
+  }
+
+  switch (grant_statement.objtype) {
+    case OBJECT_TABLE:
+      target_out.set_type(PrivilegeTarget::TABLE);
+      break;
+    case OBJECT_CHANGE_STREAM:
+      target_out.set_type(PrivilegeTarget::CHANGE_STREAM);
+      break;
+    case OBJECT_SEQUENCE:
+      target_out.set_type(PrivilegeTarget::SEQUENCE);
+      break;
+    case OBJECT_SCHEMA:
+      target_out.set_type(PrivilegeTarget::SCHEMA);
+      break;
+    case OBJECT_FUNCTION:
+    case OBJECT_ROUTINE:
+      // Only the read functions of change streams accept privileges.
+      target_out.set_type(PrivilegeTarget::TABLE_FUNCTION);
+      break;
+    default:
+      GOOGLESQL_RET_CHECK_FAIL() << "Object type should have been validated in "
+                                    "ValidateParseTreeNode";
+  }
+
+  if (grant_statement.targtype == ACL_TARGET_ALL_IN_SCHEMA) {
+    if (target_out.type() == PrivilegeTarget::TABLE_FUNCTION) {
+      return UnsupportedTranslationError(absl::Substitute(
+          "<ALL FUNCTIONS IN SCHEMA> is not supported in <$0> statement.",
+          statement_type));
+    }
+    for (const String* schema : StructList<String*>(grant_statement.objects)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::string schema_name,
+                                 GetSchemaName(*schema, statement_type));
+      target_out.add_all_in_schema(schema_name);
+    }
+  } else if (target_out.type() == PrivilegeTarget::SCHEMA) {
+    for (const String* schema : StructList<String*>(grant_statement.objects)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::string schema_name,
+                                 GetSchemaName(*schema, statement_type));
+      target_out.add_name(schema_name);
+    }
+  } else if (target_out.type() == PrivilegeTarget::TABLE_FUNCTION) {
+    for (const ObjectWithArgs* function :
+         StructList<ObjectWithArgs*>(grant_statement.objects)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          std::string function_name,
+          GetFunctionName(*function, grant_statement.is_grant, statement_type));
+      target_out.add_name(function_name);
+    }
+  } else {
+    for (const RangeVar* object : StructList<RangeVar*>(grant_statement.objects)) {
+      GOOGLESQL_ASSIGN_OR_RETURN(std::string name,
+                                 GetTableName(*object, statement_type));
+      target_out.add_name(name);
+    }
+  }
+
+  for (const RoleSpec* grantee : StructList<RoleSpec*>(grant_statement.grantees)) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        TranslateGrantee(*grantee, statement_type, *grantees_out.Add()));
+  }
+  return absl::OkStatus();
+}
+
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateGrantRoleStatement(
+    const GrantRoleStmt& grant_role_statement,
+    google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Grantee>&
+        roles_out,
+    google::protobuf::RepeatedPtrField<google::spanner::emulator::backend::ddl::Grantee>&
+        grantees_out) const {
+  GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(grant_role_statement));
+  const absl::string_view statement_type =
+      grant_role_statement.is_grant ? "GRANT" : "REVOKE";
+  for (const AccessPriv* role :
+       StructList<AccessPriv*>(grant_role_statement.granted_roles)) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(
+        *role, grant_role_statement.is_grant, /*is_privilege=*/false));
+    GOOGLESQL_RET_CHECK_NE(role->priv_name, nullptr);
+    google::spanner::emulator::backend::ddl::Grantee* role_out = roles_out.Add();
+    role_out->set_type(google::spanner::emulator::backend::ddl::Grantee::ROLE);
+    role_out->set_name(role->priv_name);
+  }
+  for (const RoleSpec* grantee :
+       StructList<RoleSpec*>(grant_role_statement.grantee_roles)) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        TranslateGrantee(*grantee, statement_type, *grantees_out.Add()));
+  }
   return absl::OkStatus();
 }
 
@@ -3479,8 +3674,11 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateCreateView(
 
   out.set_function_kind(google::spanner::emulator::backend::ddl::Function_Kind_VIEW);
   out.set_is_or_replace(view_statement.replace);
+  // Views without SQL SECURITY have invoker's rights.
   out.set_sql_security(
-      google::spanner::emulator::backend::ddl::Function_SqlSecurity::Function_SqlSecurity_INVOKER);
+      view_statement.view_security_type == DEFINER_SECURITY
+          ? google::spanner::emulator::backend::ddl::Function::DEFINER
+          : google::spanner::emulator::backend::ddl::Function::INVOKER);
   out.set_function_name(
       GetTableName(*view_statement.view, "CREATE VIEW").value());
   out.mutable_sql_body_origin()->set_original_expression(
@@ -3783,6 +3981,42 @@ PostgreSQLToSpannerDDLTranslatorImpl::PopulateChangeStreamForClause(
     }
   } else if (for_or_drop_for_all == true) {
     change_stream_for_clause->set_all(true);
+  }
+  return absl::OkStatus();
+}
+
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::TranslateAlterSearchIndex(
+    const AlterSearchIndexStmt& alter_search_index_stmt,
+    const TranslationOptions& options,
+    google::spanner::emulator::backend::ddl::AlterSearchIndex& out) const {
+  if (!options.enable_search_index) {
+    return UnsupportedTranslationError(
+        "<ALTER SEARCH INDEX> statement is not supported.");
+  }
+  GOOGLESQL_RET_CHECK_NE(alter_search_index_stmt.search_index_name, nullptr);
+  GOOGLESQL_RET_CHECK_NE(alter_search_index_stmt.alter_search_index_cmd, nullptr);
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string index_name,
+      GetTableName(*alter_search_index_stmt.search_index_name,
+                   "ALTER SEARCH INDEX"));
+  out.set_index_name(index_name);
+
+  const AlterSearchIndexCmd& command =
+      *alter_search_index_stmt.alter_search_index_cmd;
+  GOOGLESQL_RET_CHECK_NE(command.column_name, nullptr);
+  switch (command.cmd_type) {
+    case ALT_SEARCH_INDEX_ADD_COLUMN:
+      out.set_add_column(command.column_name);
+      break;
+    case ALT_SEARCH_INDEX_DROP_COLUMN:
+      out.set_drop_column(command.column_name);
+      break;
+    case ALT_SEARCH_INDEX_ADD_INCLUDE_COLUMN:
+      out.set_add_stored_column(command.column_name);
+      break;
+    case ALT_SEARCH_INDEX_DROP_INCLUDE_COLUMN:
+      out.set_drop_stored_column(command.column_name);
+      break;
   }
   return absl::OkStatus();
 }
@@ -4351,6 +4585,78 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::Visitor::Visit(
       break;
     }
 
+    case T_CreateRoleStmt: {
+      if (!options_.enable_role_based_access) {
+        return absl::FailedPreconditionError("Role DDL is not enabled.");
+      }
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          const CreateRoleStmt* statement,
+          (DowncastNode<CreateRoleStmt, T_CreateRoleStmt>(raw_statement.stmt)));
+      GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(*statement));
+      GOOGLESQL_RET_CHECK_NE(statement->role, nullptr);
+      result_statement.mutable_create_role()->set_role_name(statement->role);
+      break;
+    }
+
+    case T_DropRoleStmt: {
+      if (!options_.enable_role_based_access) {
+        return absl::FailedPreconditionError("Role DDL is not enabled.");
+      }
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          const DropRoleStmt* statement,
+          (DowncastNode<DropRoleStmt, T_DropRoleStmt>(raw_statement.stmt)));
+      GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(*statement));
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          const RoleSpec* role,
+          (SingleItemListAsNode<RoleSpec, T_RoleSpec>)(statement->roles));
+      if (role->roletype != ROLESPEC_CSTRING) {
+        return absl::InvalidArgumentError("DROP ROLE requires a role name.");
+      }
+      GOOGLESQL_RET_CHECK_NE(role->rolename, nullptr);
+      result_statement.mutable_drop_role()->set_role_name(role->rolename);
+      break;
+    }
+
+    case T_GrantStmt: {
+      if (!options_.enable_role_based_access) {
+        return absl::FailedPreconditionError("Role DDL is not enabled.");
+      }
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          const GrantStmt* statement,
+          (DowncastNode<GrantStmt, T_GrantStmt>(raw_statement.stmt)));
+      if (statement->is_grant) {
+        auto* grant = result_statement.mutable_grant_privilege();
+        GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateGrantStatement(
+            *statement, *grant->mutable_privilege(), *grant->mutable_target(),
+            *grant->mutable_grantee()));
+      } else {
+        auto* revoke = result_statement.mutable_revoke_privilege();
+        GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateGrantStatement(
+            *statement, *revoke->mutable_privilege(), *revoke->mutable_target(),
+            *revoke->mutable_grantee()));
+      }
+      break;
+    }
+
+    case T_GrantRoleStmt: {
+      if (!options_.enable_role_based_access) {
+        return absl::FailedPreconditionError("Role DDL is not enabled.");
+      }
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          const GrantRoleStmt* statement,
+          (DowncastNode<GrantRoleStmt, T_GrantRoleStmt>(raw_statement.stmt)));
+      if (statement->is_grant) {
+        auto* grant = result_statement.mutable_grant_membership();
+        GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateGrantRoleStatement(
+            *statement, *grant->mutable_role(), *grant->mutable_grantee()));
+      } else {
+        auto* revoke = result_statement.mutable_revoke_membership();
+        GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateGrantRoleStatement(
+            *statement, *revoke->mutable_role(), *revoke->mutable_grantee()));
+      }
+      break;
+    }
+
     case T_AlterDatabaseSetStmt: {
       GOOGLESQL_ASSIGN_OR_RETURN(
           const AlterDatabaseSetStmt* statement,
@@ -4366,6 +4672,13 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::Visitor::Visit(
       GOOGLESQL_ASSIGN_OR_RETURN(
           const IndexStmt* statement,
           (DowncastNode<IndexStmt, T_IndexStmt>(raw_statement.stmt)));
+      if (statement->accessMethod ==
+          internal::PostgreSQLConstants::kVectorIndexAccessMethod) {
+        GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateCreateVectorIndex(
+            *statement, options_,
+            *result_statement.mutable_create_vector_index()));
+        break;
+      }
       GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateCreateIndex(
           *statement, options_, *result_statement.mutable_create_index()));
       break;
@@ -4443,6 +4756,17 @@ absl::Status PostgreSQLToSpannerDDLTranslatorImpl::Visitor::Visit(
       GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateCreateSearchIndex(
           *statement, options_,
           *result_statement.mutable_create_search_index()));
+      break;
+    }
+
+    case T_AlterSearchIndexStmt: {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          const AlterSearchIndexStmt* statement,
+          (DowncastNode<AlterSearchIndexStmt, T_AlterSearchIndexStmt>(
+              raw_statement.stmt)));
+      GOOGLESQL_RETURN_IF_ERROR(ddl_translator_.TranslateAlterSearchIndex(
+          *statement, options_,
+          *result_statement.mutable_alter_search_index()));
       break;
     }
 
@@ -4718,14 +5042,7 @@ absl::Status ProcessColumnarPolicy(const IndexStmt& create_index_statement,
                    ddl_translator_.GetTableName(
                        *create_index_statement.relation, "CREATE INDEX"));
   create_index_out.set_index_base_name(table_name);
-  if (create_index_statement.relation->schemaname != nullptr &&
-      strcmp(create_index_statement.relation->schemaname, "public") != 0) {
-    create_index_out.set_index_name(
-        absl::Substitute("$0.$1", create_index_statement.relation->schemaname,
-                         create_index_statement.idxname));
-  } else {
-    create_index_out.set_index_name(create_index_statement.idxname);
-  }
+  create_index_out.set_index_name(GetIndexName(create_index_statement));
   bool has_hash_partition_key = false;
   // Process key columns
   for (IndexElem* index_elem :
@@ -4782,6 +5099,134 @@ absl::Status ProcessColumnarPolicy(const IndexStmt& create_index_statement,
     create_index_out.set_existence_modifier(google::spanner::emulator::backend::ddl::IF_NOT_EXISTS);
   }
 
+  return absl::OkStatus();
+}
+
+absl::Status
+PostgreSQLToSpannerDDLTranslatorImpl::CreateIndexStatementTranslator::Translate(
+    const IndexStmt& create_index_statement,
+    google::spanner::emulator::backend::ddl::CreateVectorIndex& out) {
+  GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(create_index_statement, options_));
+  if (create_index_statement.unique) {
+    return UnsupportedTranslationError(
+        "<UNIQUE> is not supported for vector indexes in <CREATE INDEX> "
+        "statement.");
+  }
+  if (list_length(create_index_statement.indexParams) != 1) {
+    return UnsupportedTranslationError(
+        "Vector indexes must have exactly one key column in <CREATE INDEX> "
+        "statement.");
+  }
+  if (create_index_statement.interleavespec != nullptr ||
+      create_index_statement.locality_group_name != nullptr ||
+      create_index_statement.columnar_policy_name != nullptr) {
+    return UnsupportedTranslationError(
+        "<INTERLEAVE IN>, <LOCALITY GROUP> and <COLUMNAR POLICY> are not "
+        "supported for vector indexes in <CREATE INDEX> statement.");
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string table_name,
+                   ddl_translator_.GetTableName(
+                       *create_index_statement.relation, "CREATE INDEX"));
+  out.set_index_base_name(table_name);
+  out.set_index_name(GetIndexName(create_index_statement));
+
+  for (IndexElem* index_elem :
+       StructList<IndexElem*>(create_index_statement.indexParams)) {
+    google::spanner::emulator::backend::ddl::KeyPartClause::Order ordering;
+    GOOGLESQL_ASSIGN_OR_RETURN(absl::string_view key_name,
+                     TranslateIndexElem(*index_elem, ordering, options_));
+    out.mutable_key()->set_key_name(key_name);
+    out.mutable_key()->set_order(ordering);
+  }
+
+  for (IndexElem* index_elem :
+       StructList<IndexElem*>(create_index_statement.indexIncludingParams)) {
+    google::spanner::emulator::backend::ddl::KeyPartClause::Order ordering;
+    GOOGLESQL_ASSIGN_OR_RETURN(absl::string_view column_name,
+                     TranslateIndexElem(*index_elem, ordering, options_));
+    out.add_stored_column_definition()->set_name(column_name);
+  }
+
+  if (create_index_statement.whereClause != nullptr) {
+    GOOGLESQL_RETURN_IF_ERROR(TranslateWhereNode(create_index_statement.whereClause,
+                                       &null_filtered_columns_,
+                                       "CREATE INDEX"));
+  }
+  for (absl::string_view column_name : null_filtered_columns_) {
+    out.add_null_filtered_column(column_name);
+  }
+
+  GOOGLESQL_RETURN_IF_ERROR(PopulateVectorIndexOptions(create_index_statement.options,
+                                             out.mutable_set_options()));
+
+  if (create_index_statement.if_not_exists && options_.enable_if_not_exists) {
+    out.set_existence_modifier(
+        google::spanner::emulator::backend::ddl::IF_NOT_EXISTS);
+  }
+  return absl::OkStatus();
+}
+
+std::string PostgreSQLToSpannerDDLTranslatorImpl::
+    CreateIndexStatementTranslator::GetIndexName(
+        const IndexStmt& create_index_statement) const {
+  if (create_index_statement.relation->schemaname != nullptr &&
+      strcmp(create_index_statement.relation->schemaname, "public") != 0) {
+    return absl::Substitute("$0.$1",
+                            create_index_statement.relation->schemaname,
+                            create_index_statement.idxname);
+  }
+  return create_index_statement.idxname;
+}
+
+absl::Status PostgreSQLToSpannerDDLTranslatorImpl::
+    CreateIndexStatementTranslator::PopulateVectorIndexOptions(
+        const List* index_options,
+        OptionList* options_out) const {
+  // Vector index options that take integer values. `distance_type` is the only
+  // string option.
+  static constexpr std::array<absl::string_view, 6> kIntegerOptions = {
+      "tree_depth",          "num_leaves",        "num_branches",
+      "leaf_scatter_factor", "min_branch_splits", "min_leaf_splits"};
+  absl::flat_hash_set<absl::string_view> seen_options;
+  for (DefElem* def_elem : StructList<DefElem*>(index_options)) {
+    GOOGLESQL_RET_CHECK(def_elem->defname != nullptr);
+    const absl::string_view name = def_elem->defname;
+    if (!seen_options.insert(name).second) {
+      return absl::InvalidArgumentError(absl::Substitute(
+          "Contains duplicate vector index option '$0' in <CREATE INDEX> "
+          "statement.",
+          name));
+    }
+    google::spanner::emulator::backend::ddl::SetOption* option_out = options_out->Add();
+    option_out->set_option_name(name);
+    if (name == internal::PostgreSQLConstants::
+                    kVectorIndexDistanceTypeOptionName) {
+      if (def_elem->arg == nullptr || def_elem->arg->type != T_String) {
+        return absl::InvalidArgumentError(absl::Substitute(
+            "Vector index option '$0' must be a string in <CREATE INDEX> "
+            "statement.",
+            name));
+      }
+      GOOGLESQL_ASSIGN_OR_RETURN(const String* value,
+                       (DowncastNode<String, T_String>(def_elem->arg)));
+      option_out->set_string_value(value->sval);
+    } else if (absl::c_linear_search(kIntegerOptions, name)) {
+      if (def_elem->arg == nullptr || def_elem->arg->type != T_Integer) {
+        return absl::InvalidArgumentError(absl::Substitute(
+            "Vector index option '$0' must be an integer in <CREATE INDEX> "
+            "statement.",
+            name));
+      }
+      GOOGLESQL_ASSIGN_OR_RETURN(const Integer* value,
+                       (DowncastNode<Integer, T_Integer>(def_elem->arg)));
+      option_out->set_int64_value(value->ival);
+    } else {
+      return absl::InvalidArgumentError(absl::Substitute(
+          "Invalid vector index option '$0' in <CREATE INDEX> statement.",
+          name));
+    }
+  }
   return absl::OkStatus();
 }
 

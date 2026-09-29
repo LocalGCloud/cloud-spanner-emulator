@@ -33,8 +33,8 @@ constexpr int64_t kMaxGRPCIncomingMessageSize = 100 * 1024 * 1024;
 // Maximum size of an outgoing gRPC message.
 constexpr int64_t kMaxGRPCOutgoingMessageSize = 100 * 1024 * 1024;
 
-// Maxmimum size of a gRPC error message.
-constexpr int64_t kMaxGRPCErrorMessageLength = 1024;
+// Maximum size of a gRPC error message, including messages exposed by REST.
+constexpr int64_t kMaxGRPCErrorMessageLength = 4096;
 
 // Maximum number of outstanding transactions per session.
 constexpr int kMaxTransactionsPerSession = 32;
@@ -82,6 +82,9 @@ constexpr int kMaxChangeStreamsTrackingATableOrColumn = 3;
 // Maximum number of views per database.
 // https://cloud.google.com/spanner/quotas#views.
 constexpr int kMaxViewsPerDatabase = 5000;
+
+// Maximum number of database roles that can be created in a database.
+constexpr int kMaxRolesPerDatabase = 100;
 
 // Maximum length of a schema identifier e.g. table/column/index name.
 constexpr int kMaxSchemaIdentifierLength = 128;

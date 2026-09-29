@@ -287,6 +287,80 @@ TEST_F(InstancePartitionsApiTest, ListInstancePartitionOperations) {
                                   "/operations/"));
 }
 
+TEST_F(InstancePartitionsApiTest, ListInstancePartitionOperationsPagination) {
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("partition-1"));
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("partition-2"));
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("partition-3"));
+
+  instance_api::ListInstancePartitionOperationsResponse first;
+  GOOGLESQL_ASSERT_OK(ListInstancePartitionOperations(2, "", &first));
+  ASSERT_EQ(first.operations_size(), 2);
+  ASSERT_FALSE(first.next_page_token().empty());
+
+  instance_api::ListInstancePartitionOperationsResponse second;
+  GOOGLESQL_ASSERT_OK(
+      ListInstancePartitionOperations(2, first.next_page_token(), &second));
+  ASSERT_EQ(second.operations_size(), 1);
+  EXPECT_TRUE(second.next_page_token().empty());
+  EXPECT_LT(first.operations(0).name(), first.operations(1).name());
+  EXPECT_LT(first.operations(1).name(), second.operations(0).name());
+}
+
+TEST_F(InstancePartitionsApiTest, ListInstancePartitionOperationsFilter) {
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("partition-1"));
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("partition-2", /*node_count=*/2));
+  GOOGLESQL_ASSERT_OK(CreateInstancePartition("partition-3"));
+
+  const auto list = [this](const std::string& filter, int32_t page_size,
+                           const std::string& page_token,
+                           instance_api::ListInstancePartitionOperationsResponse*
+                               response) -> absl::Status {
+    grpc::ClientContext context;
+    instance_api::ListInstancePartitionOperationsRequest request;
+    request.set_parent(test_instance_uri_);
+    request.set_filter(filter);
+    request.set_page_size(page_size);
+    request.set_page_token(page_token);
+    return test_env()->instance_admin_client()->ListInstancePartitionOperations(
+        &context, request, response);
+  };
+
+  instance_api::ListInstancePartitionOperationsResponse response;
+  GOOGLESQL_ASSERT_OK(
+      list("metadata.instance_partition.name:PARTITION-2", 0, "", &response));
+  ASSERT_EQ(response.operations_size(), 1);
+  EXPECT_THAT(response.operations(0).name(),
+              testing::StartsWith(MakeInstancePartitionUri(test_instance_uri_,
+                                                           "partition-2")));
+
+  response.Clear();
+  GOOGLESQL_ASSERT_OK(list("response.node_count > 1", 0, "", &response));
+  ASSERT_EQ(response.operations_size(), 1);
+
+  // The documented example, with the start time moved past the operations.
+  const std::string filter =
+      "(metadata.@type=type.googleapis.com/"
+      "google.spanner.admin.instance.v1.CreateInstancePartitionMetadata) AND "
+      "(metadata.instance_partition.name:partition) AND "
+      "(metadata.start_time > \"2021-03-28T14:50:00Z\") AND NOT (error:*)";
+  instance_api::ListInstancePartitionOperationsResponse first;
+  GOOGLESQL_ASSERT_OK(list(filter, 2, "", &first));
+  ASSERT_EQ(first.operations_size(), 2);
+  ASSERT_FALSE(first.next_page_token().empty());
+  instance_api::ListInstancePartitionOperationsResponse second;
+  GOOGLESQL_ASSERT_OK(list(filter, 2, first.next_page_token(), &second));
+  ASSERT_EQ(second.operations_size(), 1);
+  EXPECT_TRUE(second.next_page_token().empty());
+  EXPECT_LT(first.operations(1).name(), second.operations(0).name());
+
+  EXPECT_THAT(list("done:true", 2, first.next_page_token(), &second),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(list("unknown:field", 0, "", &second),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(list("error:* OR", 0, "", &second),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST_F(InstancePartitionsApiTest, CreateInstancePartitionInvalidUnits) {
   instance_api::CreateInstancePartitionRequest request;
   request.set_parent(test_instance_uri_);
@@ -318,6 +392,13 @@ TEST_F(InstancePartitionsApiTest, UpdatesInstancePartitionDisplayName) {
   GOOGLESQL_EXPECT_OK(
       test_env()->instance_admin_client()->UpdateInstancePartition(
           &update_context, request, &operation));
+  instance_api::UpdateInstancePartitionMetadata metadata;
+  ASSERT_TRUE(operation.metadata().UnpackTo(&metadata));
+  EXPECT_EQ(metadata.instance_partition().name(),
+            request.instance_partition().name());
+  EXPECT_EQ(metadata.instance_partition().display_name(), "Updated partition");
+  EXPECT_TRUE(metadata.has_start_time());
+  EXPECT_TRUE(metadata.has_end_time());
 
   instance_api::GetInstancePartitionRequest get_request;
   get_request.set_name(request.instance_partition().name());

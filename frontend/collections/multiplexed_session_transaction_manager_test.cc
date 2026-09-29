@@ -29,6 +29,7 @@
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
 #include "backend/actions/manager.h"
+#include "backend/database/database.h"
 #include "backend/locking/manager.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/versioned_catalog.h"
@@ -36,6 +37,7 @@
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_write_transaction.h"
 #include "common/clock.h"
+#include "frontend/entities/database.h"
 #include "frontend/entities/transaction.h"
 #include "tests/common/schema_constructor.h"
 
@@ -95,6 +97,8 @@ class MultiplexedSessionTransactionManagerTest : public testing::Test {
   std::unique_ptr<backend::VersionedCatalog> versioned_catalog_;
   std::unique_ptr<backend::ActionManager> action_manager_;
 
+  // Directly constructed transactions borrow backend resources from this
+  // fixture, which outlives all test-local transaction managers.
   std::unique_ptr<backend::ReadWriteTransaction> CreateReadWriteTransaction(
       int id) {
     return std::make_unique<backend::ReadWriteTransaction>(
@@ -104,6 +108,36 @@ class MultiplexedSessionTransactionManagerTest : public testing::Test {
   }
 };
 
+TEST_F(MultiplexedSessionTransactionManagerTest,
+       RetainedTransactionKeepsDatabaseAliveUntilTeardown) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto backend_database,
+      backend::Database::Create(&clock_, "test-database",
+                                backend::SchemaChangeOperation{}));
+  auto database = std::make_shared<Database>(
+      kDatabaseUri, std::move(backend_database), absl::Now());
+  std::weak_ptr<Database> database_lifetime = database;
+
+  spanner_api::TransactionOptions options;
+  options.mutable_read_write();
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto backend_txn,
+      database->backend()->CreateReadWriteTransaction(
+          backend::ReadWriteOptions(), backend::RetryState()));
+  {
+    MultiplexedSessionTransactionManager mux_txn_manager;
+    auto txn = std::make_shared<Transaction>(
+        database, std::move(backend_txn), database->backend()->query_engine(),
+        options, Transaction::Usage::kMultiUse);
+    GOOGLESQL_ASSERT_OK(
+        mux_txn_manager.AddToCurrentTransactions(txn, kDatabaseUri, txn->id()));
+    txn.reset();
+    database.reset();
+    EXPECT_FALSE(database_lifetime.expired());
+  }
+  EXPECT_TRUE(database_lifetime.expired());
+}
+
 TEST_F(MultiplexedSessionTransactionManagerTest, ValidateTransactionAdded) {
   MultiplexedSessionTransactionManager mux_txn_manager;
 
@@ -112,7 +146,7 @@ TEST_F(MultiplexedSessionTransactionManagerTest, ValidateTransactionAdded) {
   spanner_api::TransactionOptions options;
   options.mutable_read_write();
   std::shared_ptr<Transaction> txn_to_add = std::make_shared<Transaction>(
-      std::move(backend_txn), nullptr, options, Transaction::Usage::kMultiUse);
+      std::shared_ptr<Database>{}, std::move(backend_txn), nullptr, options, Transaction::Usage::kMultiUse);
 
   GOOGLESQL_ASSERT_OK(
       mux_txn_manager.AddToCurrentTransactions(txn_to_add, kDatabaseUri, 1));
@@ -143,7 +177,7 @@ TEST_F(MultiplexedSessionTransactionManagerTest, ClearStaleTransactions) {
   spanner_api::TransactionOptions options;
   options.mutable_read_write();
   std::shared_ptr<Transaction> txn_to_add = std::make_shared<Transaction>(
-      std::move(backend_txn), nullptr, spanner_api::TransactionOptions(),
+      std::shared_ptr<Database>{}, std::move(backend_txn), nullptr, spanner_api::TransactionOptions(),
       Transaction::Usage::kMultiUse);
   GOOGLESQL_ASSERT_OK(
       mux_txn_manager.AddToCurrentTransactions(txn_to_add, kDatabaseUri, 1));
@@ -167,7 +201,7 @@ TEST_F(MultiplexedSessionTransactionManagerTest, ClearClosedTransactions) {
   spanner_api::TransactionOptions options;
   options.mutable_read_write();
   std::shared_ptr<Transaction> txn_to_add = std::make_shared<Transaction>(
-      std::move(backend_txn), nullptr, spanner_api::TransactionOptions(),
+      std::shared_ptr<Database>{}, std::move(backend_txn), nullptr, spanner_api::TransactionOptions(),
       Transaction::Usage::kMultiUse);
   GOOGLESQL_ASSERT_OK(
       mux_txn_manager.AddToCurrentTransactions(txn_to_add, kDatabaseUri, 1));
@@ -194,9 +228,9 @@ TEST_F(MultiplexedSessionTransactionManagerTest, TransactionCollision) {
   options.mutable_read_write();
 
   std::shared_ptr<Transaction> txn1 = std::make_shared<Transaction>(
-      std::move(backend_txn1), nullptr, options, Transaction::Usage::kMultiUse);
+      std::shared_ptr<Database>{}, std::move(backend_txn1), nullptr, options, Transaction::Usage::kMultiUse);
   std::shared_ptr<Transaction> txn2 = std::make_shared<Transaction>(
-      std::move(backend_txn2), nullptr, options, Transaction::Usage::kMultiUse);
+      std::shared_ptr<Database>{}, std::move(backend_txn2), nullptr, options, Transaction::Usage::kMultiUse);
 
   // Add both transactions to the manager.
   GOOGLESQL_ASSERT_OK(mux_txn_manager.AddToCurrentTransactions(txn1, kDatabaseUri, 1));

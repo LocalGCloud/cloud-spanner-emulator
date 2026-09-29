@@ -28,9 +28,6 @@ namespace emulator {
 namespace frontend {
 namespace spanner_api = ::google::spanner::v1;
 
-static constexpr char kChangeStreamDummyResumeToken[] =
-    "dummy_resume_token_for_change_streams_on_emulator";
-
 // Used by immutable key range change streams. Takes a row cursor for a change
 // stream partition table, and convert the row cursor into a child partition
 // record partial result set as ARRAY<STRUCT>. If initial_start_time is not

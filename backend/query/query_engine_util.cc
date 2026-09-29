@@ -37,6 +37,7 @@
 #include "absl/strings/cord.h"
 #include "absl/strings/string_view.h"
 #include "backend/query/function_catalog.h"
+#include "backend/query/graph/graph_algorithm_table_valued_function.h"
 #include "common/errors.h"
 #include "common/limits.h"
 #include "third_party/spanner_pg/interface/emulator_parser.h"
@@ -86,8 +87,16 @@ absl::StatusOr<std::unique_ptr<const googlesql::AnalyzerOutput>> Analyze(
   }
 
   std::unique_ptr<const googlesql::AnalyzerOutput> output;
-  GOOGLESQL_RETURN_IF_ERROR(googlesql::AnalyzeStatement(sql, options, catalog,
-                                              type_factory, &output));
+  // Graph algorithm calls use graph features that other statements don't get.
+  if (CallsGraphAlgorithm(sql, options)) {
+    googlesql::AnalyzerOptions algorithm_options = options;
+    EnableGraphAlgorithmLanguageFeatures(*algorithm_options.mutable_language());
+    GOOGLESQL_RETURN_IF_ERROR(googlesql::AnalyzeStatement(
+        sql, algorithm_options, catalog, type_factory, &output));
+  } else {
+    GOOGLESQL_RETURN_IF_ERROR(googlesql::AnalyzeStatement(sql, options, catalog,
+                                                type_factory, &output));
+  }
   return output;
 }
 

@@ -89,6 +89,7 @@ googlesql::LanguageOptions MakeGoogleSqlLanguageOptions() {
       googlesql::FEATURE_TABLE_VALUED_FUNCTIONS,
       googlesql::FEATURE_TOKENIZED_SEARCH,
       googlesql::FEATURE_ADDITIONAL_STRING_FUNCTIONS,
+      googlesql::FEATURE_ALIASES_FOR_STRING_AND_DATE_FUNCTIONS,
       googlesql::FEATURE_SEQUENCE_ARG,
       googlesql::FEATURE_JSON_ARRAY_VALUE_EXTRACTION_FUNCTIONS,
       googlesql::FEATURE_JSON_MORE_VALUE_EXTRACTION_FUNCTIONS,

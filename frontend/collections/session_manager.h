@@ -39,12 +39,13 @@ class SessionManager {
  public:
   explicit SessionManager(Clock* clock) : clock_(clock) {}
 
-  // Creates a session attached to the given database.
+  // Creates a session attached to the given database. A non-empty
+  // `creator_role` is the database role that the session's operations use.
   absl::StatusOr<std::shared_ptr<Session>> CreateSession(
       const Labels& labels, bool multiplexed,
       std::shared_ptr<Database> database,
-      MultiplexedSessionTransactionManager* mux_txn_manager)
-      ABSL_LOCKS_EXCLUDED(mu_);
+      MultiplexedSessionTransactionManager* mux_txn_manager,
+      const std::string& creator_role = "") ABSL_LOCKS_EXCLUDED(mu_);
 
   // Returns a session with the given URI.
   absl::StatusOr<std::shared_ptr<Session>> GetSession(

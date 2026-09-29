@@ -42,6 +42,7 @@
 #include "google/cloud/spanner/commit_result.h"
 #include "google/cloud/spanner/create_instance_request_builder.h"
 #include "google/cloud/spanner/mutations.h"
+#include "google/cloud/spanner/options.h"
 #include "google/cloud/spanner/polling_policy.h"
 #include "google/cloud/spanner/retry_policy.h"
 #include "google/cloud/spanner/transaction.h"
@@ -125,6 +126,15 @@ void DatabaseTest::TearDown() {
   if (database_client_ && database_) {
     database_client_->DropDatabase(database_->FullName());
   }
+}
+
+std::unique_ptr<cloud::spanner::Client> DatabaseTest::MakeClientWithRole(
+    const std::string& role) {
+  google::cloud::Options options =
+      *GetConformanceTestGlobals().connection_options;
+  options.set<cloud::spanner::SessionCreatorRoleOption>(role);
+  return std::make_unique<cloud::spanner::Client>(
+      cloud::spanner::MakeConnection(*database_, std::move(options)));
 }
 
 absl::Status DatabaseTest::ResetDatabase() {

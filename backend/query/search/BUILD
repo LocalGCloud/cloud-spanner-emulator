@@ -38,7 +38,9 @@ cc_library(
     ],
     deps = [
         ":javacc_search_query_parser",
+        ":tokenizer",
         "//common:errors",
+        "@@googlesql~~googlesql_http_archive_deps~icu//:headers",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/status",
@@ -109,6 +111,7 @@ cc_library(
         ":search_substring_evaluator",
         ":snippet_evaluator",
         ":substring_tokenizer",
+        ":tokenizer",
         ":tokenlist_concat",
         "//backend/schema/catalog:schema",
         "//third_party/spanner_pg/datatypes/extended:pg_jsonb_type",
@@ -141,6 +144,8 @@ cc_library(
         "@com_google_googlesql//googlesql/public:simple_token_list",
         "@com_google_googlesql//googlesql/public:token_list_util",
         "@com_google_googlesql//googlesql/public:value",
+        "@com_google_googlesql//googlesql/public/functions:string",
+        "@@googlesql~~googlesql_http_archive_deps~icu//:headers",
     ],
 )
 
@@ -149,6 +154,8 @@ cc_test(
     srcs = ["tokenizer_test.cc"],
     deps = [
         ":tokenizer",
+        "@com_google_googlesql//googlesql/public:simple_token_list",
+        "@com_google_googlesql//googlesql/public:value",
         "//tests/common:proto_matchers",
         "@com_github_google_benchmark//:benchmark",
         "@com_github_grpc_grpc//:grpc++",
@@ -196,6 +203,7 @@ cc_library(
         "@com_google_absl//absl/types:span",
         "@com_google_googlesql//googlesql/base:status",
         "@com_google_googlesql//googlesql/public:value",
+        "@com_google_googlesql//googlesql/public:simple_token_list",
         "@com_google_googlesql//googlesql/public/functions:string",
     ],
 )
@@ -212,6 +220,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
         "@com_google_googletest//:gtest_main",
+        "@com_google_googlesql//googlesql/public:simple_token_list",
     ],
 )
 
@@ -378,6 +387,7 @@ cc_test(
     deps = [
         ":plain_full_text_tokenizer",
         ":search_substring_evaluator",
+        ":substring_tokenizer",
         ":tokenizer",
         "//tests/common:proto_matchers",
         "@com_github_google_benchmark//:benchmark",
@@ -386,6 +396,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googlesql//googlesql/public:type",
         "@com_google_googlesql//googlesql/public:value",
         "@com_google_googletest//:gtest_main",
     ],
@@ -399,6 +410,7 @@ cc_library(
         ":tokenizer",
         "//backend/common:case",
         "//common:errors",
+        "@com_google_absl//absl/numeric:int128",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -418,6 +430,7 @@ cc_test(
         "@com_github_google_benchmark//:benchmark",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googlesql//googlesql/public:type",
         "@com_google_googlesql//googlesql/public:value",
         "@com_google_googletest//:gtest_main",
     ],
@@ -458,12 +471,17 @@ cc_library(
         ":search_util",
         ":tokenizer",
         "//common:errors",
+        "//third_party/spanner_pg/datatypes/extended:pg_jsonb_type",
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:cord",
         "@com_google_absl//absl/types:span",
         "@com_google_googlesql//googlesql/base:status",
+        "@com_google_googlesql//googlesql/public:json_value",
         "@com_google_googlesql//googlesql/public:value",
+        "@com_google_googlesql//googlesql/public:simple_token_list",
     ],
 )
 
@@ -472,6 +490,7 @@ cc_test(
     srcs = ["score_evaluator_test.cc"],
     deps = [
         ":exact_match_tokenizer",
+        ":plain_full_text_tokenizer",
         ":score_evaluator",
         ":tokenizer",
         "//tests/common:proto_matchers",
@@ -480,6 +499,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googlesql//googlesql/public:json_value",
         "@com_google_googlesql//googlesql/public:value",
         "@com_google_googletest//:gtest_main",
     ],
@@ -532,6 +552,7 @@ cc_library(
         "@com_google_googlesql//googlesql/base:ret_check",
         "@com_google_googlesql//googlesql/base:status",
         "@com_google_googlesql//googlesql/public:value",
+        "@com_google_googlesql//googlesql/public:simple_token_list",
     ],
 )
 
@@ -550,6 +571,7 @@ cc_test(
         "@com_google_absl//absl/status:statusor",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
         "@com_google_googlesql//googlesql/public:type",
+        "@com_google_googlesql//googlesql/public:simple_token_list",
         "@com_google_googlesql//googlesql/public:value",
         "@com_google_googletest//:gtest_main",
     ],

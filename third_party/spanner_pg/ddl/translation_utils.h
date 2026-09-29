@@ -123,6 +123,9 @@ struct PostgreSQLConstants {
       "disable_automatic_uid_column";
   static constexpr absl::string_view kSearchIndexSortOrderOptionName =
       "sort_order_sharding";
+  static constexpr absl::string_view kVectorIndexAccessMethod = "scann";
+  static constexpr absl::string_view kVectorIndexDistanceTypeOptionName =
+      "distance_type";
 
   // TODO: use kDatabaseOptimizerVersionName,
   // kInternalDatabaseVersionRetentionPeriodName,

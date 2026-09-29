@@ -101,6 +101,8 @@ TEST(InstanceExtensionsTest, BuiltInConfigIdIsReserved) {
   instance_api::CreateInstanceConfigRequest request;
   request.set_parent("projects/p");
   request.set_instance_config_id("emulator-config");
+  request.mutable_instance_config()->set_name(
+      "projects/p/instanceConfigs/emulator-config");
   request.mutable_instance_config()->set_display_name("Replacement");
   operations_api::Operation operation;
   grpc::ClientContext context;
@@ -118,6 +120,211 @@ TEST(InstanceExtensionsTest, BuiltInConfigIdIsReserved) {
   ASSERT_EQ(response.instance_configs_size(), 1);
   EXPECT_EQ(response.instance_configs(0).name(),
             "projects/p/instanceConfigs/emulator-config");
+  EXPECT_EQ(response.instance_configs(0).config_type(),
+            instance_api::InstanceConfig::GOOGLE_MANAGED);
+}
+
+TEST(InstanceExtensionsTest, ConfigValidationPaginationAndReferences) {
+  test::TestEnv env;
+  const std::string project = "projects/p";
+  const std::string base = project + "/instanceConfigs/emulator-config";
+  auto make_request = [&](const std::string& id) {
+    instance_api::CreateInstanceConfigRequest request;
+    request.set_parent(project);
+    request.set_instance_config_id(id);
+    request.mutable_instance_config()->set_name(project + "/instanceConfigs/" + id);
+    request.mutable_instance_config()->set_base_config(base);
+    request.mutable_instance_config()->set_display_name(id);
+    return request;
+  };
+  auto create = [&](const instance_api::CreateInstanceConfigRequest& request) {
+    operations_api::Operation operation;
+    grpc::ClientContext context;
+    return env.instance_admin_client()->CreateInstanceConfig(
+        &context, request, &operation);
+  };
+
+  auto request = make_request("custom");
+  EXPECT_EQ(create(request).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  request = make_request("custom-bad_");
+  EXPECT_EQ(create(request).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  request = make_request("custom-alpha");
+  request.mutable_instance_config()->clear_name();
+  EXPECT_EQ(create(request).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  request = make_request("custom-alpha");
+  request.mutable_instance_config()->set_name(
+      "projects/other/instanceConfigs/custom-alpha");
+  EXPECT_EQ(create(request).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+  request = make_request("custom-alpha");
+  request.mutable_instance_config()->set_base_config(
+      "projects/other/instanceConfigs/emulator-config");
+  EXPECT_EQ(create(request).error_code(), grpc::StatusCode::INVALID_ARGUMENT);
+
+  request = make_request("custom-alpha");
+  ASSERT_TRUE(create(request).ok());
+  EXPECT_EQ(create(request).error_code(), grpc::StatusCode::ALREADY_EXISTS);
+  request = make_request("custom-zeta");
+  ASSERT_TRUE(create(request).ok());
+  request = make_request("custom-preview");
+  request.set_validate_only(true);
+  ASSERT_TRUE(create(request).ok());
+  instance_api::GetInstanceConfigRequest get_request;
+  get_request.set_name(project + "/instanceConfigs/custom-preview");
+  instance_api::InstanceConfig config;
+  grpc::ClientContext get_context;
+  EXPECT_EQ(env.instance_admin_client()
+                ->GetInstanceConfig(&get_context, get_request, &config)
+                .error_code(),
+            grpc::StatusCode::NOT_FOUND);
+  request = make_request("custom-alpha");
+  request.set_validate_only(true);
+  EXPECT_EQ(create(request).error_code(), grpc::StatusCode::ALREADY_EXISTS);
+
+  instance_api::ListInstanceConfigsRequest list_request;
+  list_request.set_parent(project);
+  list_request.set_page_size(1);
+  for (const std::string& expected : {"custom-alpha", "custom-zeta",
+                                      "emulator-config"}) {
+    instance_api::ListInstanceConfigsResponse page;
+    grpc::ClientContext context;
+    ASSERT_TRUE(env.instance_admin_client()
+                    ->ListInstanceConfigs(&context, list_request, &page)
+                    .ok());
+    ASSERT_EQ(page.instance_configs_size(), 1);
+    EXPECT_EQ(page.instance_configs(0).name(),
+              project + "/instanceConfigs/" + expected);
+    list_request.set_page_token(page.next_page_token());
+    if (expected != "emulator-config") {
+      EXPECT_FALSE(page.next_page_token().empty());
+    } else {
+      EXPECT_TRUE(page.next_page_token().empty());
+    }
+  }
+  list_request.set_page_token("projects/other/instanceConfigs/custom-zeta");
+  instance_api::ListInstanceConfigsResponse page;
+  grpc::ClientContext list_context;
+  EXPECT_EQ(env.instance_admin_client()
+                ->ListInstanceConfigs(&list_context, list_request, &page)
+                .error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+
+  instance_api::UpdateInstanceConfigRequest update;
+  update.mutable_instance_config()->set_name(
+      project + "/instanceConfigs/custom-alpha");
+  update.mutable_instance_config()->set_display_name("Unexpected");
+  update.mutable_update_mask()->add_paths("displayName");
+  operations_api::Operation operation;
+  for (const std::string& path : {"displayName", "base_config", "replicas"}) {
+    update.mutable_update_mask()->set_paths(0, path);
+    grpc::ClientContext context;
+    EXPECT_EQ(env.instance_admin_client()
+                  ->UpdateInstanceConfig(&context, update, &operation)
+                  .error_code(),
+              grpc::StatusCode::INVALID_ARGUMENT);
+  }
+  update.mutable_update_mask()->set_paths(0, "labels");
+  (*update.mutable_instance_config()->mutable_labels())["Upper"] = "bad";
+  grpc::ClientContext labels_context;
+  EXPECT_EQ(env.instance_admin_client()
+                ->UpdateInstanceConfig(&labels_context, update, &operation)
+                .error_code(),
+            grpc::StatusCode::INVALID_ARGUMENT);
+
+  BackupCatalog::BackupEntry backup;
+  backup.backup.set_name(project + "/instances/i1/backups/b1");
+  backup.backup.set_state(database_api::Backup::CREATING);
+  backup.source_instance_config = project + "/instanceConfigs/custom-alpha";
+  backup.operation_name = backup.backup.name() + "/operations/create";
+  operations_api::Operation backup_operation;
+  backup_operation.set_name(backup.operation_name);
+  backup_operation.set_done(true);
+  ASSERT_TRUE(env.server()
+                  ->env()
+                  ->backup_catalog()
+                  ->CreateBackup(backup, backup_operation)
+                  .ok());
+  instance_api::DeleteInstanceConfigRequest delete_request;
+  delete_request.set_name(backup.source_instance_config);
+  protobuf_api::Empty empty;
+  grpc::ClientContext delete_context;
+  EXPECT_EQ(env.instance_admin_client()
+                ->DeleteInstanceConfig(&delete_context, delete_request, &empty)
+                .error_code(),
+            grpc::StatusCode::FAILED_PRECONDITION);
+  ASSERT_TRUE(
+      env.server()->env()->backup_catalog()->DeleteBackup(backup.backup.name())
+          .ok());
+  grpc::ClientContext delete_after_backup_context;
+  EXPECT_TRUE(env.instance_admin_client()
+                  ->DeleteInstanceConfig(&delete_after_backup_context,
+                                         delete_request, &empty)
+                  .ok());
+}
+
+TEST(InstanceExtensionsTest, ConfigEtagGuardsUpdatesAndDeletes) {
+  test::TestEnv env;
+  const std::string config_name = "projects/p/instanceConfigs/custom-etag";
+  instance_api::CreateInstanceConfigRequest create;
+  create.set_parent("projects/p");
+  create.set_instance_config_id("custom-etag");
+  create.mutable_instance_config()->set_name(config_name);
+  create.mutable_instance_config()->set_base_config(
+      "projects/p/instanceConfigs/emulator-config");
+  create.mutable_instance_config()->set_display_name("First");
+  operations_api::Operation operation;
+  grpc::ClientContext create_context;
+  ASSERT_TRUE(env.instance_admin_client()
+                  ->CreateInstanceConfig(&create_context, create, &operation)
+                  .ok());
+  instance_api::InstanceConfig created;
+  ASSERT_TRUE(operation.response().UnpackTo(&created));
+  ASSERT_FALSE(created.etag().empty());
+
+  instance_api::UpdateInstanceConfigRequest update;
+  update.mutable_instance_config()->set_name(config_name);
+  update.mutable_instance_config()->set_etag(created.etag());
+  update.mutable_instance_config()->set_display_name("Second");
+  update.mutable_update_mask()->add_paths("display_name");
+  grpc::ClientContext update_context;
+  ASSERT_TRUE(env.instance_admin_client()
+                  ->UpdateInstanceConfig(&update_context, update, &operation)
+                  .ok());
+  instance_api::InstanceConfig updated;
+  ASSERT_TRUE(operation.response().UnpackTo(&updated));
+  EXPECT_EQ(updated.display_name(), "Second");
+  ASSERT_FALSE(updated.etag().empty());
+  EXPECT_NE(updated.etag(), created.etag());
+
+  update.mutable_instance_config()->set_display_name("Stale");
+  grpc::ClientContext stale_update_context;
+  EXPECT_EQ(env.instance_admin_client()
+                ->UpdateInstanceConfig(&stale_update_context, update, &operation)
+                .error_code(),
+            grpc::StatusCode::FAILED_PRECONDITION);
+  instance_api::GetInstanceConfigRequest get;
+  get.set_name(config_name);
+  instance_api::InstanceConfig current;
+  grpc::ClientContext get_context;
+  ASSERT_TRUE(env.instance_admin_client()
+                  ->GetInstanceConfig(&get_context, get, &current)
+                  .ok());
+  EXPECT_EQ(current.display_name(), "Second");
+  EXPECT_EQ(current.etag(), updated.etag());
+
+  instance_api::DeleteInstanceConfigRequest remove;
+  remove.set_name(config_name);
+  remove.set_etag(created.etag());
+  protobuf_api::Empty empty;
+  grpc::ClientContext stale_delete_context;
+  EXPECT_EQ(env.instance_admin_client()
+                ->DeleteInstanceConfig(&stale_delete_context, remove, &empty)
+                .error_code(),
+            grpc::StatusCode::FAILED_PRECONDITION);
+  remove.set_etag(updated.etag());
+  grpc::ClientContext delete_context;
+  EXPECT_TRUE(env.instance_admin_client()
+                  ->DeleteInstanceConfig(&delete_context, remove, &empty)
+                  .ok());
 }
 
 TEST(InstanceExtensionsTest, FailedPersistenceRollsBackAdminUpdates) {
@@ -125,14 +332,16 @@ TEST(InstanceExtensionsTest, FailedPersistenceRollsBackAdminUpdates) {
   test::TestEnv env;
   const std::string project = "projects/p";
   const std::string instance_name = project + "/instances/i1";
-  const std::string custom_config = project + "/instanceConfigs/custom";
+  const std::string custom_config = project + "/instanceConfigs/custom-test";
   const std::string built_in_config =
       project + "/instanceConfigs/emulator-config";
   const std::string database_name = instance_name + "/databases/d1";
 
   instance_api::CreateInstanceConfigRequest config_request;
   config_request.set_parent(project);
-  config_request.set_instance_config_id("custom");
+  config_request.set_instance_config_id("custom-test");
+  config_request.mutable_instance_config()->set_name(custom_config);
+  config_request.mutable_instance_config()->set_base_config(built_in_config);
   config_request.mutable_instance_config()->set_display_name("Custom");
   operations_api::Operation operation;
   grpc::ClientContext config_context;
@@ -220,16 +429,21 @@ TEST(InstanceExtensionsTest, FailedPersistenceRollsBackAdminUpdates) {
 TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
   PersistentInstanceConfigDirectory data_dir;
   const std::string project = "projects/p";
-  const std::string config_name = project + "/instanceConfigs/custom";
+  const std::string config_name = project + "/instanceConfigs/custom-test";
+  const std::string base_config =
+      project + "/instanceConfigs/emulator-config";
   const std::string instance_name = project + "/instances/i1";
   std::string create_operation_name;
   std::string update_operation_name;
+  std::string update_etag;
 
   {
     test::TestEnv first;
     instance_api::CreateInstanceConfigRequest create_request;
     create_request.set_parent(project);
-    create_request.set_instance_config_id("custom");
+    create_request.set_instance_config_id("custom-test");
+    create_request.mutable_instance_config()->set_name(config_name);
+    create_request.mutable_instance_config()->set_base_config(base_config);
     create_request.mutable_instance_config()->set_display_name("Custom One");
     (*create_request.mutable_instance_config()->mutable_labels())["env"] =
         "test";
@@ -244,6 +458,15 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
     ASSERT_TRUE(create_operation.response().UnpackTo(&created));
     EXPECT_EQ(created.name(), config_name);
     EXPECT_EQ(created.display_name(), "Custom One");
+    EXPECT_EQ(created.config_type(), instance_api::InstanceConfig::USER_MANAGED);
+    EXPECT_EQ(created.state(), instance_api::InstanceConfig::READY);
+    ASSERT_FALSE(created.etag().empty());
+    instance_api::CreateInstanceConfigMetadata create_metadata;
+    ASSERT_TRUE(create_operation.metadata().UnpackTo(&create_metadata));
+    EXPECT_EQ(create_metadata.instance_config().name(), config_name);
+    EXPECT_EQ(create_metadata.progress().progress_percent(), 100);
+    EXPECT_TRUE(create_metadata.progress().has_start_time());
+    EXPECT_TRUE(create_metadata.progress().has_end_time());
 
     instance_api::UpdateInstanceConfigRequest update_request;
     update_request.mutable_instance_config()->set_name(config_name);
@@ -255,8 +478,19 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
         &update_context, update_request, &update_operation);
     ASSERT_TRUE(status.ok()) << status.error_message();
     EXPECT_TRUE(update_operation.done());
+    instance_api::UpdateInstanceConfigMetadata update_metadata;
+    ASSERT_TRUE(update_operation.metadata().UnpackTo(&update_metadata));
+    EXPECT_EQ(update_metadata.instance_config().display_name(), "Custom Two");
+    EXPECT_EQ(update_metadata.progress().progress_percent(), 100);
+    EXPECT_TRUE(update_metadata.progress().has_start_time());
+    EXPECT_TRUE(update_metadata.progress().has_end_time());
 
     update_operation_name = update_operation.name();
+    instance_api::InstanceConfig updated_config;
+    ASSERT_TRUE(update_operation.response().UnpackTo(&updated_config));
+    update_etag = updated_config.etag();
+    ASSERT_FALSE(update_etag.empty());
+    EXPECT_NE(update_etag, created.etag());
     instance_api::GetInstanceConfigRequest get_request;
     get_request.set_name(config_name);
     instance_api::InstanceConfig config;
@@ -265,7 +499,9 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
         &get_context, get_request, &config);
     ASSERT_TRUE(status.ok()) << status.error_message();
     EXPECT_EQ(config.display_name(), "Custom Two");
+    EXPECT_EQ(config.etag(), update_etag);
     EXPECT_EQ(config.labels().at("env"), "test");
+    EXPECT_EQ(config.config_type(), instance_api::InstanceConfig::USER_MANAGED);
 
     ASSERT_TRUE(first.server()
                     ->env()
@@ -298,6 +534,131 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
               std::string::npos);
     EXPECT_TRUE(list_response.next_page_token().empty());
 
+    list_request.set_page_token(
+        "projects/other/instanceConfigs/custom-test/operations/create");
+    grpc::ClientContext foreign_token_context;
+    EXPECT_EQ(first.instance_admin_client()
+                  ->ListInstanceConfigOperations(&foreign_token_context,
+                                                 list_request, &list_response)
+                  .error_code(),
+              grpc::StatusCode::INVALID_ARGUMENT);
+    list_request.clear_page_token();
+    list_request.set_page_size(100);
+    list_request.set_filter("done:false");
+    list_response.Clear();
+    grpc::ClientContext incomplete_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&incomplete_context,
+                                                   list_request, &list_response)
+                    .ok());
+    EXPECT_EQ(list_response.operations_size(), 0);
+
+    list_request.set_filter(
+        "metadata.@type=type.googleapis.com/google.spanner.admin.instance.v1."
+        "CreateInstanceConfigMetadata");
+    list_response.Clear();
+    grpc::ClientContext metadata_filter_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&metadata_filter_context,
+                                                   list_request, &list_response)
+                    .ok());
+    ASSERT_EQ(list_response.operations_size(), 1);
+    EXPECT_EQ(list_response.operations(0).name(), create_operation_name);
+
+    list_request.set_filter("name=" + create_operation_name);
+    list_response.Clear();
+    grpc::ClientContext name_filter_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&name_filter_context,
+                                                   list_request, &list_response)
+                    .ok());
+    ASSERT_EQ(list_response.operations_size(), 1);
+    EXPECT_EQ(list_response.operations(0).name(), create_operation_name);
+
+    list_request.set_filter("done:true AND error:*");
+    list_response.Clear();
+    grpc::ClientContext error_filter_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&error_filter_context,
+                                                   list_request, &list_response)
+                    .ok());
+    EXPECT_EQ(list_response.operations_size(), 0);
+
+    // Metadata paths match by reflection, ignoring case.
+    list_request.set_filter(
+        "metadata.instance_config.name:CUSTOM-TEST "
+        "metadata.progress.progress_percent = 100");
+    list_response.Clear();
+    grpc::ClientContext metadata_path_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&metadata_path_context,
+                                                   list_request, &list_response)
+                    .ok());
+    EXPECT_EQ(list_response.operations_size(), 2);
+
+    // OR binds tighter than AND: (C OR done) AND E, not C OR (done AND E).
+    list_request.set_filter(
+        "metadata.instance_config.display_name = \"custom two\" OR done:true "
+        "AND metadata.instance_config.display_name:ONE");
+    list_response.Clear();
+    grpc::ClientContext precedence_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&precedence_context,
+                                                   list_request, &list_response)
+                    .ok());
+    ASSERT_EQ(list_response.operations_size(), 1);
+    EXPECT_EQ(list_response.operations(0).name(), create_operation_name);
+
+    list_request.set_filter(
+        "(metadata.@type=type.googleapis.com/"
+        "google.spanner.admin.instance.v1.CreateInstanceConfigMetadata) AND "
+        "(metadata.instance_config.name:custom-test) AND "
+        "(metadata.progress.start_time < \"2021-03-28T14:50:00Z\") AND "
+        "(error:*)");
+    list_response.Clear();
+    grpc::ClientContext documented_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&documented_context,
+                                                   list_request, &list_response)
+                    .ok());
+    EXPECT_EQ(list_response.operations_size(), 0);
+
+    list_request.set_filter("metadata:*");
+    list_response.Clear();
+    grpc::ClientContext presence_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&presence_context,
+                                                   list_request, &list_response)
+                    .ok());
+    EXPECT_EQ(list_response.operations_size(), 2);
+
+    list_request.set_filter("unknown:field");
+    grpc::ClientContext unsupported_filter_context;
+    EXPECT_EQ(first.instance_admin_client()
+                  ->ListInstanceConfigOperations(&unsupported_filter_context,
+                                                 list_request, &list_response)
+                  .error_code(),
+              grpc::StatusCode::INVALID_ARGUMENT);
+    list_request.set_filter("done:true");
+    list_request.set_page_size(1);
+    list_response.Clear();
+    grpc::ClientContext filtered_page_context;
+    ASSERT_TRUE(first.instance_admin_client()
+                    ->ListInstanceConfigOperations(&filtered_page_context,
+                                                   list_request, &list_response)
+                    .ok());
+    ASSERT_FALSE(list_response.next_page_token().empty());
+    list_request.set_page_token(list_response.next_page_token());
+    list_request.set_filter("done:false");
+    grpc::ClientContext changed_filter_context;
+    EXPECT_EQ(first.instance_admin_client()
+                  ->ListInstanceConfigOperations(&changed_filter_context,
+                                                 list_request, &list_response)
+                  .error_code(),
+              grpc::StatusCode::INVALID_ARGUMENT);
+    list_request.clear_filter();
+    list_request.clear_page_token();
+
     ASSERT_TRUE(first.server()
                     ->env()
                     ->operation_manager()
@@ -328,6 +689,7 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
         &get_config_context, get_config_request, &config);
     ASSERT_TRUE(status.ok()) << status.error_message();
     EXPECT_EQ(config.display_name(), "Custom Two");
+    EXPECT_EQ(config.etag(), update_etag);
     EXPECT_EQ(config.labels().at("env"), "test");
 
     instance_api::ListInstanceConfigOperationsRequest restored_list_request;
@@ -342,6 +704,12 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
               create_operation_name);
     EXPECT_EQ(restored_list_response.operations(1).name(),
               update_operation_name);
+    instance_api::CreateInstanceConfigMetadata restored_create_metadata;
+    instance_api::UpdateInstanceConfigMetadata restored_update_metadata;
+    EXPECT_TRUE(restored_list_response.operations(0).metadata().UnpackTo(
+        &restored_create_metadata));
+    EXPECT_TRUE(restored_list_response.operations(1).metadata().UnpackTo(
+        &restored_update_metadata));
 
     instance_api::ListInstanceConfigsRequest list_configs_request;
     list_configs_request.set_parent(project);
@@ -351,7 +719,7 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
         &list_configs_context, list_configs_request, &list_configs_response);
     ASSERT_TRUE(status.ok()) << status.error_message();
     ASSERT_EQ(list_configs_response.instance_configs_size(), 2);
-    EXPECT_EQ(list_configs_response.instance_configs(1).name(), config_name);
+    EXPECT_EQ(list_configs_response.instance_configs(0).name(), config_name);
 
     instance_api::CreateInstanceRequest create_instance;
     create_instance.set_parent(project);
@@ -372,6 +740,15 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
         &move_context, move_request, &move_operation);
     ASSERT_TRUE(status.ok()) << status.error_message();
     EXPECT_TRUE(move_operation.done());
+    instance_api::MoveInstanceMetadata move_metadata;
+    ASSERT_TRUE(move_operation.metadata().UnpackTo(&move_metadata));
+    EXPECT_EQ(move_metadata.target_config(), config_name);
+    EXPECT_EQ(move_metadata.progress().progress_percent(), 100);
+    EXPECT_TRUE(move_metadata.progress().has_start_time());
+    EXPECT_TRUE(move_metadata.progress().has_end_time());
+    instance_api::Instance moved_instance;
+    ASSERT_TRUE(move_operation.response().UnpackTo(&moved_instance));
+    EXPECT_EQ(moved_instance.config(), config_name);
 
     instance_api::GetInstanceRequest get_instance_request;
     get_instance_request.set_name(instance_name);
@@ -399,6 +776,35 @@ TEST(InstanceExtensionsTest, ConfigLifecyclePersistenceMoveAndOperationList) {
 
     move_request.set_target_config(
         project + "/instanceConfigs/emulator-config");
+    BackupCatalog::BackupEntry backup;
+    backup.backup.set_name(instance_name + "/backups/b1");
+    backup.backup.set_state(database_api::Backup::CREATING);
+    backup.source_instance_config = config_name;
+    backup.operation_name = backup.backup.name() + "/operations/create";
+    operations_api::Operation backup_operation;
+    backup_operation.set_name(backup.operation_name);
+    backup_operation.set_done(true);
+    ASSERT_TRUE(std::filesystem::create_directories(
+        std::filesystem::path(restored.server()
+                                  ->env()
+                                  ->backup_catalog()
+                                  ->SnapshotDirectory(backup.backup.name()))
+            .parent_path()));
+    ASSERT_TRUE(restored.server()
+                    ->env()
+                    ->backup_catalog()
+                    ->CreateBackup(backup, backup_operation)
+                    .ok());
+    grpc::ClientContext backed_up_context;
+    status = restored.instance_admin_client()->MoveInstance(
+        &backed_up_context, move_request, &move_operation);
+    EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
+    ASSERT_TRUE(restored.server()
+                    ->env()
+                    ->backup_catalog()
+                    ->DeleteBackup(backup.backup.name())
+                    .ok());
+
     grpc::ClientContext move_back_context;
     status = restored.instance_admin_client()->MoveInstance(
         &move_back_context, move_request, &move_operation);

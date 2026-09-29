@@ -295,7 +295,7 @@ TEST_P(TransactionErrorTest, ReadAfterInvalidatedCommitReturnsError) {
                              : StatusIs(absl::StatusCode::kAlreadyExists)));
 }
 
-TEST_P(TransactionErrorTest, DISABLED_ReadAfterInvalidatedDmlSucceeds) {
+TEST_P(TransactionErrorTest, ReadAfterInvalidatedDmlSucceeds) {
   Transaction txn{Transaction::ReadWriteOptions{}};
   // Insert a row.
   GOOGLESQL_ASSERT_OK(ExecuteDml(txn, "INSERT INTO Users(ID, Name) VALUES(1, 'value')"));
@@ -306,7 +306,14 @@ TEST_P(TransactionErrorTest, DISABLED_ReadAfterInvalidatedDmlSucceeds) {
 
   // Attempt to read again after an error was encountered. The read should
   // succeed without replaying the error.
-  GOOGLESQL_EXPECT_OK(Read(txn, "Users", {"ID", "Name"}, KeySet::All()));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto read_result, Read(txn, "Users", {"ID", "Name"}, KeySet::All()));
+  EXPECT_THAT(read_result.values, testing::ElementsAre(ValueRow{1, "value"}));
+  EXPECT_THAT(Query(txn, "SELECT ID, Name FROM Users"),
+              IsOkAndHoldsRow({1, "value"}));
+
+  // Reads remain available, but the failed DML still prevents a commit.
+  EXPECT_THAT(Commit(txn, {}), StatusIs(absl::StatusCode::kAlreadyExists));
 }
 
 }  // namespace

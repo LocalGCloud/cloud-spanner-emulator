@@ -16,6 +16,7 @@
 
 #include "backend/database/database.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <thread>  // NOLINT
@@ -34,7 +35,10 @@
 #include "backend/actions/manager.h"
 #include "backend/common/ids.h"
 #include "backend/database/change_stream/change_stream_partition_churner.h"
+#include "backend/datamodel/key.h"
+#include "backend/datamodel/key_range.h"
 #include "backend/database/pg_oid_assigner/pg_oid_assigner.h"
+#include "backend/database/row_deletion_policy_sweeper.h"
 #include "backend/locking/manager.h"
 #include "backend/query/query_engine.h"
 #include "backend/schema/catalog/proto_bundle.h"
@@ -43,6 +47,7 @@
 #include "backend/schema/graph/schema_graph.h"
 #include "backend/schema/updater/schema_updater.h"
 #include "backend/schema/updater/scoped_schema_change_lock.h"
+#include "backend/stats/system_stats_collector.h"
 #include "backend/storage/in_memory_storage.h"
 #include "backend/storage/persistent_storage.h"
 #include "backend/transaction/options.h"
@@ -59,6 +64,44 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
+
+namespace {
+
+// The file in a persistent database's directory that keeps its SPANNER_SYS
+// statistics.
+constexpr char kStatisticsFileName[] = "spanner_sys_statistics.json";
+
+// Describes a conflict between the lock `request` of transaction `requester`
+// and the lock `held` of transaction `holder`, for which the requester waited
+// `lock_wait`, for SPANNER_SYS.LOCK_STATS. The conflict starts where the
+// locked key ranges start to overlap.
+LockConflict MakeLockConflict(TransactionID requester,
+                              const LockRequest& request, TransactionID holder,
+                              const LockRequest& held,
+                              absl::Duration lock_wait) {
+  const KeyRange request_range = request.key_range().ToClosedOpen();
+  const KeyRange held_range = held.key_range().ToClosedOpen();
+  LockConflict conflict;
+  conflict.table_id = request.table_id();
+  conflict.start_key = std::max(request_range.start_key(),
+                                held_range.start_key());
+  // The overlap is a single key (or key prefix) unless it ends before the
+  // prefix limit of its start.
+  conflict.is_range =
+      !(std::min(request_range.limit_key(), held_range.limit_key()) ==
+        conflict.start_key.ToPrefixLimit());
+  for (const auto& [transaction_id, lock] :
+       {std::make_pair(requester, &request), std::make_pair(holder, &held)}) {
+    conflict.requests.push_back(
+        {.transaction_id = transaction_id,
+         .exclusive = lock->mode() == LockMode::kExclusive,
+         .column_ids = lock->column_ids()});
+  }
+  conflict.lock_wait = lock_wait;
+  return conflict;
+}
+
+}  // namespace
 
 // TransactionIDGenerator is initialized to 1 because 0 is used as a sentinel
 // value for an invalid transaction.
@@ -156,10 +199,30 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
       return persistent_storage.status();
     }
     database->storage_ = std::move(*persistent_storage);
+    // Statistics are kept next to the storage, so deleting the database's
+    // directory deletes them too.
+    database->stats_collector_ = std::make_unique<SystemStatsCollector>(
+        (std::filesystem::path(storage_directory).parent_path() /
+         kStatisticsFileName)
+            .string(),
+        absl::Now());
   } else {
     database->storage_ = std::make_unique<InMemoryStorage>();
+    database->stats_collector_ = std::make_unique<SystemStatsCollector>();
   }
   database->lock_manager_ = std::make_unique<LockManager>(clock);
+  database->lock_manager_->SetConflictObserver(
+      [stats_collector = database->stats_collector_.get()](
+          TransactionID requester, const LockRequest& request,
+          TransactionID holder, const LockRequest& held,
+          absl::Duration lock_wait) {
+        // Schema locks have no table and are not row locks.
+        if (!request.table_id().empty()) {
+          stats_collector->RecordLockConflict(
+              absl::Now(),
+              MakeLockConflict(requester, request, holder, held, lock_wait));
+        }
+      });
   database->type_factory_ = std::make_unique<googlesql::TypeFactory>();
   database->action_manager_ = std::make_unique<ActionManager>();
   database->dialect_ = schema_change_operation.database_dialect;
@@ -233,11 +296,38 @@ absl::StatusOr<std::unique_ptr<Database>> Database::Create(
       database->versioned_catalog_->GetLatestSchema());
   database->sequence_state_store_ =
       std::make_unique<SequenceStateStore>(database->storage_.get());
+  database->user_split_point_store_ =
+      std::make_unique<UserSplitPointStore>(database->storage_.get());
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::vector<UserSplitPoint> split_points,
+      database->user_split_point_store_->LoadAll());
+  for (UserSplitPoint& split_point : split_points) {
+    database->stats_collector_->AddUserSplitPoint(std::move(split_point));
+  }
   database->query_engine_->SetSequenceStateStoreForFunctionCatalog(
       database->sequence_state_store_.get());
+  database->query_engine_->SetSystemStatsCollector(
+      database->stats_collector_.get());
 
   database->storage_->SetVersionRetentionPeriod(
       database->versioned_catalog_->version_retention_period());
+
+  // Created last because their threads may use the database once started.
+  database->table_size_sampler_ = std::make_unique<TableSizeSampler>(
+      absl::bind_front(&Database::CreateReadOnlyTransaction, database.get()),
+      database->stats_collector_.get(),
+      TableSizeSampler::kDefaultSampleInterval);
+  database->row_deletion_policy_sweeper_ =
+      std::make_unique<RowDeletionPolicySweeper>(
+          absl::bind_front(&Database::CreateReadOnlyTransaction,
+                           database.get()),
+          absl::bind_front(&Database::CreateReadWriteTransaction,
+                           database.get()),
+          config::row_deletion_policy_sweep_interval(),
+          RowDeletionPolicySweeper::kDefaultBatchSize,
+          database->stats_collector_.get());
+  database->row_deletion_policy_sweeper_->Update(
+      database->versioned_catalog_->GetLatestSchema());
 
   return database;
 }
@@ -411,6 +501,7 @@ absl::Status Database::UpdateSchemaInternal(
   }
   change_stream_partition_churner_->Update(
       versioned_catalog_->GetLatestSchema());
+  row_deletion_policy_sweeper_->Update(versioned_catalog_->GetLatestSchema());
 
   // Some functions need to access the schema (e.g. sequence functions), so
   // set the latest schema to the function catalog here.
@@ -431,20 +522,45 @@ absl::Status Database::UpdateSchemaInternal(
   return absl::OkStatus();
 }
 
+absl::Status Database::AddSplitPoints(
+    const std::vector<UserSplitPoint>& split_points) {
+  for (const UserSplitPoint& split_point : split_points) {
+    GOOGLESQL_RETURN_IF_ERROR(user_split_point_store_->Save(split_point));
+    stats_collector_->AddUserSplitPoint(split_point);
+  }
+  return absl::OkStatus();
+}
+
 const Schema* Database::GetLatestSchema() const {
   return versioned_catalog_->GetLatestSchema();
 }
 
-absl::StatusOr<absl::Time> Database::CreateBackupCheckpoint(
-    const std::string& output_dir) const {
+absl::Time Database::VersionRetentionFloor() const {
+  return clock_->Now() - versioned_catalog_->version_retention_period();
+}
+
+absl::StatusOr<Database::BackupCheckpoint> Database::CreateBackupCheckpoint(
+    const std::string& output_dir, absl::Time version_time,
+    absl::Time changed_since) const {
   const auto* persistent_storage =
       dynamic_cast<const PersistentStorage*>(storage_.get());
   if (persistent_storage == nullptr) {
     return absl::FailedPreconditionError(
         "Native backups require --data_dir persistent storage");
   }
-  return lock_manager_->RunWithCommitSerialization(
-      [&] { return persistent_storage->CreateCheckpoint(output_dir); });
+  BackupCheckpoint checkpoint;
+  const auto write_checkpoint = [&]() -> absl::Status {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        checkpoint.changed_bytes,
+        persistent_storage->CreateCheckpoint(output_dir, version_time,
+                                             changed_since));
+    return absl::OkStatus();
+  };
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      checkpoint.capture_time,
+      lock_manager_->RunWithCommitSerialization(write_checkpoint));
+  checkpoint.schema = versioned_catalog_->GetSchema(version_time);
+  return checkpoint;
 }
 
 Database::IdCounterValues Database::GetIdCounterValues() const {

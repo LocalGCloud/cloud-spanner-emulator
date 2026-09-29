@@ -17,9 +17,11 @@
 #include "frontend/handlers/change_streams.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "google/spanner/v1/spanner.pb.h"
@@ -38,9 +40,11 @@
 #include "common/errors.h"
 #include "frontend/converters/change_streams.h"
 #include "frontend/converters/pg_change_streams.h"
+#include "frontend/converters/resume_tokens.h"
 #include "frontend/converters/time.h"
 #include "frontend/entities/session.h"
 #include "frontend/entities/transaction.h"
+#include "frontend/proto/resume_token.pb.h"
 #include "frontend/server/handler.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
@@ -110,6 +114,44 @@ bool IsQueryResultEmpty(backend::QueryResult& result) {
   return result.num_output_rows == 0;
 }
 
+// Forwards the rows of `rows` and collects the timestamps in `column`.
+class TimestampCollectingRowCursor : public backend::RowCursor {
+ public:
+  TimestampCollectingRowCursor(backend::RowCursor* rows, int column,
+                               std::vector<absl::Time>* timestamps)
+      : rows_(rows), column_(column), timestamps_(timestamps) {}
+
+  bool Next() override {
+    if (!rows_->Next()) {
+      return false;
+    }
+    timestamps_->push_back(rows_->ColumnValue(column_).ToTime());
+    return true;
+  }
+  absl::Status Status() const override { return rows_->Status(); }
+  int NumColumns() const override { return rows_->NumColumns(); }
+  const std::string ColumnName(int i) const override {
+    return rows_->ColumnName(i);
+  }
+  const googlesql::Value ColumnValue(int i) const override {
+    return rows_->ColumnValue(i);
+  }
+  const googlesql::Type* ColumnType(int i) const override {
+    return rows_->ColumnType(i);
+  }
+
+ private:
+  backend::RowCursor* rows_;
+  int column_;
+  std::vector<absl::Time>* timestamps_;
+};
+
+// The columns of the change stream's internal tables with the timestamps of
+// the records that their rows become: the start time of a partition, and the
+// commit timestamp of a data change record.
+constexpr int kPartitionStartTimeColumn = 0;
+constexpr int kCommitTimestampColumn = 1;
+
 absl::Status ValidateTokenInRetentionWindow(
     const absl::Time tvf_start, const absl::Time current_chopped_start,
     const absl::Time current_token_end,
@@ -133,11 +175,88 @@ absl::Status ValidateTokenInRetentionWindow(
 
 }  // namespace
 
+ChangeRecordSender::ChangeRecordSender(
+    ServerStream<spanner_api::PartialResultSet>* stream, ResumeToken start)
+    : stream_(stream),
+      position_(std::move(start)),
+      skip_timestamp_micros_(position_.change_stream().timestamp_micros()),
+      records_to_skip_(position_.change_stream().record_index()) {}
+
+absl::Status ChangeRecordSender::Send(
+    std::vector<spanner_api::PartialResultSet> responses,
+    absl::Span<const absl::Time> record_timestamps) {
+  return SendRecords(std::move(responses), record_timestamps,
+                     /*heartbeat=*/false);
+}
+
+absl::Status ChangeRecordSender::Send(
+    std::vector<spanner_api::PartialResultSet> responses,
+    absl::Time timestamp) {
+  const std::vector<int64_t> records =
+      CompletedRows(responses, /*num_columns=*/1);
+  const int64_t record_count =
+      records.empty() ? 0 : *std::max_element(records.begin(), records.end());
+  return SendRecords(
+      std::move(responses),
+      std::vector<absl::Time>(std::max<int64_t>(record_count, 0), timestamp),
+      /*heartbeat=*/false);
+}
+
+absl::Status ChangeRecordSender::SendHeartbeat(
+    std::vector<spanner_api::PartialResultSet> responses,
+    absl::Time timestamp) {
+  return SendRecords(std::move(responses), {timestamp}, /*heartbeat=*/true);
+}
+
+absl::Status ChangeRecordSender::SendRecords(
+    std::vector<spanner_api::PartialResultSet> responses,
+    absl::Span<const absl::Time> record_timestamps, bool heartbeat) {
+  // A resumed stream returns the records at its start timestamp again, in the
+  // same order. Heartbeats are not counted, as they only occur later.
+  int64_t skipped = 0;
+  while (!heartbeat && records_to_skip_ > 0 &&
+         skipped < record_timestamps.size() &&
+         absl::ToUnixMicros(record_timestamps[skipped]) ==
+             skip_timestamp_micros_) {
+    ++skipped;
+    --records_to_skip_;
+  }
+  RemoveFirstRows(skipped, &responses);
+  record_timestamps.remove_prefix(skipped);
+
+  ResumeToken::ChangeStreamPosition& position =
+      *position_.mutable_change_stream();
+  const std::vector<int64_t> records =
+      CompletedRows(responses, /*num_columns=*/1);
+  int64_t sent = 0;
+  for (int i = 0; i < responses.size(); ++i) {
+    for (; sent < records[i]; ++sent) {
+      GOOGLESQL_RET_CHECK_LT(sent, record_timestamps.size());
+      const int64_t micros = absl::ToUnixMicros(record_timestamps[sent]);
+      if (heartbeat) {
+        // No record at or before a heartbeat's timestamp follows it.
+        position.set_timestamp_micros(micros + 1);
+        position.set_record_index(0);
+      } else if (micros == position.timestamp_micros()) {
+        position.set_record_index(position.record_index() + 1);
+      } else {
+        position.set_timestamp_micros(micros);
+        position.set_record_index(1);
+      }
+    }
+    if (records[i] >= 0) {
+      responses[i].set_resume_token(position_.SerializeAsString());
+    }
+    stream_->Send(responses[i]);
+  }
+  GOOGLESQL_RET_CHECK_EQ(sent, record_timestamps.size());
+  return absl::OkStatus();
+}
+
 absl::Status ChangeStreamsHandler::ProcessDataChangeRecordsAndStreamBack(
     backend::QueryResult& result, const bool expect_heartbeat,
     const absl::Time scan_end, bool& expect_metadata,
-    absl::Time* last_record_time,
-    ServerStream<spanner_api::PartialResultSet>* stream) {
+    absl::Time* last_record_time, ChangeRecordSender& sender) {
   std::vector<spanner_api::PartialResultSet> responses;
   const bool mutable_key_range =
       metadata().partition_mode ==
@@ -159,35 +278,35 @@ absl::Status ChangeStreamsHandler::ProcessDataChangeRecordsAndStreamBack(
     }
     expect_metadata = false;
     *last_record_time = scan_end;
-  } else if (!IsQueryResultEmpty(result)) {
-    if (metadata().is_pg) {
-      GOOGLESQL_ASSIGN_OR_RETURN(
-          responses,
-          mutable_key_range
-              ? ConvertDataTableRowCursorToBytes(
-                    result.rows.get(), metadata().tvf_name, expect_metadata)
-              : ConvertDataTableRowCursorToJson(
-                    result.rows.get(), metadata().tvf_name, expect_metadata));
-    } else {
-      GOOGLESQL_ASSIGN_OR_RETURN(
-          responses, mutable_key_range
-                         ? ConvertDataTableRowCursorToProto(result.rows.get(),
-                                                            expect_metadata)
-                         : ConvertDataTableRowCursorToStruct(result.rows.get(),
-                                                             expect_metadata));
-    }
-    *last_record_time = scan_end;
-    expect_metadata = false;
+    return sender.SendHeartbeat(std::move(responses), scan_end);
   }
-  for (auto& response : responses) {
-    stream->Send(response);
+  if (IsQueryResultEmpty(result)) {
+    return absl::OkStatus();
   }
-  return absl::OkStatus();
+  std::vector<absl::Time> commit_timestamps;
+  TimestampCollectingRowCursor rows(result.rows.get(), kCommitTimestampColumn,
+                                    &commit_timestamps);
+  if (metadata().is_pg) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        responses, mutable_key_range
+                       ? ConvertDataTableRowCursorToBytes(
+                             &rows, metadata().tvf_name, expect_metadata)
+                       : ConvertDataTableRowCursorToJson(
+                             &rows, metadata().tvf_name, expect_metadata));
+  } else {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        responses,
+        mutable_key_range
+            ? ConvertDataTableRowCursorToProto(&rows, expect_metadata)
+            : ConvertDataTableRowCursorToStruct(&rows, expect_metadata));
+  }
+  *last_record_time = scan_end;
+  expect_metadata = false;
+  return sender.Send(std::move(responses), commit_timestamps);
 }
 
 absl::Status ChangeStreamsHandler::ExecuteInitialQuery(
-    std::shared_ptr<Session> session,
-    ServerStream<spanner_api::PartialResultSet>* stream) {
+    std::shared_ptr<Session> session, ChangeRecordSender& sender) {
   spanner_api::TransactionOptions txn_options;
   GOOGLESQL_ASSIGN_OR_RETURN(
       *txn_options.mutable_read_only()->mutable_min_read_timestamp(),
@@ -242,11 +361,7 @@ absl::Status ChangeStreamsHandler::ExecuteInitialQuery(
                    : ConvertPartitionTableRowCursorToStruct(
                          partition_results.rows.get(),
                          metadata().start_timestamp, /*need_metadata=*/true)));
-
-    for (auto& response : responses) {
-      stream->Send(response);
-    }
-    return absl::OkStatus();
+    return sender.Send(std::move(responses), metadata().start_timestamp);
   });
 }
 
@@ -346,7 +461,7 @@ ChangeStreamsHandler::ConstructQueryStartPartitionTablePartitionQuery() const {
 }
 
 absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
-    ServerStream<spanner_api::PartialResultSet>* stream,
+    absl::Time start, ChangeRecordSender& sender,
     std::shared_ptr<Session> session) {
   const bool mutable_key_range =
       metadata().partition_mode ==
@@ -359,7 +474,7 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
       absl::Milliseconds(metadata().heartbeat_milliseconds);
   absl::Time last_record_time = now;
   absl::Time partition_token_end_time = absl::InfiniteFuture();
-  absl::Time current_start = metadata().start_timestamp;
+  absl::Time current_start = start;
   absl::Time current_end = std::min(
       std::max(now,
                current_start +
@@ -404,27 +519,31 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
                      session->CreateSingleUseTransaction(txn_options));
     absl::Status status =
         txn->GuardedCall(Transaction::OpType::kSql, [&]() -> absl::Status {
-          if (mutable_key_range) {
+          // The partition's start records precede its other records, so they
+          // are returned from the first scan only.
+          if (mutable_key_range && current_start == start) {
             backend::Query head_query_partition_table =
                 ConstructQueryStartPartitionTablePartitionQuery();
             GOOGLESQL_ASSIGN_OR_RETURN(auto head_partition_records_results,
                              txn->ExecuteSql(head_query_partition_table));
             if (!IsQueryResultEmpty(head_partition_records_results)) {
+              std::vector<absl::Time> partition_start;
+              TimestampCollectingRowCursor rows(
+                  head_partition_records_results.rows.get(),
+                  kPartitionStartTimeColumn, &partition_start);
               GOOGLESQL_ASSIGN_OR_RETURN(
                   auto responses,
                   metadata().is_pg
                       ? ConvertQueryStartPartitionTableRowCursorToBytes(
-                            head_partition_records_results.rows.get(),
-                            metadata().start_timestamp, metadata().tvf_name,
+                            &rows, start, metadata().tvf_name,
                             expect_metadata)
                       : ConvertQueryStartPartitionTableRowCursorToProto(
-                            head_partition_records_results.rows.get(),
-                            metadata().start_timestamp, expect_metadata));
+                            &rows, start, expect_metadata));
               if (!responses.empty()) {
                 expect_metadata = false;
-                for (auto& response : responses) {
-                  stream->Send(response);
-                }
+                // The query reads the one row of the partition.
+                GOOGLESQL_RETURN_IF_ERROR(sender.Send(std::move(responses),
+                                            partition_start.front()));
               }
             }
           }
@@ -434,7 +553,7 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
                            txn->ExecuteSql(read_data_query));
           GOOGLESQL_RETURN_IF_ERROR(ProcessDataChangeRecordsAndStreamBack(
               data_records_results, expect_heartbeat, scan_end, expect_metadata,
-              &last_record_time, stream));
+              &last_record_time, sender));
           if (partition_token_end_time <= current_end) {
             // Get child partition records after all data records are returned
             // in current query.
@@ -467,16 +586,17 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
                                  /*initial_start_time=*/std::nullopt,
                                  expect_metadata)));
             expect_metadata = false;
-            for (auto& response : responses) {
-              stream->Send(response);
-            }
-            return absl::OkStatus();
+            return sender.Send(std::move(responses), partition_token_end_time);
           }
           return absl::OkStatus();
         });
     GOOGLESQL_RETURN_IF_ERROR(status);
-    // Increment by 1 microsecond gap to avoid repetitive records.
-    current_start = scan_end + absl::Microseconds(1);
+    if (scan_end >= tvf_end || scan_end >= partition_token_end_time ||
+        scan_end <= current_start) {
+      break;
+    }
+    // Advance to scan_end directly without a gap to ensure no boundary commits are skipped.
+    current_start = scan_end;
     current_end = std::min(
         {current_start +
              absl::GetFlag(FLAGS_change_streams_partition_query_chop_interval),
@@ -488,12 +608,17 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
     GOOGLESQL_ASSIGN_OR_RETURN(
         auto extra_heartbeat,
         metadata().is_pg
-            ? ConvertHeartbeatTimestampToJson(tvf_end, metadata().tvf_name,
-                                              expect_metadata)
-            : ConvertHeartbeatTimestampToStruct(tvf_end, expect_metadata));
-    for (auto& response : extra_heartbeat) {
-      stream->Send(response);
-    }
+            ? (mutable_key_range
+                   ? ConvertHeartbeatTimestampToBytes(
+                         tvf_end, metadata().tvf_name, expect_metadata)
+                   : ConvertHeartbeatTimestampToJson(
+                         tvf_end, metadata().tvf_name, expect_metadata))
+            : (mutable_key_range
+                   ? ConvertHeartbeatTimestampToProto(tvf_end, expect_metadata)
+                   : ConvertHeartbeatTimestampToStruct(tvf_end,
+                                                       expect_metadata)));
+    GOOGLESQL_RETURN_IF_ERROR(
+        sender.SendHeartbeat(std::move(extra_heartbeat), tvf_end));
   }
   return absl::OkStatus();
 }
@@ -501,17 +626,35 @@ absl::Status ChangeStreamsHandler::ExecutePartitionQuery(
 absl::Status ChangeStreamsHandler::ExecuteChangeStreamQuery(
     const spanner_api::ExecuteSqlRequest* request,
     ServerStream<spanner_api::PartialResultSet>* stream,
-    std::shared_ptr<Session> session) {
+    std::shared_ptr<Session> session,
+    const std::optional<ResumeToken>& resume_token) {
   GOOGLESQL_RETURN_IF_ERROR(
       ValidateTransactionSelectorForChangeStreamQuery(request->transaction()));
   if (request->query_mode() == spanner_api::ExecuteSqlRequest::PLAN) {
     return error::EmulatorDoesNotSupportQueryPlans();
   }
-  if (!metadata().partition_token.has_value()) {
-    return ExecuteInitialQuery(session, stream);
+  const std::string partition_token =
+      metadata().partition_token.value_or("");
+  ResumeToken start;
+  if (resume_token.has_value()) {
+    if (!resume_token->has_change_stream() ||
+        resume_token->change_stream().partition_token() != partition_token) {
+      return error::ResumeTokenMismatch();
+    }
+    start = *resume_token;
   } else {
-    return ExecutePartitionQuery(stream, session);
+    start.set_request_fingerprint(ResumeFingerprint(*request));
+    start.mutable_change_stream()->set_partition_token(partition_token);
   }
+  ChangeRecordSender sender(stream, start);
+  if (!metadata().partition_token.has_value()) {
+    return ExecuteInitialQuery(session, sender);
+  }
+  // A resumed query continues at the timestamp of its resume token.
+  return ExecutePartitionQuery(
+      std::max(metadata().start_timestamp,
+               absl::FromUnixMicros(start.change_stream().timestamp_micros())),
+      sender, session);
 }
 }  // namespace frontend
 }  // namespace emulator

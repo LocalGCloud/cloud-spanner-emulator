@@ -341,6 +341,19 @@ absl::StatusOr<const Table*> FindChangeStreamPartitionTable(
   return iter->change_stream_partition_table();
 }
 
+absl::StatusOr<const Table*> FindChangeStreamDataTable(
+    const Schema* schema, absl::string_view change_stream_data_table_name) {
+  const std::string change_stream_name = std::string(
+      absl::ClippedSubstr(change_stream_data_table_name,
+                          sizeof(kChangeStreamDataTablePrefix) - 1));
+  const ChangeStream* change_stream =
+      schema->FindChangeStream(change_stream_name);
+  if (change_stream == nullptr) {
+    return error::ChangeStreamNotFound(change_stream_name);
+  }
+  return change_stream->change_stream_data_table();
+}
+
 absl::Status ValidateNonDeleteMutationOp(const MutationOp& mutation_op,
                                          const Schema* schema) {
   GOOGLESQL_RET_CHECK(mutation_op.type != MutationOpType::kDelete);
@@ -380,6 +393,11 @@ absl::StatusOr<ResolvedMutationOp> ResolveDeleteMutationOp(
     const MutationOp& mutation_op, const Schema* schema, absl::Time now) {
   GOOGLESQL_RET_CHECK(mutation_op.type == MutationOpType::kDelete);
   const Table* table = schema->FindTable(mutation_op.table);
+  // Change stream data retention deletes expired change records.
+  if (IsChangeStreamDataTable(mutation_op.table)) {
+    GOOGLESQL_ASSIGN_OR_RETURN(table,
+                     FindChangeStreamDataTable(schema, mutation_op.table));
+  }
   if (table == nullptr) {
     return error::TableNotFound(mutation_op.table);
   }

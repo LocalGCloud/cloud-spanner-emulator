@@ -42,14 +42,16 @@ namespace frontend {
 absl::StatusOr<std::shared_ptr<Session>> SessionManager::CreateSession(
     const Labels& labels, const bool multiplexed,
     std::shared_ptr<Database> database,
-    MultiplexedSessionTransactionManager* mux_txn_manager) {
+    MultiplexedSessionTransactionManager* mux_txn_manager,
+    const std::string& creator_role) {
   absl::MutexLock lock(mu_);
   const std::string session_id = absl::StrCat(next_session_id_++);
   std::string session_uri =
       MakeSessionUri(database->database_uri(), session_id);
   std::shared_ptr<Session> session = std::make_shared<Session>(
       session_uri, labels, multiplexed,
-      /* create_time = */ clock_->Now(), database, mux_txn_manager);
+      /* create_time = */ clock_->Now(), database, mux_txn_manager,
+      creator_role);
   session->set_approximate_last_use_time(clock_->Now());
 
   // Need to also cache mux session since the session IDs generated are not

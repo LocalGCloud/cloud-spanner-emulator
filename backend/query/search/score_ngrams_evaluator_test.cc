@@ -110,6 +110,82 @@ TEST(ScoreNgramsEvaluatorTest, EvaluateOnNullTokenListReturnsZero) {
   EXPECT_EQ(0.0, score.double_value());
 }
 
+TEST(ScoreNgramsEvaluatorTest, OnlyTrigramsAlgorithmIsAccepted) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto tokens, NgramsTokenizer::Tokenize({googlesql::Value::String("span")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto default_score,
+      ScoreNgramsEvaluator::Evaluate({tokens, googlesql::Value::String("span")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto trigrams_score,
+      ScoreNgramsEvaluator::Evaluate(
+          {tokens, googlesql::Value::String("span"),
+           googlesql::Value::String("trigrams")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto null_algorithm_score,
+      ScoreNgramsEvaluator::Evaluate(
+          {tokens, googlesql::Value::String("span"),
+           googlesql::Value::NullString()}));
+  EXPECT_EQ(default_score.double_value(), trigrams_score.double_value());
+  EXPECT_EQ(default_score.double_value(), null_algorithm_score.double_value());
+  EXPECT_THAT(ScoreNgramsEvaluator::Evaluate(
+                  {tokens, googlesql::Value::String("span"),
+                   googlesql::Value::String("bigrams")}),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("SCORE_NGRAMS algorithm")));
+}
+
+TEST(ScoreNgramsEvaluatorTest, EmptyTrigramSetsScoreZero) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto tokens, NgramsTokenizer::Tokenize({googlesql::Value::String("")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto score,
+      ScoreNgramsEvaluator::Evaluate({tokens, googlesql::Value::String("")}));
+  EXPECT_EQ(0.0, score.double_value());
+}
+
+TEST(ScoreNgramsEvaluatorTest, ArrayAggregatorScoresArrayElements) {
+  const googlesql::Value array_tokens = TokenListFromStrings(
+      {"substring-3-3-0", "span", kGapString, "cloud", kGapString});
+  auto score = [](const googlesql::Value& tokens,
+                  googlesql::Value array_aggregator) {
+    return ScoreNgramsEvaluator::Evaluate(
+        {tokens, googlesql::Value::String("span"),
+         googlesql::Value::NullString(), googlesql::Value::NullString(),
+         array_aggregator});
+  };
+
+  // Flattening scores the trigrams of all elements together: 2 of the 5
+  // source trigrams match the 2 query trigrams.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto flatten,
+                       score(array_tokens, googlesql::Value::String("flatten")));
+  EXPECT_DOUBLE_EQ(flatten.double_value(), 0.4);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto by_default,
+                       score(array_tokens, googlesql::Value::NullString()));
+  EXPECT_DOUBLE_EQ(by_default.double_value(), 0.4);
+
+  // max_element scores the best element, which matches the query exactly.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto max_element,
+      score(array_tokens, googlesql::Value::String("max_element")));
+  EXPECT_DOUBLE_EQ(max_element.double_value(), 1.0);
+
+  EXPECT_THAT(score(array_tokens, googlesql::Value::String("sum")),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("array_aggregator")));
+  EXPECT_THAT(score(TokenListFromStrings({"substring-3-3-0", "span"}),
+                    googlesql::Value::String("max_element")),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("array column")));
+
+  // An empty array has no elements to score.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto empty_array,
+      score(TokenListFromStrings({"substring-3-3-0"}),
+            googlesql::Value::String("max_element")));
+  EXPECT_EQ(empty_array.double_value(), 0.0);
+}
+
 struct ScoreNgramsEvaluatorTestCase {
   std::vector<std::string> tokens;
   std::string query;

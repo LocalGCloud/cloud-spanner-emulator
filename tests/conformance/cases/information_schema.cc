@@ -71,26 +71,10 @@ class InformationSchemaTest
   // Information schema tables not yet supported.
   const std::pair<std::string, Value> kUnsupportedTables{
       "unsupported_tables",
-      std::vector<std::string>(
-          {GetNameForDialect("AAC_APPROVAL_CONFIGS"),
-           GetNameForDialect("CHANGE_STREAM_PRIVILEGES"),
-           GetNameForDialect("MODEL_PRIVILEGES"), GetNameForDialect("VIEWS"),
-           GetNameForDialect("ROLES"), GetNameForDialect("ROLE_GRANTEES"),
-           GetNameForDialect("TABLE_PRIVILEGES"),
-           GetNameForDialect("COLUMN_PRIVILEGES"),
-           GetNameForDialect("PARAMETERS"), GetNameForDialect("ROUTINES"), GetNameForDialect("ROUTINE_OPTIONS"),
-           GetNameForDialect("ROUTINE_PRIVILEGES"),
-           GetNameForDialect("ROLE_TABLE_GRANTS"),
-           GetNameForDialect("ROLE_COLUMN_GRANTS"),
-           GetNameForDialect("ROLE_CHANGE_STREAM_GRANTS"),
-           GetNameForDialect("ROLE_MODEL_GRANTS"),
-           GetNameForDialect("ROLE_ROUTINE_GRANTS"),
-           GetNameForDialect("TABLE_SYNONYMS"),
-           GetNameForDialect("INDEX_OPTIONS"),
-           GetNameForDialect("COLUMN_PARAMETERS"),
-           // Unsupported PG-specific tables.
-           "applicable_roles", "enabled_roles",
-           "information_schema_catalog_name"})};
+      std::vector<std::string>({GetNameForDialect("AAC_APPROVAL_CONFIGS"),
+                                GetNameForDialect("VIEWS"),
+                                GetNameForDialect("INDEX_OPTIONS"),
+                                GetNameForDialect("COLUMN_PARAMETERS")})};
 
   // Information schema columns not yet supported.
   const std::pair<std::string, Value> kUnsupportedColumns{
@@ -362,28 +346,43 @@ TEST_P(InformationSchemaTest, MetaTables) {
   // clang-format off
   auto expected = std::vector<ValueRow>();
   if (GetParam() == POSTGRESQL) {
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("APPLICABLE_ROLES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_COLUMNS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_TABLES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CHANGE_STREAMS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CHECK_CONSTRAINTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("COLUMN_COLUMN_USAGE"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("COLUMN_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("COLUMN_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("COLUMNS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CONSTRAINT_COLUMN_USAGE"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("CONSTRAINT_TABLE_USAGE"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("DATABASE_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ENABLED_ROLES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("INDEX_COLUMNS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("INDEXES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("INFORMATION_SCHEMA_CATALOG_NAME"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("KEY_COLUMN_USAGE"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("LOCALITY_GROUP_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("PARAMETERS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("PLACEMENT_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("PLACEMENTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("REFERENTIAL_CONSTRAINTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ROLE_CHANGE_STREAM_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ROLE_COLUMN_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ROLE_ROUTINE_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ROLE_TABLE_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ROUTINE_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ROUTINE_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("ROUTINES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("SCHEMATA"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("SEQUENCES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("SPANNER_STATISTICS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("TABLE_CONSTRAINTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("TABLE_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("TABLE_SYNONYMS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({TableCatalogForDialect(), table_schema, "VIEW", GetNameForDialect("TABLES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
 
     // Substituting in the static array of unsupported tables.
@@ -394,11 +393,13 @@ TEST_P(InformationSchemaTest, MetaTables) {
   } else {
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_COLUMNS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CHANGE_STREAM_TABLES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CHANGE_STREAMS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CHECK_CONSTRAINTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("COLUMN_COLUMN_USAGE"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("COLUMN_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("COLUMN_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("COLUMNS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CONSTRAINT_COLUMN_USAGE"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("CONSTRAINT_TABLE_USAGE"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
@@ -410,16 +411,30 @@ TEST_P(InformationSchemaTest, MetaTables) {
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("MODEL_COLUMN_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("MODEL_COLUMNS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("MODEL_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("MODEL_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("MODELS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("PARAMETERS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("PLACEMENT_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("PLACEMENTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("PROPERTY_GRAPHS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("REFERENTIAL_CONSTRAINTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROLE_CHANGE_STREAM_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROLE_COLUMN_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROLE_GRANTEES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROLE_MODEL_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROLE_ROUTINE_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROLE_TABLE_GRANTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROLES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROUTINE_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROUTINE_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("ROUTINES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("SCHEMATA"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("SEQUENCE_OPTIONS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("SEQUENCES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("SPANNER_STATISTICS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("TABLE_CONSTRAINTS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("TABLE_PRIVILEGES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
+    expected.push_back({"", table_schema, "VIEW", GetNameForDialect("TABLE_SYNONYMS"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
     expected.push_back({"", table_schema, "VIEW", GetNameForDialect("TABLES"), Ns(), Ns(), Ns(), Ns()});  // NOLINT
 
     absl::StatusOr<std::vector<ValueRow>> results =
@@ -502,6 +517,11 @@ TEST_P(InformationSchemaTest, GSQLMetaColumns) {
     {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "OPTION_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "OPTION_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "OPTION_VALUE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "ALL_COLUMNS", Ns(), Ns(), "NO", "BOOL", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHANGE_STREAM_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHANGE_STREAM_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
@@ -547,6 +567,12 @@ TEST_P(InformationSchemaTest, GSQLMetaColumns) {
     {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "COLUMN_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "COLUMN_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
@@ -626,6 +652,18 @@ TEST_P(InformationSchemaTest, GSQLMetaColumns) {
     {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "OPTION_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "OPTION_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "OPTION_VALUE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "PARAMETERS", "DATA_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "PARAMETERS", "ORDINAL_POSITION", Ns(), Ns(), "NO", "INT64", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "PARAMETERS", "PARAMETER_DEFAULT", Ns(), Ns(), "YES", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "PARAMETERS", "PARAMETER_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "PLACEMENTS", "IS_DEFAULT", Ns(), Ns(), "NO", "BOOL", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "PLACEMENTS", "PLACEMENT_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "OPTION_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
@@ -646,6 +684,66 @@ TEST_P(InformationSchemaTest, GSQLMetaColumns) {
     {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_NAME", Ns(), Ns(), "YES", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UNIQUE_CONSTRAINT_SCHEMA", Ns(), Ns(), "YES", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UPDATE_RULE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLES", "IS_SYSTEM", Ns(), Ns(), "NO", "BOOL", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLES", "ROLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "COLUMN_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "GRANTOR", Ns(), Ns(), "YES", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "IS_GRANTABLE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "ROLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "GRANTOR", Ns(), Ns(), "YES", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "IS_GRANTABLE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "GRANTOR", Ns(), Ns(), "YES", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "IS_GRANTABLE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "GRANTOR", Ns(), Ns(), "YES", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "IS_GRANTABLE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "DATA_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_BODY", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_DEFINITION", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "SECURITY_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_VALUE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "SCHEMATA", "CATALOG_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "SCHEMATA", "PROTO_BUNDLE", Ns(), Ns(), "YES", "PROTO<proto2.FileDescriptorSet>", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "SCHEMATA", "SCHEMA_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
@@ -679,6 +777,17 @@ TEST_P(InformationSchemaTest, GSQLMetaColumns) {
     {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
     {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "GRANTEE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIVILEGE_TYPE", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "SYNONYM_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "SYNONYM_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "SYNONYM_TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_CATALOG", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_NAME", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
+    {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_SCHEMA", Ns(), Ns(), "NO", "STRING(MAX)", "NEVER", Ns(), Ns(), Ns(), false, Ns()},  // NOLINT
   });
   // clang-format on
   // The following rows are filtered out in prod because the column
@@ -804,11 +913,13 @@ TEST_P(InformationSchemaTest, MetaIndexes) {
         {"", "INFORMATION_SCHEMA", "CHANGE_STREAMS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "CHECK_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "COLUMN_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "DATABASE_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
@@ -820,16 +931,30 @@ TEST_P(InformationSchemaTest, MetaIndexes) {
         {"", "INFORMATION_SCHEMA", "MODEL_COLUMNS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "MODEL_COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "PARAMETERS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "PLACEMENTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "PROPERTY_GRAPHS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROLES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROUTINES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "SEQUENCES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "SEQUENCE_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "SPANNER_STATISTICS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
         {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
+        {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "PRIMARY_KEY", "PRIMARY_KEY", "", true, false, Ns()},  // NOLINT
     });
     // clang-format on
     results = QueryWithParams(query, {kUnsupportedTables});
@@ -897,6 +1022,11 @@ TEST_P(InformationSchemaTest, MetaIndexColumns) {
       {"INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "OPTION_NAME", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
@@ -920,6 +1050,12 @@ TEST_P(InformationSchemaTest, MetaIndexColumns) {
       {"INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "OPTION_NAME", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 6, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
@@ -968,6 +1104,15 @@ TEST_P(InformationSchemaTest, MetaIndexColumns) {
       {"INFORMATION_SCHEMA", "MODEL_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "MODEL_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "MODEL_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "OPTION_NAME", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "PARAMETERS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "PARAMETERS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "PARAMETERS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "PARAMETERS", "PRIMARY_KEY", "PRIMARY_KEY", "ORDINAL_POSITION", 4, "ASC", "NO", "INT64"},  // NOLINT
       {"INFORMATION_SCHEMA", "PLACEMENTS", "PRIMARY_KEY", "PRIMARY_KEY", "PLACEMENT_NAME", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "PLACEMENT_NAME", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "OPTION_NAME", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
@@ -977,6 +1122,47 @@ TEST_P(InformationSchemaTest, MetaIndexColumns) {
       {"INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLES", "PRIMARY_KEY", "PRIMARY_KEY", "ROLE_NAME", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "CHANGE_STREAM_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "COLUMN_NAME", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 6, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_GRANTEES", "PRIMARY_KEY", "PRIMARY_KEY", "ROLE_NAME", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_GRANTEES", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "MODEL_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINES", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINES", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINES", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "PRIMARY_KEY", "PRIMARY_KEY", "OPTION_NAME", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "SPECIFIC_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "CATALOG_NAME", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY_KEY", "PRIMARY_KEY", "SCHEMA_NAME", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "SEQUENCES", "PRIMARY_KEY", "PRIMARY_KEY", "CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
@@ -995,6 +1181,14 @@ TEST_P(InformationSchemaTest, MetaIndexColumns) {
       {"INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
       {"INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY_KEY", "PRIMARY_KEY", "CONSTRAINT_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "PRIVILEGE_TYPE", 4, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIMARY_KEY", "PRIMARY_KEY", "GRANTEE", 5, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_SYNONYMS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_CATALOG", 1, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_SYNONYMS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_SCHEMA", 2, "ASC", "NO", "STRING(MAX)"},  // NOLINT
+      {"INFORMATION_SCHEMA", "TABLE_SYNONYMS", "PRIMARY_KEY", "PRIMARY_KEY", "TABLE_NAME", 3, "ASC", "NO", "STRING(MAX)"},  // NOLINT
     });
     // clang-format on
     results = QueryWithParams(query, {kUnsupportedTables});
@@ -1065,6 +1259,11 @@ TEST_P(InformationSchemaTest, MetaTableConstraints) {
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_OPTIONS_OPTION_NAME", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_OPTIONS_OPTION_TYPE", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_OPTIONS_OPTION_VALUE", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_NAME", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_SCHEMA", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_GRANTEE", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_ALL_COLUMNS", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_CHANGE_STREAM_NAME", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHECK", "NO", "NO", "YES"},  // NOLINT
@@ -1095,6 +1294,12 @@ TEST_P(InformationSchemaTest, MetaTableConstraints) {
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_OPTIONS_TABLE_CATALOG", "", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_OPTIONS_TABLE_NAME", "", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_OPTIONS_TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_COLUMN_NAME", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_GRANTEE", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_CATALOG", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_NAME", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_COLUMN_NAME", "", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_CONSTRAINT_CATALOG", "", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_CONSTRAINT_NAME", "", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CHECK", "NO", "NO", "YES"},  // NOLINT
@@ -1165,6 +1370,17 @@ TEST_P(InformationSchemaTest, MetaTableConstraints) {
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_OPTIONS_OPTION_NAME", "", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_OPTIONS_OPTION_TYPE", "", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_OPTIONS_OPTION_VALUE", "", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_GRANTEE", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_CATALOG", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_NAME", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_SCHEMA", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_DATA_TYPE", "", "INFORMATION_SCHEMA", "PARAMETERS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_ORDINAL_POSITION", "", "INFORMATION_SCHEMA", "PARAMETERS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_PARAMETER_NAME", "", "INFORMATION_SCHEMA", "PARAMETERS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "PARAMETERS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "PARAMETERS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "PARAMETERS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PLACEMENTS_IS_DEFAULT", "", "INFORMATION_SCHEMA", "PLACEMENTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PLACEMENTS_PLACEMENT_NAME", "", "INFORMATION_SCHEMA", "PLACEMENTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PLACEMENT_OPTIONS_OPTION_NAME", "", "INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
@@ -1181,6 +1397,62 @@ TEST_P(InformationSchemaTest, MetaTableConstraints) {
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_MATCH_OPTION", "", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_SPANNER_STATE", "", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_UPDATE_RULE", "", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLES_IS_SYSTEM", "", "INFORMATION_SCHEMA", "ROLES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLES_ROLE_NAME", "", "INFORMATION_SCHEMA", "ROLES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_NAME", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_SCHEMA", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_GRANTEE", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_COLUMN_NAME", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_GRANTEE", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_IS_GRANTABLE", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_CATALOG", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_NAME", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_GRANTEES_GRANTEE", "", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_GRANTEES_ROLE_NAME", "", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_GRANTEE", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_IS_GRANTABLE", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_CATALOG", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_NAME", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_SCHEMA", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_GRANTEE", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_IS_GRANTABLE", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_GRANTEE", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_IS_GRANTABLE", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_CATALOG", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_NAME", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_DATA_TYPE", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_BODY", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_CATALOG", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_DEFINITION", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_NAME", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_SCHEMA", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_TYPE", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SECURITY_TYPE", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "ROUTINES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_NAME", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_TYPE", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_VALUE", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_GRANTEE", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_SCHEMATA_CATALOG_NAME", "", "INFORMATION_SCHEMA", "SCHEMATA", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_SCHEMATA_SCHEMA_NAME", "", "INFORMATION_SCHEMA", "SCHEMATA", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_SEQUENCES_CATALOG", "", "INFORMATION_SCHEMA", "SEQUENCES", "CHECK", "NO", "NO", "YES"},  // NOLINT
@@ -1210,14 +1482,27 @@ TEST_P(InformationSchemaTest, MetaTableConstraints) {
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_CATALOG", "", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_NAME", "", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_GRANTEE", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_CATALOG", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_NAME", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_CATALOG", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_SCHEMA", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_TABLE_NAME", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_CATALOG", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_NAME", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "CHECK", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "CHECK", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAMS", "", "INFORMATION_SCHEMA", "CHANGE_STREAMS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_COLUMNS", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_COLUMNS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_OPTIONS", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_TABLES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHECK_CONSTRAINTS", "", "INFORMATION_SCHEMA", "CHECK_CONSTRAINTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_COLUMNS", "", "INFORMATION_SCHEMA", "COLUMNS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_COLUMN_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "COLUMN_COLUMN_USAGE", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CONSTRAINT_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CONSTRAINT_TABLE_USAGE", "", "INFORMATION_SCHEMA", "CONSTRAINT_TABLE_USAGE", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_DATABASE_OPTIONS", "", "INFORMATION_SCHEMA", "DATABASE_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
@@ -1229,16 +1514,30 @@ TEST_P(InformationSchemaTest, MetaTableConstraints) {
       {"", "INFORMATION_SCHEMA", "PK_MODEL_COLUMNS", "", "INFORMATION_SCHEMA", "MODEL_COLUMNS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_MODEL_COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "MODEL_COLUMN_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_MODEL_OPTIONS", "", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_PARAMETERS", "", "INFORMATION_SCHEMA", "PARAMETERS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_PLACEMENTS", "", "INFORMATION_SCHEMA", "PLACEMENTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_PLACEMENT_OPTIONS", "", "INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_PROPERTY_GRAPHS", "", "INFORMATION_SCHEMA", "PROPERTY_GRAPHS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_REFERENTIAL_CONSTRAINTS", "", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLES", "", "INFORMATION_SCHEMA", "ROLES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_GRANTEES", "", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINES", "", "INFORMATION_SCHEMA", "ROUTINES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_SCHEMATA", "", "INFORMATION_SCHEMA", "SCHEMATA", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_SEQUENCES", "", "INFORMATION_SCHEMA", "SEQUENCES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_SEQUENCE_OPTIONS", "", "INFORMATION_SCHEMA", "SEQUENCE_OPTIONS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_SPANNER_STATISTICS", "", "INFORMATION_SCHEMA", "SPANNER_STATISTICS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_TABLES", "", "INFORMATION_SCHEMA", "TABLES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_TABLE_CONSTRAINTS", "", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "PRIMARY KEY", "NO", "NO", "YES"},  // NOLINT
     });
 
     // clang-format on
@@ -1486,6 +1785,12 @@ TEST_P(InformationSchemaTest, MetaConstraintTableUsage) {
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_OPTIONS_OPTION_TYPE"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_OPTIONS_OPTION_VALUE"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "" , "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_OPTIONS"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "" , "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_ALL_COLUMNS"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_CHANGE_STREAM_CATALOG"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_CHANGE_STREAM_NAME"}, //NOLINT
@@ -1521,6 +1826,13 @@ TEST_P(InformationSchemaTest, MetaConstraintTableUsage) {
       {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_OPTIONS_TABLE_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_OPTIONS_TABLE_SCHEMA"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "PK_COLUMN_OPTIONS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_COLUMN_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "" , "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_COLUMN_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_CONSTRAINT_CATALOG"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_CONSTRAINT_NAME"},  // NOLINT
@@ -1602,6 +1914,19 @@ TEST_P(InformationSchemaTest, MetaConstraintTableUsage) {
       {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_OPTIONS_OPTION_TYPE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_OPTIONS_OPTION_VALUE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "", "INFORMATION_SCHEMA", "PK_MODEL_OPTIONS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "" , "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_DATA_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_ORDINAL_POSITION"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_PARAMETER_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "" , "INFORMATION_SCHEMA", "PK_PARAMETERS"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "PLACEMENTS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PLACEMENTS_IS_DEFAULT"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PLACEMENTS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PLACEMENTS_PLACEMENT_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PLACEMENTS", "", "INFORMATION_SCHEMA", "PK_PLACEMENTS"},  // NOLINT
@@ -1622,6 +1947,72 @@ TEST_P(InformationSchemaTest, MetaConstraintTableUsage) {
       {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_SPANNER_STATE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_UPDATE_RULE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "", "INFORMATION_SCHEMA", "PK_REFERENTIAL_CONSTRAINTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLES_IS_SYSTEM"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLES_ROLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLES", "" , "INFORMATION_SCHEMA", "PK_ROLES"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "" , "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_COLUMN_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_IS_GRANTABLE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "" , "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_GRANTEES_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_GRANTEES_ROLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "" , "INFORMATION_SCHEMA", "PK_ROLE_GRANTEES"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_IS_GRANTABLE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "" , "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_IS_GRANTABLE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "" , "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_IS_GRANTABLE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "" , "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_DATA_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_BODY"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_DEFINITION"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SECURITY_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "" , "INFORMATION_SCHEMA", "PK_ROUTINES"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_VALUE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "" , "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES"}, //NOLINT
       {"", "INFORMATION_SCHEMA", "SCHEMATA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_SCHEMATA_CATALOG_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "SCHEMATA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_SCHEMATA_SCHEMA_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "SCHEMATA", "", "INFORMATION_SCHEMA", "PK_SCHEMATA"},  // NOLINT
@@ -1657,6 +2048,19 @@ TEST_P(InformationSchemaTest, MetaConstraintTableUsage) {
       {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_SCHEMA"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "", "INFORMATION_SCHEMA", "PK_TABLE_CONSTRAINTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_GRANTEE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_PRIVILEGE_TYPE"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "" , "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_TABLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_CATALOG"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_NAME"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "" , "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_SCHEMA"}, //NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "" , "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS"}, //NOLINT
     });
     // clang-format on
     CheckResultsAgainstExpected(results, expected);
@@ -1748,6 +2152,11 @@ TEST_P(InformationSchemaTest, MetaKeyColumnUsage) {
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_OPTIONS", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "CHANGE_STREAM_SCHEMA", 2, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_OPTIONS", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "CHANGE_STREAM_NAME", 3, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_OPTIONS", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "OPTION_NAME", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "GRANTEE", 5, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_TABLES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHANGE_STREAM_CATALOG", 1, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_TABLES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHANGE_STREAM_SCHEMA", 2, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_TABLES", "", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHANGE_STREAM_NAME", 3, Ni()},  // NOLINT
@@ -1771,6 +2180,12 @@ TEST_P(InformationSchemaTest, MetaKeyColumnUsage) {
       {"", "INFORMATION_SCHEMA", "PK_COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_NAME", 3, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "COLUMN_NAME", 4, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_COLUMN_OPTIONS", "", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "OPTION_NAME", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "COLUMN_NAME", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIVILEGE_TYPE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES", "", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "GRANTEE", 6, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CONSTRAINT_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_CATALOG", 1, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CONSTRAINT_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_SCHEMA", 2, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_CONSTRAINT_COLUMN_USAGE", "", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_NAME", 3, Ni()},  // NOLINT
@@ -1819,6 +2234,15 @@ TEST_P(InformationSchemaTest, MetaKeyColumnUsage) {
       {"", "INFORMATION_SCHEMA", "PK_MODEL_OPTIONS", "", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "MODEL_SCHEMA", 2, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_MODEL_OPTIONS", "", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "MODEL_NAME", 3, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_MODEL_OPTIONS", "", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "OPTION_NAME", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES", "", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "GRANTEE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_PARAMETERS", "", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_PARAMETERS", "", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_PARAMETERS", "", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_PARAMETERS", "", "INFORMATION_SCHEMA", "PARAMETERS", "ORDINAL_POSITION", 4, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_PLACEMENTS", "", "INFORMATION_SCHEMA", "PLACEMENTS", "PLACEMENT_NAME", 1, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_PLACEMENT_OPTIONS", "", "INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "PLACEMENT_NAME", 1, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_PLACEMENT_OPTIONS", "", "INFORMATION_SCHEMA", "PLACEMENT_OPTIONS", "OPTION_NAME", 2, Ni()},  // NOLINT
@@ -1828,6 +2252,47 @@ TEST_P(InformationSchemaTest, MetaKeyColumnUsage) {
       {"", "INFORMATION_SCHEMA", "PK_REFERENTIAL_CONSTRAINTS", "", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_CATALOG", 1, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_REFERENTIAL_CONSTRAINTS", "", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_SCHEMA", 2, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_REFERENTIAL_CONSTRAINTS", "", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "CONSTRAINT_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLES", "", "INFORMATION_SCHEMA", "ROLES", "ROLE_NAME", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "GRANTEE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "COLUMN_NAME", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIVILEGE_TYPE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "GRANTEE", 6, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_GRANTEES", "", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "ROLE_NAME", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_GRANTEES", "", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "GRANTEE", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "GRANTEE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "GRANTEE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS", "", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "GRANTEE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINES", "", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINES", "", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINES", "", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS", "", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_NAME", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES", "", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "GRANTEE", 5, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_SCHEMATA", "", "INFORMATION_SCHEMA", "SCHEMATA", "CATALOG_NAME", 1, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_SCHEMATA", "", "INFORMATION_SCHEMA", "SCHEMATA", "SCHEMA_NAME", 2, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_SEQUENCES", "", "INFORMATION_SCHEMA", "SEQUENCES", "CATALOG", 1, Ni()},  // NOLINT
@@ -1846,6 +2311,14 @@ TEST_P(InformationSchemaTest, MetaKeyColumnUsage) {
       {"", "INFORMATION_SCHEMA", "PK_TABLE_CONSTRAINTS", "", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_CATALOG", 1, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_TABLE_CONSTRAINTS", "", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_SCHEMA", 2, Ni()},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PK_TABLE_CONSTRAINTS", "", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "CONSTRAINT_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_NAME", 3, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIVILEGE_TYPE", 4, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES", "", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "GRANTEE", 5, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_CATALOG", 1, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_SCHEMA", 2, Ni()},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS", "", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_NAME", 3, Ni()},  // NOLINT
     });
     // clang-format on
     CheckResultsAgainstExpected(results, expected);
@@ -1931,6 +2404,16 @@ TEST_P(InformationSchemaTest, MetaConstraintColumnUsage) {
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "OPTION_NAME", "", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_OPTIONS"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "OPTION_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_OPTIONS_OPTION_TYPE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_OPTIONS", "OPTION_VALUE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_OPTIONS_OPTION_VALUE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_NAME", "", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_CHANGE_STREAM_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "CHANGE_STREAM_SCHEMA", "", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_PRIVILEGES_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_PRIVILEGES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "ALL_COLUMNS", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_ALL_COLUMNS"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CHANGE_STREAM_TABLES_CHANGE_STREAM_CATALOG"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CHANGE_STREAM_TABLES", "CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "PK_CHANGE_STREAM_TABLES"},  // NOLINT
@@ -1984,6 +2467,18 @@ TEST_P(InformationSchemaTest, MetaConstraintColumnUsage) {
       {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "PK_COLUMN_OPTIONS"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_OPTIONS_TABLE_SCHEMA"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "COLUMN_OPTIONS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "PK_COLUMN_OPTIONS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "COLUMN_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_COLUMN_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "COLUMN_NAME", "", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_NAME", "", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_COLUMN_PRIVILEGES_TABLE_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "COLUMN_PRIVILEGES", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "PK_COLUMN_PRIVILEGES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "COLUMN_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_COLUMN_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "COLUMN_NAME", "", "INFORMATION_SCHEMA", "PK_CONSTRAINT_COLUMN_USAGE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "CONSTRAINT_COLUMN_USAGE", "CONSTRAINT_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_CONSTRAINT_COLUMN_USAGE_CONSTRAINT_CATALOG"},  // NOLINT
@@ -2102,6 +2597,26 @@ TEST_P(InformationSchemaTest, MetaConstraintColumnUsage) {
       {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "OPTION_NAME", "", "INFORMATION_SCHEMA", "PK_MODEL_OPTIONS"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "OPTION_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_OPTIONS_OPTION_TYPE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "MODEL_OPTIONS", "OPTION_VALUE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_OPTIONS_OPTION_VALUE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_CATALOG", "", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_NAME", "", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_MODEL_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "MODEL_SCHEMA", "", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_MODEL_PRIVILEGES_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "MODEL_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_MODEL_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "DATA_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_DATA_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "ORDINAL_POSITION", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_ORDINAL_POSITION"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "ORDINAL_POSITION", "", "INFORMATION_SCHEMA", "PK_PARAMETERS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "PARAMETER_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_PARAMETER_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "PK_PARAMETERS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "PK_PARAMETERS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PARAMETERS_SPECIFIC_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "PARAMETERS", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "PK_PARAMETERS"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PLACEMENTS", "IS_DEFAULT", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PLACEMENTS_IS_DEFAULT"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PLACEMENTS", "PLACEMENT_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_PLACEMENTS_PLACEMENT_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "PLACEMENTS", "PLACEMENT_NAME", "", "INFORMATION_SCHEMA", "PK_PLACEMENTS"},  // NOLINT
@@ -2127,6 +2642,103 @@ TEST_P(InformationSchemaTest, MetaConstraintColumnUsage) {
       {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "MATCH_OPTION", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_MATCH_OPTION"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "SPANNER_STATE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_SPANNER_STATE"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "REFERENTIAL_CONSTRAINTS", "UPDATE_RULE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_REFERENTIAL_CONSTRAINTS_UPDATE_RULE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLES", "IS_SYSTEM", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLES_IS_SYSTEM"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLES", "ROLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLES_ROLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLES", "ROLE_NAME", "", "INFORMATION_SCHEMA", "PK_ROLES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_NAME", "", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_CHANGE_STREAM_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "CHANGE_STREAM_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_CHANGE_STREAM_GRANTS_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_CHANGE_STREAM_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_ROLE_CHANGE_STREAM_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "COLUMN_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_COLUMN_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "COLUMN_NAME", "", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "IS_GRANTABLE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_IS_GRANTABLE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_COLUMN_GRANTS_TABLE_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_COLUMN_GRANTS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROLE_COLUMN_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_GRANTEES_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_ROLE_GRANTEES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "ROLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_GRANTEES_ROLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_GRANTEES", "ROLE_NAME", "", "INFORMATION_SCHEMA", "PK_ROLE_GRANTEES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "IS_GRANTABLE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_IS_GRANTABLE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_NAME", "", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_MODEL_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "MODEL_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_MODEL_GRANTS_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_MODEL_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_ROLE_MODEL_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "IS_GRANTABLE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_IS_GRANTABLE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_ROUTINE_GRANTS_SPECIFIC_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_ROUTINE_GRANTS", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROLE_ROUTINE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "IS_GRANTABLE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_IS_GRANTABLE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROLE_TABLE_GRANTS_TABLE_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROLE_TABLE_GRANTS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROLE_TABLE_GRANTS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "DATA_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_DATA_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_BODY", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_BODY"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_DEFINITION", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_DEFINITION"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "ROUTINE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_ROUTINE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "SECURITY_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SECURITY_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROUTINES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "PK_ROUTINES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINES_SPECIFIC_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINES", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROUTINES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_NAME", "", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "OPTION_VALUE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_OPTION_VALUE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_OPTIONS_SPECIFIC_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_OPTIONS", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROUTINE_OPTIONS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_CATALOG", "", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_NAME", "", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_ROUTINE_PRIVILEGES_SPECIFIC_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "ROUTINE_PRIVILEGES", "SPECIFIC_SCHEMA", "", "INFORMATION_SCHEMA", "PK_ROUTINE_PRIVILEGES"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "SCHEMATA", "CATALOG_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_SCHEMATA_CATALOG_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "SCHEMATA", "CATALOG_NAME", "", "INFORMATION_SCHEMA", "PK_SCHEMATA"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "SCHEMATA", "SCHEMA_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_SCHEMATA_SCHEMA_NAME"},  // NOLINT
@@ -2174,6 +2786,25 @@ TEST_P(InformationSchemaTest, MetaConstraintColumnUsage) {
       {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_CATALOG"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_NAME"},  // NOLINT
       {"", "INFORMATION_SCHEMA", "TABLE_CONSTRAINTS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_CONSTRAINTS_TABLE_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_GRANTEE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "GRANTEE", "", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_PRIVILEGE_TYPE"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "PRIVILEGE_TYPE", "", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_NAME", "", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_PRIVILEGES_TABLE_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_PRIVILEGES", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "PK_TABLE_PRIVILEGES"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "SYNONYM_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "SYNONYM_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "SYNONYM_TABLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_SYNONYM_TABLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_CATALOG"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_CATALOG", "", "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_NAME"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_NAME", "", "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "CK_IS_NOT_NULL_TABLE_SYNONYMS_TABLE_SCHEMA"},  // NOLINT
+      {"", "INFORMATION_SCHEMA", "TABLE_SYNONYMS", "TABLE_SCHEMA", "", "INFORMATION_SCHEMA", "PK_TABLE_SYNONYMS"},  // NOLINT
     });
     CheckResultsAgainstExpected(results, expected);
   }
@@ -4690,6 +5321,275 @@ TEST_P(InformationSchemaTest, SchemataWithProtoBundleQuery) {
   auto expected = std::vector<ValueRow>({{"", "", true}});
 
   EXPECT_THAT(results, IsOkAndHoldsRows(expected));
+}
+
+// Tests the information schema tables about database roles and privileges.
+class RolesInformationSchemaTest : public InformationSchemaTest {
+ public:
+  absl::Status SetUpDatabase() override {
+    if (GetParam() == POSTGRESQL) {
+      return SetSchema({
+          R"(CREATE TABLE singers (singer_id bigint PRIMARY KEY, name varchar,
+                                   secret varchar, SYNONYM (artists)))",
+          "CREATE TABLE albums (album_id bigint PRIMARY KEY)",
+          R"(CREATE VIEW singer_names SQL SECURITY INVOKER AS
+               SELECT name FROM singers)",
+          "CREATE CHANGE STREAM singer_stream FOR singers",
+          "CREATE ROLE analyst",
+          "CREATE ROLE reader",
+          "CREATE ROLE writer",
+          "GRANT analyst TO reader",
+          "GRANT SELECT(singer_id, name) ON TABLE singers TO reader",
+          "GRANT INSERT, DELETE ON TABLE albums TO writer",
+          "GRANT SELECT ON TABLE singer_names TO public",
+          "GRANT SELECT ON CHANGE STREAM singer_stream TO analyst",
+          R"(GRANT EXECUTE ON FUNCTION spanner.read_json_singer_stream
+               TO analyst)",
+      });
+    }
+    return SetSchema({
+        R"(CREATE TABLE Singers (SingerId INT64, Name STRING(MAX),
+                                 Secret STRING(MAX), SYNONYM (Artists))
+             PRIMARY KEY (SingerId))",
+        "CREATE TABLE Albums (AlbumId INT64) PRIMARY KEY (AlbumId)",
+        R"(CREATE VIEW SingerNames SQL SECURITY INVOKER AS
+             SELECT Singers.Name FROM Singers)",
+        "CREATE CHANGE STREAM SingerStream FOR Singers",
+        "CREATE ROLE analyst",
+        "CREATE ROLE reader",
+        "CREATE ROLE writer",
+        "GRANT ROLE analyst TO ROLE reader",
+        "GRANT SELECT(SingerId, Name) ON TABLE Singers TO ROLE reader",
+        "GRANT INSERT, DELETE ON TABLE Albums TO ROLE writer",
+        "GRANT SELECT ON VIEW SingerNames TO ROLE public",
+        "GRANT SELECT ON CHANGE STREAM SingerStream TO ROLE analyst",
+        "GRANT EXECUTE ON TABLE FUNCTION READ_SingerStream TO ROLE analyst",
+    });
+  }
+
+  // Returns the name of an object for the dialect under test.
+  std::string Name(absl::string_view googlesql, absl::string_view postgresql) {
+    return std::string(GetParam() == POSTGRESQL ? postgresql : googlesql);
+  }
+
+  // Runs `query` in a session that uses the database role `role`.
+  absl::StatusOr<std::vector<ValueRow>> QueryWithRole(
+      const std::string& role, const std::string& query) {
+    std::unique_ptr<Client> role_client = MakeClientWithRole(role);
+    std::vector<ValueRow> rows;
+    for (const auto& row : role_client->ExecuteQuery(SqlStatement(query))) {
+      if (!row.ok()) {
+        return ToUtilStatus(row.status());
+      }
+      rows.push_back(*row);
+    }
+    return rows;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    PerDialectRolesInformationSchemaTests, RolesInformationSchemaTest,
+    testing::Values(database_api::DatabaseDialect::GOOGLE_STANDARD_SQL,
+                    POSTGRESQL),
+    [](const testing::TestParamInfo<RolesInformationSchemaTest::ParamType>&
+           info) { return database_api::DatabaseDialect_Name(info.param); });
+
+TEST_P(RolesInformationSchemaTest, Roles) {
+  if (GetParam() == POSTGRESQL) {
+    // PostgreSQL does not list the public role.
+    EXPECT_THAT(Query(R"(
+        select role_name, spanner_is_system
+        from information_schema.enabled_roles
+        order by role_name)"),
+                IsOkAndHoldsRows({{"analyst", "NO"},
+                                  {"reader", "NO"},
+                                  {"spanner_info_reader", "YES"},
+                                  {"spanner_sys_reader", "YES"},
+                                  {"writer", "NO"}}));
+    EXPECT_THAT(Query(R"(
+        select grantee, role_name, is_grantable
+        from information_schema.applicable_roles)"),
+                IsOkAndHoldsRows({{"reader", "analyst", "NO"}}));
+  } else {
+    EXPECT_THAT(Query(R"(
+        select role_name, is_system
+        from information_schema.roles
+        order by role_name)"),
+                IsOkAndHoldsRows({{"analyst", false},
+                                  {"public", true},
+                                  {"reader", false},
+                                  {"spanner_info_reader", true},
+                                  {"spanner_sys_reader", true},
+                                  {"writer", false}}));
+    EXPECT_THAT(Query(R"(
+        select role_name, grantee from information_schema.role_grantees)"),
+                IsOkAndHoldsRows({{"analyst", "reader"}}));
+  }
+}
+
+TEST_P(RolesInformationSchemaTest, TablePrivileges) {
+  const std::vector<ValueRow> expected = {
+      {Name("Albums", "albums"), "DELETE", "writer"},
+      {Name("Albums", "albums"), "INSERT", "writer"},
+      {Name("SingerNames", "singer_names"), "SELECT", "public"},
+  };
+  EXPECT_THAT(Query(R"(
+      select table_name, privilege_type, grantee
+      from information_schema.table_privileges
+      order by table_name, privilege_type)"),
+              IsOkAndHoldsRows(expected));
+  // The grants to public are listed too, and the unused columns hold their
+  // documented values.
+  EXPECT_THAT(Query(R"(
+      select table_name, privilege_type, grantee
+      from information_schema.role_table_grants
+      where grantor is null and is_grantable = 'NO'
+      order by table_name, privilege_type)"),
+              IsOkAndHoldsRows(expected));
+}
+
+TEST_P(RolesInformationSchemaTest, ColumnPrivileges) {
+  // Privileges on whole tables and views are listed for each of their
+  // columns.
+  const std::vector<ValueRow> expected = {
+      {Name("Albums", "albums"), Name("AlbumId", "album_id"), "INSERT",
+       "writer"},
+      {Name("SingerNames", "singer_names"), Name("Name", "name"), "SELECT",
+       "public"},
+      {Name("Singers", "singers"), Name("Name", "name"), "SELECT", "reader"},
+      {Name("Singers", "singers"), Name("SingerId", "singer_id"), "SELECT",
+       "reader"},
+  };
+  EXPECT_THAT(Query(R"(
+      select table_name, column_name, privilege_type, grantee
+      from information_schema.column_privileges
+      order by table_name, column_name)"),
+              IsOkAndHoldsRows(expected));
+  EXPECT_THAT(Query(R"(
+      select table_name, column_name, privilege_type, grantee
+      from information_schema.role_column_grants
+      where grantor is null and is_grantable = 'NO'
+      order by table_name, column_name)"),
+              IsOkAndHoldsRows(expected));
+}
+
+TEST_P(RolesInformationSchemaTest, ChangeStreamAndRoutinePrivileges) {
+  const std::string change_stream = Name("SingerStream", "singer_stream");
+  const std::string read_function =
+      Name("READ_SingerStream", "read_json_singer_stream");
+  EXPECT_THAT(Query(R"(
+      select change_stream_name, privilege_type, grantee
+      from information_schema.change_stream_privileges)"),
+              IsOkAndHoldsRows({{change_stream, "SELECT", "analyst"}}));
+  EXPECT_THAT(Query(R"(
+      select change_stream_name, privilege_type, grantee
+      from information_schema.role_change_stream_grants)"),
+              IsOkAndHoldsRows({{change_stream, "SELECT", "analyst"}}));
+  EXPECT_THAT(Query(R"(
+      select specific_name, privilege_type, grantee
+      from information_schema.routine_privileges)"),
+              IsOkAndHoldsRows({{read_function, "EXECUTE", "analyst"}}));
+  EXPECT_THAT(Query(R"(
+      select specific_name, privilege_type, grantee
+      from information_schema.role_routine_grants
+      where grantor is null and is_grantable = 'NO')"),
+              IsOkAndHoldsRows({{read_function, "EXECUTE", "analyst"}}));
+}
+
+TEST_P(RolesInformationSchemaTest, ReadFunctionRoutines) {
+  const std::string read_function =
+      Name("READ_SingerStream", "read_json_singer_stream");
+  EXPECT_THAT(Query(R"(
+      select specific_schema, specific_name, routine_name, routine_type,
+             routine_body, security_type
+      from information_schema.routines)"),
+              IsOkAndHoldsRows({{Name("", "public"), read_function,
+                                 read_function, "FUNCTION", "EXTERNAL",
+                                 "INVOKER"}}));
+  if (GetParam() == POSTGRESQL) {
+    EXPECT_THAT(Query(R"(
+        select ordinal_position, parameter_name, data_type, spanner_type
+        from information_schema.parameters
+        order by ordinal_position)"),
+                IsOkAndHoldsRows(
+                    {{1, "start_timestamp", "timestamp with time zone",
+                      "timestamp with time zone"},
+                     {2, "end_timestamp", "timestamp with time zone",
+                      "timestamp with time zone"},
+                     {3, "partition_token", "character varying",
+                      "character varying"},
+                     {4, "heartbeat_milliseconds", "bigint", "bigint"},
+                     {5, "read_options", "ARRAY", "character varying[]"}}));
+  } else {
+    EXPECT_THAT(Query(R"(
+        select ordinal_position, parameter_name, data_type
+        from information_schema.parameters
+        where parameter_default is null
+        order by ordinal_position)"),
+                IsOkAndHoldsRows({{1, "start_timestamp", "TIMESTAMP"},
+                                  {2, "end_timestamp", "TIMESTAMP"},
+                                  {3, "partition_token", "STRING(MAX)"},
+                                  {4, "heartbeat_milliseconds", "INT64"},
+                                  {5, "read_options", "ARRAY<STRING(MAX)>"}}));
+  }
+  EXPECT_THAT(Query("select * from information_schema.routine_options"),
+              IsOkAndHoldsRows({}));
+}
+
+TEST_P(RolesInformationSchemaTest, TableSynonyms) {
+  EXPECT_THAT(Query(R"(
+      select table_name, synonym_table_name
+      from information_schema.table_synonyms)"),
+              IsOkAndHoldsRows({{Name("Singers", "singers"),
+                                 Name("Artists", "artists")}}));
+}
+
+TEST_P(RolesInformationSchemaTest, InformationSchemaCatalogName) {
+  if (GetParam() != POSTGRESQL) {
+    return;
+  }
+  EXPECT_THAT(Query(R"(
+      select catalog_name
+      from information_schema.information_schema_catalog_name)"),
+              IsOkAndHoldsRows({{database()->database_id()}}));
+}
+
+TEST_P(RolesInformationSchemaTest, RowsAreFilteredForDatabaseRole) {
+  // reader holds SELECT on two columns of Singers and, through public, on
+  // SingerNames. The Albums table is hidden.
+  const std::string schema = Name("", "public");
+  EXPECT_THAT(QueryWithRole("reader", absl::Substitute(R"(
+      select table_name from information_schema.tables
+      where table_schema = '$0'
+      order by table_name)",
+                                                       schema)),
+              IsOkAndHoldsRows({{Name("SingerNames", "singer_names")},
+                                {Name("Singers", "singers")}}));
+  EXPECT_THAT(QueryWithRole("reader", absl::Substitute(R"(
+      select table_name, column_name from information_schema.columns
+      where table_schema = '$0'
+      order by table_name, column_name)",
+                                                       schema)),
+              IsOkAndHoldsRows(
+                  {{Name("SingerNames", "singer_names"), Name("Name", "name")},
+                   {Name("Singers", "singers"), Name("Name", "name")},
+                   {Name("Singers", "singers"),
+                    Name("SingerId", "singer_id")}}));
+  // The role sees the change stream that analyst may read.
+  EXPECT_THAT(QueryWithRole("reader", R"(
+      select change_stream_name from information_schema.change_streams)"),
+              IsOkAndHoldsRows({{Name("SingerStream", "singer_stream")}}));
+  // The grants to public are not listed as grants of the role.
+  EXPECT_THAT(QueryWithRole("reader", R"(
+      select table_name, privilege_type, grantee
+      from information_schema.role_table_grants)"),
+              IsOkAndHoldsRows({}));
+  EXPECT_THAT(QueryWithRole("writer", R"(
+      select table_name, privilege_type, grantee
+      from information_schema.role_table_grants
+      order by privilege_type)"),
+              IsOkAndHoldsRows({{Name("Albums", "albums"), "DELETE", "writer"},
+                                {Name("Albums", "albums"), "INSERT", "writer"}}));
 }
 
 }  // namespace

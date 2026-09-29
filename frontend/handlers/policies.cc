@@ -14,12 +14,12 @@
 // limitations under the License.
 //
 
+#include <random>
 #include <string>
 
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
-#include "absl/time/time.h"
 #include "frontend/persistence/metadata_store.h"
 #include "frontend/server/handler.h"
 #include "google/iam/v1/iam_policy.pb.h"
@@ -40,12 +40,16 @@ absl::Status SetIamPolicy(RequestContext* ctx,
   GOOGLESQL_RETURN_IF_ERROR(
       ctx->env()->ValidateIamResource(request->resource()));
 
-  *response = request->policy();
-  if (response->etag().empty()) {
-    response->set_etag(absl::StrCat(
-        "localcloud-", absl::ToUnixNanos(ctx->env()->clock()->Now())));
-  }
   const auto previous = ctx->env()->GetIamPolicy(request->resource());
+  if (!request->policy().etag().empty() &&
+      (!previous.has_value() ||
+       previous->etag() != request->policy().etag())) {
+    return absl::AbortedError("IAM policy etag mismatch");
+  }
+  *response = request->policy();
+  std::random_device random;
+  response->set_etag(absl::StrCat("localcloud-", random(), "-", random(), "-",
+                                  random(), "-", random()));
   ctx->env()->SetIamPolicy(request->resource(), *response);
 
   if (auto* metadata = ctx->env()->metadata_store(); metadata != nullptr) {

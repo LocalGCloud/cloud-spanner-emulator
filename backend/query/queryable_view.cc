@@ -114,14 +114,30 @@ QueryableView::QueryableView(const backend::View* view,
   }
 }
 
+std::string QueryableView::ViewBody() const {
+  return wrapped_view_->body_origin().has_value()
+             ? wrapped_view_->body_origin().value()
+             : wrapped_view_->body();
+}
+
+absl::Status QueryableView::CheckInvokerPrivileges() const {
+  if (wrapped_view_->security() != View::INVOKER) {
+    return absl::OkStatus();
+  }
+  GOOGLESQL_RET_CHECK_NE(query_evaluator_, nullptr);
+  return query_evaluator_->CheckPrivileges(ViewBody());
+}
+
 absl::StatusOr<std::unique_ptr<googlesql::EvaluatorTableIterator>>
 QueryableView::CreateEvaluatorTableIterator(
     absl::Span<const int> column_idxs) const {
   GOOGLESQL_RET_CHECK_NE(query_evaluator_, nullptr);
-  auto view_body = wrapped_view_->body_origin().has_value()
-                       ? wrapped_view_->body_origin().value()
-                       : wrapped_view_->body();
-  GOOGLESQL_ASSIGN_OR_RETURN(auto cursor, query_evaluator_->Evaluate(view_body));
+  const std::string view_body = ViewBody();
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      auto cursor,
+      query_evaluator_->Evaluate(
+          view_body,
+          /*definer_rights=*/wrapped_view_->security() == View::DEFINER));
   return std::make_unique<ViewRowCursorEvaluatorTableIterator>(
       std::move(cursor), column_idxs);
 }

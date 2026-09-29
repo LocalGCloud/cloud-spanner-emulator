@@ -71,14 +71,12 @@ google::rpc::Status ToRpcStatus(const absl::Status& status,
 // entry of details in the safe cloud status.
 void AttachSpangresErrorPayloads(const absl::Status& pg_status,
                                  google::rpc::Status& rpc_status) {
-  rpc_status.set_code(static_cast<int>(pg_status.code()));
-  rpc_status.set_message(pg_status.message());
-    absl::Cord pg_error_info_cord =
-        pg_status.GetPayload(spangres::error::kPgErrorInfoTypeUrl).value();
-    spangres::error::PgErrorInfo pg_error_info;
-    if (!pg_error_info.ParseFromCord(pg_error_info_cord)) {
-      return;
-    }
+  absl::Cord pg_error_info_cord =
+      pg_status.GetPayload(spangres::error::kPgErrorInfoTypeUrl).value();
+  spangres::error::PgErrorInfo pg_error_info;
+  if (!pg_error_info.ParseFromCord(pg_error_info_cord)) {
+    return;
+  }
   // Add the PG error info as a google::rpc::ErrorInfo detail. The metadata
   // can contain the PG error code and other PG error info which can help
   // the customer understand the error.
@@ -100,11 +98,9 @@ grpc::Status ToGRPCStatus(const absl::Status& status) {
     message.replace(message.size() - 3, 3, "...");
   }
 
-  google::rpc::Status rpc_status;
-      if (status.GetPayload(spangres::error::kPgErrorInfoTypeUrl).has_value()) {
+  google::rpc::Status rpc_status = ToRpcStatus(status, message);
+  if (status.GetPayload(spangres::error::kPgErrorInfoTypeUrl).has_value()) {
     AttachSpangresErrorPayloads(status, rpc_status);
-  } else {
-    rpc_status = ToRpcStatus(status, message);
   }
   std::string serialized_metadata = rpc_status.SerializeAsString();
   grpc::Status grpc_status =

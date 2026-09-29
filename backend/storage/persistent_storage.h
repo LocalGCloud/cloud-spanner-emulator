@@ -18,6 +18,7 @@
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_STORAGE_PERSISTENT_STORAGE_H_
 
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -97,8 +98,14 @@ class PersistentStorage : public Storage {
                            const std::vector<StorageRowOp>& ops) override;
 
   // Creates an immutable, point-in-time LevelDB copy at output_dir. The
-  // destination must not exist.
-  absl::Status CreateCheckpoint(const std::string& output_dir) const;
+  // destination must not exist. The copy keeps only the versions committed at
+  // or before version_time, so it reads like this storage at version_time.
+  // Returns the key and value bytes of the copied versions committed after
+  // changed_since.
+  absl::StatusOr<int64_t> CreateCheckpoint(
+      const std::string& output_dir,
+      absl::Time version_time = absl::InfiniteFuture(),
+      absl::Time changed_since = absl::InfiniteFuture()) const;
 
   void SetVersionRetentionPeriod(
       absl::Duration version_retention_period) override;

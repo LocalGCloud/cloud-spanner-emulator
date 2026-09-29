@@ -294,6 +294,106 @@ absl::Status IAMPoliciesNotSupported() {
                       "Cloud Spanner Emulator does not support IAM policies.");
 }
 
+// Fine-grained access control errors.
+absl::Status RoleNotFound(absl::string_view role) {
+  return absl::Status(absl::StatusCode::kPermissionDenied,
+                      absl::StrCat("Role not found: ", role, "."));
+}
+
+absl::Status RoleLacksPrivileges(absl::string_view role,
+                                 absl::string_view object_kind,
+                                 absl::string_view object_name) {
+  return absl::Status(
+      absl::StatusCode::kPermissionDenied,
+      absl::Substitute("Role $0 does not have required privileges on $1 $2.",
+                       role, object_kind, object_name));
+}
+
+absl::Status DatabaseRoleNotFound(absl::string_view role) {
+  return absl::Status(absl::StatusCode::kNotFound,
+                      absl::StrCat("Role not found: ", role));
+}
+
+absl::Status TooManyRolesPerDatabase(absl::string_view role, int limit) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute(
+          "Cannot add Role $0 : too many roles (limit $1 per database).", role,
+          limit));
+}
+
+absl::Status CannotDropSystemRole(absl::string_view role) {
+  return absl::Status(absl::StatusCode::kFailedPrecondition,
+                      absl::Substitute("Cannot drop system role $0.", role));
+}
+
+absl::Status CannotDropRoleWithPrivileges(absl::string_view role) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Cannot drop role $0 because privileges are still "
+                       "granted to it. Revoke them first.",
+                       role));
+}
+
+absl::Status CannotGrantPrivilegesToSystemRole(absl::string_view role) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute(
+          "Privileges cannot be granted to or revoked from system role $0.",
+          role));
+}
+
+absl::Status CannotGrantMembershipInPublicRole() {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      "Membership in system role public cannot be granted or revoked.");
+}
+
+absl::Status SystemRoleCannotBeMember(absl::string_view role) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("System role $0 cannot be a member of another role.",
+                       role));
+}
+
+absl::Status RoleMembershipCycle(absl::string_view role,
+                                 absl::string_view member) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Cannot grant role $0 to role $1: role $0 would become "
+                       "a member of itself.",
+                       role, member));
+}
+
+absl::Status InvalidPrivilegeForObject(absl::string_view privilege,
+                                       absl::string_view object_kind,
+                                       absl::string_view object_name) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::Substitute("Privilege $0 cannot be granted on $1 $2.", privilege,
+                       object_kind, object_name));
+}
+
+absl::Status ColumnPrivilegeNotAllowed(absl::string_view privilege,
+                                       absl::string_view object_kind,
+                                       absl::string_view object_name) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::Substitute(
+          "Privilege $0 cannot be granted on columns of $1 $2.", privilege,
+          object_kind, object_name));
+}
+
+absl::Status PrivilegeOnGeneratedColumn(absl::string_view privilege,
+                                        absl::string_view table,
+                                        absl::string_view column) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::Substitute(
+          "Privilege $0 cannot be granted on generated column $1 of table $2.",
+          privilege, column, table));
+}
+
 // Label errors.
 absl::Status TooManyLabels(int num) {
   return absl::Status(
@@ -591,8 +691,7 @@ absl::Status AbortConcurrentTransaction(int64_t requestor_id,
   return absl::Status(
       absl::StatusCode::kAborted,
       absl::StrCat("Transaction ", requestor_id,
-                   " aborted due to active transaction ", holder_id,
-                   ". The emulator only supports one transaction at a time."));
+                   " aborted due to conflicting transaction ", holder_id, "."));
 }
 
 absl::Status AbortCurrentTransaction(backend::TransactionID holder_id,
@@ -600,17 +699,25 @@ absl::Status AbortCurrentTransaction(backend::TransactionID holder_id,
   return absl::Status(
       absl::StatusCode::kAborted,
       absl::StrCat("Transaction: ", holder_id, " aborted due to transaction ",
-                   requestor_id,
-                   " getting priority. "
-                   "The emulator only supports one transaction at a time."));
+                   requestor_id, " getting priority on a conflicting lock."));
 }
 
 absl::Status WoundedTransaction(backend::TransactionID id) {
   return absl::Status(
       absl::StatusCode::kAborted,
       absl::StrCat("Transaction: ", id,
-                   " aborted due to another transaction getting priority. "
-                   "The emulator only supports one transaction at a time."));
+                   " aborted due to another transaction getting priority on a "
+                   "conflicting lock."));
+}
+
+absl::Status LockWaitTimeout(backend::TransactionID requestor_id,
+                             backend::TransactionID holder_id,
+                             absl::Duration timeout) {
+  return absl::Status(
+      absl::StatusCode::kAborted,
+      absl::StrCat("Transaction: ", requestor_id, " aborted after waiting ",
+                   absl::FormatDuration(timeout), " for a lock held by "
+                   "transaction ", holder_id, "."));
 }
 
 absl::Status CouldNotObtainLockHandleMutex(backend::TransactionID id) {
@@ -762,6 +869,14 @@ absl::Status CannotCommitAfterRollback() {
       "Cannot commit a transaction after it has been rolled back.");
 }
 
+absl::Status InvalidMaxCommitDelay(absl::Duration max_commit_delay) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::StrCat("Invalid max_commit_delay ",
+                   absl::FormatDuration(max_commit_delay),
+                   ": the commit delay must be between 0 and 500 ms."));
+}
+
 absl::Status CannotRollbackAfterCommit() {
   return absl::Status(
       absl::StatusCode::kFailedPrecondition,
@@ -786,6 +901,15 @@ absl::Status AbortDueToConcurrentSchemaChange(backend::TransactionID id) {
       absl::StatusCode::kAborted,
       absl::StrCat("Transaction: ", id,
                    " aborted due to concurrent schema change."));
+}
+
+absl::Status AbortRepeatableReadWriteConflict(backend::TransactionID id) {
+  return absl::Status(
+      absl::StatusCode::kAborted,
+      absl::StrCat("Transaction ", id,
+                   " was aborted because a row it writes or locks was "
+                   "committed by another transaction after its repeatable "
+                   "read snapshot."));
 }
 
 absl::Status AbortReadWriteTransactionOnFirstCommit(backend::TransactionID id) {
@@ -1383,7 +1507,7 @@ absl::Status InvalidValueCaptureType(absl::string_view value_capture_type) {
       absl::StatusCode::kFailedPrecondition,
       absl::Substitute("Invalid value_capture_type: $0. Change Streams only "
                        "support value capture types in OLD_AND_NEW_VALUES, "
-                       "NEW_ROW, and NEW_VALUES.",
+                       "NEW_ROW, NEW_VALUES, and NEW_ROW_AND_OLD_VALUES.",
                        value_capture_type));
 }
 
@@ -3759,6 +3883,24 @@ absl::Status InvalidPartitionToken() {
                       "Invalid partition token.");
 }
 
+absl::Status InvalidResumeToken() {
+  return absl::Status(absl::StatusCode::kInvalidArgument,
+                      "Invalid resume token.");
+}
+
+absl::Status ResumeTokenMismatch() {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      "The resume token was not returned by a stream of this request.");
+}
+
+absl::Status ResumedRowsChanged() {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      "Cannot resume the stream because the rows before the resume token "
+      "changed. Resend the request without a resume token.");
+}
+
 absl::Status InvalidStreamingPartitionToken() {
   return absl::Status(absl::StatusCode::kInvalidArgument,
                       "Invalid streaming partition token.");
@@ -4078,6 +4220,14 @@ absl::Status SearchIndexNotUsable(absl::string_view index_name,
       absl::StatusCode::kInvalidArgument,
       absl::Substitute("The index $0 cannot be used because it $1", index_name,
                        reason));
+}
+
+absl::Status SearchIndexRequiresTokenlistColumn(absl::string_view index_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Cannot drop the last TOKENLIST column of search index "
+                       "$0.",
+                       index_name));
 }
 
 absl::Status FailToParseSearchQuery(absl::string_view query,
@@ -4841,6 +4991,15 @@ absl::Status OptionsError(absl::string_view error_string) {
 }
 
 // FOR UPDATE-related errors.
+absl::Status SpannerSysTableUnsupportedInReadWriteTransactions(
+    absl::string_view table_name) {
+  return absl::Status(
+      absl::StatusCode::kInvalidArgument,
+      absl::StrCat(table_name,
+                   " can't be read in a read-write transaction. Use a "
+                   "read-only or single-use transaction instead."));
+}
+
 absl::Status ForUpdateUnsupportedInReadOnlyTransactions() {
   return absl::Status(absl::StatusCode::kInvalidArgument,
                       "FOR UPDATE is not supported in this transaction type.");
@@ -4970,6 +5129,18 @@ absl::Status RepeatableReadNotSupportedInPDMLTransactions() {
 absl::Status RenameTableNotSupportedInPostgreSQL() {
   return absl::Status(absl::StatusCode::kUnimplemented,
                       "RENAME TABLE is not supported in PostgreSQL dialect.");
+}
+
+absl::Status ReadTimestampPastRequestDeadline(absl::Time timestamp,
+                                              absl::Time deadline) {
+  return absl::Status(
+      absl::StatusCode::kDeadlineExceeded,
+      absl::StrCat("Read-only transaction timestamp ",
+                   absl::FormatTime(timestamp),
+                   " is later than the request deadline ",
+                   absl::FormatTime(deadline),
+                   ". The read would wait for its timestamp past the "
+                   "deadline."));
 }
 
 }  // namespace error

@@ -31,6 +31,7 @@
 #include "googlesql/public/types/type.h"
 #include "googlesql/public/types/type_factory.h"
 #include "googlesql/public/value.h"
+#include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -40,6 +41,7 @@
 #include "absl/strings/strip.h"  //
 #include "absl/types/span.h"
 #include "backend/access/read.h"
+#include "backend/datamodel/key.h"
 #include "backend/datamodel/key_set.h"
 #include "backend/query/queryable_column.h"
 #include "backend/schema/catalog/column.h"
@@ -53,55 +55,139 @@ namespace spanner {
 namespace emulator {
 namespace backend {
 
-// An implementation of EvaluatorTableIterator which wraps a RowCursor.
-//
-// Used by QueryableTable::CreateEvaluatorTableIterator.
+// Wraps a RowCursor. FOR UPDATE defers its read until the evaluator supplies
+// scan filters, allowing an exact primary-key filter to narrow the locked range.
 class RowCursorEvaluatorTableIterator
     : public googlesql::EvaluatorTableIterator {
  public:
   explicit RowCursorEvaluatorTableIterator(std::unique_ptr<RowCursor> cursor)
       : cursor_(std::move(cursor)) {
-    values_.reserve(cursor_->NumColumns());
     for (int i = 0; i < cursor_->NumColumns(); ++i) {
+      column_names_.push_back(cursor_->ColumnName(i));
+      column_types_.push_back(cursor_->ColumnType(i));
       values_.push_back(googlesql::values::Null(cursor_->ColumnType(i)));
     }
   }
 
-  int NumColumns() const override { return cursor_->NumColumns(); }
-
-  std::string GetColumnName(int i) const override {
-    return cursor_->ColumnName(i);
+  RowCursorEvaluatorTableIterator(
+      RowReader* reader, ReadArg read_arg,
+      std::vector<std::string> column_names,
+      std::vector<const googlesql::Type*> column_types,
+      std::optional<int> first_key_scan_index,
+      const googlesql::Type* first_key_type, bool key_descending,
+      bool key_nulls_last)
+      : reader_(reader),
+        read_arg_(std::move(read_arg)),
+        column_names_(std::move(column_names)),
+        column_types_(std::move(column_types)),
+        first_key_scan_index_(first_key_scan_index),
+        first_key_type_(first_key_type),
+        key_descending_(key_descending),
+        key_nulls_last_(key_nulls_last) {
+    for (const googlesql::Type* type : column_types_) {
+      values_.push_back(googlesql::values::Null(type));
+    }
   }
 
+  int NumColumns() const override { return column_names_.size(); }
+
+  std::string GetColumnName(int i) const override { return column_names_[i]; }
+
   const googlesql::Type* GetColumnType(int i) const override {
-    return cursor_->ColumnType(i);
+    return column_types_[i];
+  }
+
+  absl::Status SetColumnFilterMap(
+      absl::flat_hash_map<int, std::unique_ptr<googlesql::ColumnFilter>>
+          filter_map) override {
+    if (reader_ == nullptr || !first_key_scan_index_.has_value()) {
+      return absl::OkStatus();
+    }
+    auto it = filter_map.find(*first_key_scan_index_);
+    if (it == filter_map.end() || it->second == nullptr) {
+      return absl::OkStatus();
+    }
+
+    // GoogleSQL applies the filter again to returned rows. Narrow the storage
+    // scan only when its filter proves exact point values for the first key
+    // column. Other predicates keep the full-table exclusive scan lock.
+    const googlesql::ColumnFilter& filter = *it->second;
+    KeySet points;
+    auto add_point = [&](const googlesql::Value& value) {
+      if (!value.is_valid() || value.is_null() ||
+          value.type() != first_key_type_) {
+        return false;
+      }
+      Key key;
+      key.AddColumn(value, key_descending_, key_nulls_last_);
+      points.AddKey(key);
+      return true;
+    };
+    switch (filter.kind()) {
+      case googlesql::ColumnFilter::kInList:
+        for (const auto& value : filter.in_list()) {
+          if (!add_point(value)) {
+            return absl::OkStatus();
+          }
+        }
+        break;
+      case googlesql::ColumnFilter::kRange:
+        if (!filter.lower_bound().is_valid() ||
+            !filter.upper_bound().is_valid() ||
+            !filter.lower_bound().Equals(filter.upper_bound()) ||
+            !add_point(filter.lower_bound())) {
+          return absl::OkStatus();
+        }
+        break;
+      default:
+        return absl::OkStatus();
+    }
+    read_arg_.key_set = std::move(points);
+    return absl::OkStatus();
   }
 
   bool NextRow() override {
-    if (cursor_->Next()) {
-      for (int i = 0; i < cursor_->NumColumns(); ++i) {
-        values_[i] = cursor_->ColumnValue(i);
+    if (reader_ != nullptr) {
+      status_ = reader_->Read(read_arg_, &cursor_);
+      reader_ = nullptr;
+      if (!status_.ok()) {
+        return false;
       }
-      return true;
-    } else {
+    }
+    if (cursor_ == nullptr || !cursor_->Next()) {
       return false;
     }
+    for (int i = 0; i < cursor_->NumColumns(); ++i) {
+      values_[i] = cursor_->ColumnValue(i);
+    }
+    return true;
   }
 
   const googlesql::Value& GetValue(int i) const override { return values_[i]; }
 
-  absl::Status Status() const override { return cursor_->Status(); }
+  absl::Status Status() const override {
+    if (!status_.ok()) {
+      return status_;
+    }
+    return cursor_ != nullptr ? cursor_->Status() : status_;
+  }
 
   // Cancel is best-effort and not required.
   absl::Status Cancel() override { return absl::OkStatus(); }
 
  private:
-  // The wrapped RowCursor.
+  RowReader* reader_ = nullptr;
+  ReadArg read_arg_;
   std::unique_ptr<RowCursor> cursor_;
+  absl::Status status_;
+  std::vector<std::string> column_names_;
+  std::vector<const googlesql::Type*> column_types_;
+  std::optional<int> first_key_scan_index_;
+  const googlesql::Type* first_key_type_ = nullptr;
+  bool key_descending_ = false;
+  bool key_nulls_last_ = false;
 
-  // Values of the current row. EvaluatorTableIterator::GetValue need to return
-  // a reference so we need to buffer the values instead of simply delegate to
-  // RowCursor::ColumnValue.
+  // EvaluatorTableIterator::GetValue returns a reference to the buffered row.
   std::vector<googlesql::Value> values_;
 };
 
@@ -142,8 +228,11 @@ QueryableTable::QueryableTable(
     const backend::Table* table, RowReader* reader,
     std::optional<const googlesql::AnalyzerOptions> opt_options,
     googlesql::Catalog* catalog, googlesql::TypeFactory* type_factory,
-    bool is_synonym)
-    : is_synonym_(is_synonym), wrapped_table_(table), reader_(reader) {
+    bool is_synonym, const bool* select_for_update)
+    : is_synonym_(is_synonym),
+      wrapped_table_(table),
+      reader_(reader),
+      select_for_update_(select_for_update) {
   bool enable_generated_pk =
       EmulatorFeatureFlags::instance().flags().enable_generated_pk;
   for (const auto* column : table->columns()) {
@@ -218,6 +307,34 @@ QueryableTable::CreateEvaluatorTableIterator(
       read_arg.change_stream_for_data_table = change_stream_name;
     }
   }
+  if (select_for_update_ != nullptr && *select_for_update_) {
+    read_arg.lock_scanned_ranges_exclusive = true;
+    std::vector<const googlesql::Type*> column_types;
+    for (int idx : column_idxs) {
+      column_types.push_back(GetColumn(idx)->GetType());
+    }
+
+    std::optional<int> first_key_scan_index;
+    const googlesql::Type* first_key_type = nullptr;
+    bool key_descending = false;
+    bool key_nulls_last = false;
+    if (!primary_key_column_indexes_.empty()) {
+      int first_key_table_index = primary_key_column_indexes_.front();
+      auto it = std::find(column_idxs.begin(), column_idxs.end(),
+                          first_key_table_index);
+      if (it != column_idxs.end()) {
+        first_key_scan_index = it - column_idxs.begin();
+        first_key_type = GetColumn(first_key_table_index)->GetType();
+        key_descending = wrapped_table_->primary_key().front()->is_descending();
+        key_nulls_last = wrapped_table_->primary_key().front()->is_nulls_last();
+      }
+    }
+    return std::make_unique<RowCursorEvaluatorTableIterator>(
+        reader_, std::move(read_arg), std::move(column_names),
+        std::move(column_types), first_key_scan_index, first_key_type,
+        key_descending, key_nulls_last);
+  }
+
   std::unique_ptr<RowCursor> cursor;
   GOOGLESQL_RETURN_IF_ERROR(reader_->Read(read_arg, &cursor));
   return std::make_unique<RowCursorEvaluatorTableIterator>(std::move(cursor));

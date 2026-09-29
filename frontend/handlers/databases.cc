@@ -374,6 +374,8 @@ absl::Status UpdateDatabase(RequestContext* ctx,
           absl::StrCat("Unsupported database update field: ", path));
     }
   }
+  GOOGLESQL_ASSIGN_OR_RETURN(const protobuf_api::Timestamp update_time,
+                            TimestampToProto(ctx->env()->clock()->Now()));
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::shared_ptr<Operation> operation,
       ctx->env()->operation_manager()->CreateOperation(
@@ -390,6 +392,12 @@ absl::Status UpdateDatabase(RequestContext* ctx,
         .IgnoreError();
     return proto_status;
   }
+  database_api::UpdateDatabaseMetadata operation_metadata;
+  *operation_metadata.mutable_request() = *request;
+  operation_metadata.mutable_progress()->set_progress_percent(100);
+  *operation_metadata.mutable_progress()->mutable_start_time() = update_time;
+  *operation_metadata.mutable_progress()->mutable_end_time() = update_time;
+  operation->SetMetadata(operation_metadata);
   operation->SetResponse(database_proto);
   operation->ToProto(response);
 

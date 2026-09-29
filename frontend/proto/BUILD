@@ -36,3 +36,13 @@ cc_proto_library(
     name = "partition_token_cc_proto",
     deps = [":partition_token_proto"],
 )
+
+proto_library(
+    name = "resume_token_proto",
+    srcs = ["resume_token.proto"],
+)
+
+cc_proto_library(
+    name = "resume_token_cc_proto",
+    deps = [":resume_token_proto"],
+)

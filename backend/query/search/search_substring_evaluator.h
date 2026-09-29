@@ -49,6 +49,7 @@ class SearchSubstringEvaluator {
                                      bool& source_is_null,
                                      int& relative_search_types,
                                      int& ngram_min_size,
+                                     int& min_non_anchor_size,
                                      std::vector<std::string>& token_list);
 
   static bool MatchesSubstring(absl::Span<const std::string> token_list,

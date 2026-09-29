@@ -98,6 +98,7 @@ void AddArrayFunctions(std::vector<PostgresFunctionArguments>& functions) {
              {{gsql_pg_oid_arr, {gsql_pg_oid}, /*context_ptr=*/nullptr}},
              {{gsql_string_arr, {gsql_string}, /*context_ptr=*/nullptr}},
              {{gsql_timestamp_arr, {gsql_timestamp}, /*context_ptr=*/nullptr}},
+             {{gsql_uuid_arr, {gsql_uuid}, /*context_ptr=*/nullptr}},
          },
          googlesql::Function::AGGREGATE});
 

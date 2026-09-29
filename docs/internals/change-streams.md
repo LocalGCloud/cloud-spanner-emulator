@@ -92,8 +92,9 @@ Each thread loops:
    active partitions (`end_time IS NULL`) whose `start_time` is more than
    `--change_stream_churning_interval` (default 20 s) in the past.
 3. Replace them based on `next_churn`:
-   - `MOVE`: one new partition with `next_churn = MOVE`. Skipped for
-     `MUTABLE_KEY_RANGE` change streams.
+   - `MOVE`: one new partition with `next_churn = MOVE`. For
+     `MUTABLE_KEY_RANGE` change streams, queries report it as a `move_out`
+     and `move_in` partition event pair (fork, 2026-09-28).
    - `SPLIT`: two new partitions with `next_churn = MERGE`.
    - `MERGE`: pairs of partitions become one new partition with
      `next_churn = SPLIT`.
@@ -150,8 +151,10 @@ as the user's writes.
 Fixed values: `record_sequence` is `%08d` starting at `00000000`,
 `server_transaction_id` is the transaction ID, `commit_timestamp` is the
 commit timestamp sentinel (filled in at flush),
-`number_of_partitions_in_transaction` is 1, `transaction_tag` is empty, and
-`is_system_transaction` is `false`. Empty value maps are written as `{}`.
+`number_of_partitions_in_transaction` is 1, and `transaction_tag` is empty
+and `is_system_transaction` is `false`, except in the row deletion policy
+sweeper's transactions, which set `transaction_tag = "RowDeletionPolicy"` and
+`is_system_transaction = true`. Empty value maps are written as `{}`.
 `CloudValueToJSONValue` encodes `INT64` and `NUMERIC` as strings and `BYTES`
 and `PROTO` as base64.
 
@@ -162,8 +165,10 @@ mod, and why the disabled tests `DISABLED_SingleReplaceExistingRow`,
 `DISABLED_DataChangeRecordOrderForMultiTablesSameTransaction` in
 `tests/conformance/cases/change_streams_read_write.cc` fail.
 
-`exclude_ttl_deletes` is stored and printed but not read here. The emulator
-doesn't run TTL deletions.
+Change streams with `exclude_ttl_deletes = true` skip the writes of row
+deletion policy transactions (`backend/database/row_deletion_policy_sweeper.cc`),
+just as `allow_txn_exclusion` streams skip transactions that set
+`exclude_txn_from_change_streams`.
 
 ## TVFs and query validation
 
@@ -227,8 +232,18 @@ databases.
   (PostgreSQL) converters, which also produce partition start, event, and end
   records.
 
-Each response carries the placeholder resume token
-`kChangeStreamDummyResumeToken`, and resume tokens in requests aren't used.
+Each response carries a resume token that encodes the partition token, the
+commit timestamp and the index of the record within it (`ResumeToken` in
+`frontend/proto/resume_token.proto`, written by
+`frontend/handlers/change_streams.cc`; before 2026-09-28 the tokens were
+placeholders). A query resent with a token starts at its timestamp and skips
+the records the stream already returned. For `MUTABLE_KEY_RANGE` streams,
+partition start (`move_in`) records are sent once, from the first scan;
+earlier builds re-sent them on every scan.
+
+Consecutive time slices meet at a microsecond boundary, and a commit exactly
+on that boundary can be skipped. This is a pre-existing bug, listed in
+[Known gaps](../known-gaps.md#known-bugs).
 
 ## Persistence
 
@@ -288,10 +303,14 @@ assigns change stream IDs from it.
 
 ### Retention
 
-Nothing deletes change stream records after `retention_period`. Retention is
-enforced only when queries are validated. `PersistentStorage` removes old
-versions of a cell when the cell is written again, and data table rows are
-written once, so they stay until the change stream or database is dropped.
+Queries are validated against `retention_period`, and each churn cycle also
+calls `ChangeStreamPartitionChurner::DeleteExpiredRecords()`, which deletes,
+in one read-write transaction, each partition's data change records older than
+`now - retention_period` (data records are keyed by partition token and then
+commit timestamp, so each partition's expired records are one key range). A
+failed cleanup is retried on the next cycle. With
+`--enable_change_stream_churning=false` there is no churn thread, so records
+stay until the change stream or database is dropped.
 
 ## Tests
 

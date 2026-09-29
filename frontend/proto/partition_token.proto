@@ -65,6 +65,12 @@ message PartitionToken {
     // True if query using partition token should return an empty result set.
     bool empty_query_partition = 6;
   }
+
+  // 0-based partition index for sliced query partitions.
+  optional int32 query_partition_index = 7;
+
+  // Total number of partitions for sliced query partitions.
+  optional int32 query_num_partitions = 8;
 }
 
 // Partition token returned in StreamingPartitionQuery.

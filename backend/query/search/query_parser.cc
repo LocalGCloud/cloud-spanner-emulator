@@ -16,6 +16,7 @@
 
 #include "backend/query/search/query_parser.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,9 +26,16 @@
 #include "absl/memory/memory.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "unicode/brkiter.h"
+#include "unicode/locid.h"
+#include "unicode/uchar.h"
+#include "unicode/unistr.h"
+#include "unicode/uscript.h"
+#include "backend/query/search/tokenizer.h"
 #include "backend/query/search/ErrorHandler.h"
 #include "backend/query/search/JavaCC.h"
 #include "backend/query/search/SearchQueryParser.h"
@@ -47,6 +55,84 @@ namespace search {
 
 namespace {
 constexpr absl::string_view kSeparators = "~`!@#$%^&_+{}[]<>,?* \r\n\t\b\f_;";
+
+// The generated lexer only reads ASCII. Every other letter, digit or mark is
+// spelled as kEncodedCharacter and six hex digits of its code point, which the
+// grammar lexes as part of a term, and NormalizeParsedTree decodes it. Other
+// non-ASCII characters separate terms, as do word boundaries next to non-ASCII
+// characters, so that "東京タワー" searches for the words "東京" and "タワー".
+constexpr char kEncodedCharacter = '\x01';
+constexpr int kEncodedCharacterDigits = 6;
+
+UScriptCode GetScript(UChar32 c) {
+  UErrorCode error = U_ZERO_ERROR;
+  const UScriptCode script = uscript_getScript(c, &error);
+  return U_FAILURE(error) ? USCRIPT_COMMON : script;
+}
+
+std::string EncodeNonAsciiCharacters(absl::string_view query) {
+  icu::UnicodeString text =
+      icu::UnicodeString::fromUTF8(icu::StringPiece(query.data(), query.size()));
+  UErrorCode error = U_ZERO_ERROR;
+  std::unique_ptr<icu::BreakIterator> words(
+      icu::BreakIterator::createWordInstance(icu::Locale::getRoot(), error));
+  if (U_FAILURE(error)) words = nullptr;
+  if (words != nullptr) words->setText(text);
+  std::string encoded;
+  bool previous_is_word = false;
+  bool previous_is_ascii = true;
+  // The script of the word being encoded, ignoring common characters.
+  UScriptCode word_script = USCRIPT_COMMON;
+  for (int32_t i = 0; i < text.length(); i = text.moveIndex32(i, 1)) {
+    // A literal kEncodedCharacter separates terms.
+    const UChar32 c = text.char32At(i) == kEncodedCharacter
+                          ? static_cast<UChar32>(' ')
+                          : text.char32At(i);
+    const bool ascii = c < 0x80;
+    const bool word = ascii ? absl::ascii_isalnum(c)
+                            : u_isalnum(c) ||
+                                  (U_GET_GC_MASK(c) & U_GC_M_MASK) != 0;
+    const UScriptCode script = GetScript(c);
+    if (word && previous_is_word && (!ascii || !previous_is_ascii) &&
+        ((words != nullptr && words->isBoundary(i)) ||
+         IsEastAsianScriptChange(word_script, script))) {
+      encoded.push_back(' ');
+      word_script = USCRIPT_COMMON;
+    }
+    if (!word) {
+      word_script = USCRIPT_COMMON;
+    } else if (script != USCRIPT_COMMON && script != USCRIPT_INHERITED) {
+      word_script = script;
+    }
+    if (ascii) {
+      encoded.push_back(static_cast<char>(c));
+    } else if (word) {
+      absl::StrAppend(&encoded, absl::string_view(&kEncodedCharacter, 1),
+                      absl::Hex(c, absl::kZeroPad6));
+    } else {
+      encoded.push_back(' ');
+    }
+    previous_is_word = word;
+    previous_is_ascii = ascii;
+  }
+  return encoded;
+}
+
+std::string DecodeNonAsciiCharacters(absl::string_view term) {
+  std::string decoded;
+  for (size_t i = 0; i < term.size(); ++i) {
+    uint32_t code = 0;
+    if (term[i] == kEncodedCharacter &&
+        absl::SimpleHexAtoi(term.substr(i + 1, kEncodedCharacterDigits),
+                            &code)) {
+      icu::UnicodeString(static_cast<UChar32>(code)).toUTF8String(decoded);
+      i += kEncodedCharacterDigits;
+    } else {
+      decoded.push_back(term[i]);
+    }
+  }
+  return decoded;
+}
 }  // namespace
 
 namespace {
@@ -126,7 +212,8 @@ absl::Status RQueryParser::NormalizeParsedTree(SimpleNode* tree) {
     std::string normalized_str;
     absl::Status status;
 
-    googlesql::functions::LowerUtf8(tree->image(), &normalized_str, &status);
+    googlesql::functions::LowerUtf8(DecodeNonAsciiCharacters(tree->image()),
+                                    &normalized_str, &status);
     if (!status.ok()) {
       return error::FailToParseSearchQuery(
           query_, "Failed to normalize search query tree.");
@@ -144,23 +231,24 @@ absl::Status RQueryParser::NormalizeParsedTree(SimpleNode* tree) {
 }
 
 absl::Status RQueryParser::Parse() {
+  std::string encoded_query = EncodeNonAsciiCharacters(query_);
   // Trim leading and trailing separators to avoid parsing errors.
-  auto start =
-      query_.find_first_not_of(kSeparators.data(), 0, kSeparators.size());
+  auto start = encoded_query.find_first_not_of(kSeparators.data(), 0,
+                                               kSeparators.size());
   if (start == std::string::npos) {
-    query_.clear();
+    encoded_query.clear();
   } else {
-    auto end = query_.find_last_not_of(kSeparators.data(), std::string::npos,
-                                       kSeparators.size());
-    query_.erase(end + 1);
-    query_.erase(0, start);
+    auto end = encoded_query.find_last_not_of(
+        kSeparators.data(), std::string::npos, kSeparators.size());
+    encoded_query.erase(end + 1);
+    encoded_query.erase(0, start);
   }
-  if (query_.empty()) {
+  if (encoded_query.empty()) {
     return absl::OkStatus();
   }
 
   // Create the JavaCC generated parser.
-  SearchQueryCharStream char_stream(query_);
+  SearchQueryCharStream char_stream(encoded_query);
   SearchQueryParserTokenManager token_manager(&char_stream);
   SearchQueryParser parser(&token_manager);
 

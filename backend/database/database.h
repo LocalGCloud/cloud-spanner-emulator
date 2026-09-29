@@ -33,13 +33,17 @@
 #include "backend/common/ids.h"
 #include "backend/database/change_stream/change_stream_partition_churner.h"
 #include "backend/database/pg_oid_assigner/pg_oid_assigner.h"
+#include "backend/database/row_deletion_policy_sweeper.h"
+#include "backend/database/table_size_sampler.h"
 #include "backend/locking/manager.h"
 #include "backend/query/query_engine.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/versioned_catalog.h"
 #include "backend/schema/updater/schema_updater.h"
+#include "backend/stats/system_stats_collector.h"
 #include "backend/storage/sequence_state_store.h"
 #include "backend/storage/storage.h"
+#include "backend/storage/user_split_point_store.h"
 #include "backend/transaction/options.h"
 #include "backend/transaction/read_only_transaction.h"
 #include "backend/transaction/read_write_transaction.h"
@@ -111,10 +115,25 @@ class Database {
   // Returns the current ID counter values for persistence.
   IdCounterValues GetIdCounterValues() const;
 
+  // A persistent-storage checkpoint written by CreateBackupCheckpoint.
+  struct BackupCheckpoint {
+    // The externally consistent time at which the checkpoint was taken.
+    absl::Time capture_time;
+    // The schema in effect at the checkpoint's version time.
+    const Schema* schema = nullptr;
+    // Key and value bytes of the checkpointed versions committed after the
+    // requested changed_since time.
+    int64_t changed_bytes = 0;
+  };
+
   // Writes an immutable persistent-storage checkpoint serialized between
-  // commits and returns the checkpoint's externally consistent timestamp.
-  absl::StatusOr<absl::Time> CreateBackupCheckpoint(
-      const std::string& output_dir) const;
+  // commits. The checkpoint keeps the versions committed at or before
+  // version_time, which must not be later than now, so it holds the database
+  // as of version_time.
+  absl::StatusOr<BackupCheckpoint> CreateBackupCheckpoint(
+      const std::string& output_dir,
+      absl::Time version_time = absl::InfiniteFuture(),
+      absl::Time changed_since = absl::InfiniteFuture()) const;
 
   // Creates a read only transaction attached to this database.
   absl::StatusOr<std::unique_ptr<ReadOnlyTransaction>>
@@ -178,8 +197,14 @@ class Database {
   // Retrives the current version of the schema.
   const Schema* GetLatestSchema() const;
 
+  // Moving lower bound used by version retention checks.
+  absl::Time VersionRetentionFloor() const;
+
   // Used to execute queries against the database.
   QueryEngine* query_engine() { return query_engine_.get(); }
+
+  // Collects the statistics served by the SPANNER_SYS tables.
+  SystemStatsCollector* stats_collector() { return stats_collector_.get(); }
 
   // Returns the database dialect.
   database_api::DatabaseDialect dialect() { return dialect_; }
@@ -189,6 +214,17 @@ class Database {
   }
 
   PgOidAssigner* get_pg_oid_assigner() { return pg_oid_assigner_.get(); }
+
+  RowDeletionPolicySweeper* get_row_deletion_policy_sweeper() {
+    return row_deletion_policy_sweeper_.get();
+  }
+
+  TableSizeSampler* table_size_sampler() { return table_size_sampler_.get(); }
+
+  // Adds split points requested with AddSplitPoints. They are kept in storage,
+  // so they survive a restart with --data_dir, and SPANNER_SYS.USER_SPLIT_POINTS
+  // shows them until they expire. The emulator does not split its storage.
+  absl::Status AddSplitPoints(const std::vector<UserSplitPoint>& split_points);
 
  private:
   Database();
@@ -230,6 +266,13 @@ class Database {
   // Sequence counters kept in storage_, so they survive restarts.
   std::unique_ptr<SequenceStateStore> sequence_state_store_;
 
+  // User split points kept in storage_, so they survive restarts.
+  std::unique_ptr<UserSplitPointStore> user_split_point_store_;
+
+  // Statistics of user operations. Outlives the lock manager and the query
+  // engine, which report to it.
+  std::unique_ptr<SystemStatsCollector> stats_collector_;
+
   // Lock management.
   std::unique_ptr<LockManager> lock_manager_;
 
@@ -253,6 +296,14 @@ class Database {
 
   // Assigns OIDs to database objects when dialect is POSTGRESQL.
   std::unique_ptr<PgOidAssigner> pg_oid_assigner_;
+
+  // Samples table sizes for SPANNER_SYS. Declared after the members it uses
+  // so that it is destroyed, stopping its thread, before them.
+  std::unique_ptr<TableSizeSampler> table_size_sampler_;
+
+  // Deletes rows expired by row deletion policies. Declared last so that it
+  // is destroyed first, stopping its thread before the members it uses.
+  std::unique_ptr<RowDeletionPolicySweeper> row_deletion_policy_sweeper_;
 };
 
 }  // namespace backend

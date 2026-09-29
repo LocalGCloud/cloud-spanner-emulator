@@ -18,6 +18,9 @@
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_TRANSACTION_STORE_H_
 
 #include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
 
 #include "googlesql/public/value.h"
 #include "absl/container/btree_map.h"
@@ -25,6 +28,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/time/time.h"
 #include "backend/actions/ops.h"
 #include "backend/common/ids.h"
 #include "backend/datamodel/key.h"
@@ -97,20 +101,37 @@ class TransactionStore {
       std::vector<const Column*> columns) const;
 
   // Returns an iterator for column values of 'key_range' by merging information
-  // from the buffered mutations and the base storage. Acquires read locks.
+  // from the buffered mutations and the base storage. Acquires shared locks
+  // unless lock_scanned_ranges_exclusive is set by SELECT FOR UPDATE or the
+  // lock_scanned_ranges=exclusive statement hint.
   //
   // Boolean flag allow_pending_commit_timestamps_in_read can be set to false to
   // disallow returning pending_commit_timestamp values to clients.
+  //
+  // With a `snapshot_timestamp`, committed data is read at that timestamp and
+  // no shared locks are taken (repeatable read).
   absl::Status Read(const Table* table, const KeyRange& key_range,
                     absl::Span<const Column* const> columns,
                     std::unique_ptr<StorageIterator>* storage_itr,
-                    bool allow_pending_commit_timestamps_in_read = true) const;
+                    bool allow_pending_commit_timestamps_in_read = true,
+                    bool lock_scanned_ranges_exclusive = false,
+                    std::optional<absl::Time> snapshot_timestamp =
+                        std::nullopt) const;
 
   // Returns the buffered mutations.
   std::vector<WriteOp> GetBufferedOps() const;
 
+  // Returns the final mutations in first-write order for change streams.
+  // Replacing a row that existed before the transaction emits DELETE then
+  // INSERT, while intermediate writes remain collapsed.
+  std::vector<WriteOp> GetChangeStreamOps() const;
+
   // Clears the buffered mutations.
-  void Clear() { buffered_ops_.clear(); }
+  void Clear() {
+    buffered_ops_.clear();
+    stream_keys_.clear();
+    stream_order_.clear();
+  }
 
  private:
   // Types of mutations.
@@ -144,10 +165,13 @@ class TransactionStore {
   absl::Status BufferDelete(const Table* table, const Key& key);
 
   // Returns true if a row already exists in base_storage_.
-  bool RowExistsInStorage(const Table* table, const Key& key);
+  bool RowExistsInStorage(const Table* table, const Key& key) const;
 
   // Returns true if a mutation has been buffered for 'key' and fills 'row'.
   bool RowExistsInBuffer(const Table* table, const Key& key, RowOp* row) const;
+
+  static WriteOp ToWriteOp(const Table* table, const Key& key,
+                           const RowOp& row_op);
 
   // Underlying storage for the database.
   const Storage* base_storage_;
@@ -157,6 +181,10 @@ class TransactionStore {
 
   // Map that stores the buffered mutations.
   absl::flat_hash_map<const Table*, absl::btree_map<Key, RowOp>> buffered_ops_;
+
+  // First-write order and whether a DELETE occurred for each key.
+  absl::flat_hash_map<const Table*, absl::btree_map<Key, bool>> stream_keys_;
+  std::vector<std::pair<const Table*, Key>> stream_order_;
 
   // Tracks tables/columns containing pending commit timestamps.
   CommitTimestampTracker* commit_timestamp_tracker_;

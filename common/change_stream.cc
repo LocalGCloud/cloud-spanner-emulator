@@ -30,3 +30,12 @@ std::string MakeChangeStreamPartitionTableName(
 bool IsChangeStreamPartitionTable(absl::string_view table_name) {
   return absl::StartsWith(table_name, kChangeStreamPartitionTablePrefix);
 }
+
+std::string MakeChangeStreamDataTableName(
+    absl::string_view change_stream_name) {
+  return absl::StrCat(kChangeStreamDataTablePrefix, change_stream_name);
+}
+
+bool IsChangeStreamDataTable(absl::string_view table_name) {
+  return absl::StartsWith(table_name, kChangeStreamDataTablePrefix);
+}

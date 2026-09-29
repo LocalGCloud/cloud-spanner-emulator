@@ -14,8 +14,12 @@
 // limitations under the License.
 //
 
+#include "frontend/handlers/backups.h"
+
 #include <atomic>
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
@@ -23,22 +27,35 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <optional>
+#include <sstream>
 #include <system_error>
 #include <vector>
 #include <utility>
 #include "absl/log/absl_log.h"
 
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/time/time.h"
+#include "absl/time/civil_time.h"
+#include "absl/strings/escaping.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/str_replace.h"
+#include "absl/strings/str_split.h"
 #include "absl/synchronization/mutex.h"
 #include "backend/database/database.h"
+#include "backend/schema/catalog/schema.h"
+#include "backend/schema/catalog/table.h"
+#include "backend/schema/parser/ddl_reserved_words.h"
 #include "backend/schema/printer/print_ddl.h"
+#include "common/clock.h"
 #include "common/config.h"
 #include "frontend/collections/database_manager.h"
 #include "frontend/collections/operation_manager.h"
+#include "frontend/common/list_filter.h"
 #include "frontend/common/uris.h"
 #include "frontend/converters/time.h"
 #include "frontend/entities/database.h"
@@ -64,11 +81,21 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace frontend {
+
+absl::Status DeleteBackup(RequestContext* ctx,
+                          const database_api::DeleteBackupRequest* request,
+                          protobuf_api::Empty* response);
+
 namespace {
 
 constexpr int32_t kMaximumPageSize = 1000;
 constexpr absl::Duration kMinimumBackupRetention = absl::Hours(6);
 constexpr absl::Duration kMaximumBackupRetention = absl::Hours(24 * 366);
+constexpr int kMaximumBackupSchedulesPerDatabase = 4;
+// An incremental chain holds a full backup and up to 13 incremental backups,
+// and starts over once its full backup is 28 days old.
+constexpr int64_t kMaximumIncrementalBackupsPerChain = 13;
+constexpr absl::Duration kMaximumBackupChainAge = absl::Hours(24 * 28);
 
 absl::Status ValidateResourceId(const std::string& id,
                                 const std::string& description) {
@@ -162,7 +189,278 @@ absl::Status ValidateBackupScheduleName(const std::string& name) {
     return absl::InvalidArgumentError(
         absl::StrCat("Invalid backup schedule resource name: ", name));
   }
-  return ValidateResourceId(name.substr(marker + 17), "Backup schedule ID");
+  const std::string id = name.substr(marker + 17);
+  if (id.size() < 2 || id.size() > 60 || id.front() < 'a' ||
+      id.front() > 'z' || !std::isalnum(static_cast<unsigned char>(id.back()))) {
+    return absl::InvalidArgumentError("Invalid backup schedule ID");
+  }
+  for (unsigned char ch : id) {
+    if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+          ch == '-' || ch == '_')) {
+      return absl::InvalidArgumentError("Invalid backup schedule ID");
+    }
+  }
+  return absl::OkStatus();
+}
+
+// Validates a CreateBackup, backup schedule, CopyBackup, or RestoreDatabase
+// encryption_config. The emulator encrypts nothing, so it reports Google
+// default encryption for every type it accepts, and it rejects customer-managed
+// encryption because snapshots are stored unencrypted.
+template <typename EncryptionConfig>
+absl::Status ValidateEncryptionConfig(const EncryptionConfig& config) {
+  const bool has_kms_key =
+      !config.kms_key_name().empty() || !config.kms_key_names().empty();
+  if (config.encryption_type() ==
+          EncryptionConfig::ENCRYPTION_TYPE_UNSPECIFIED ||
+      !EncryptionConfig::EncryptionType_IsValid(config.encryption_type())) {
+    return absl::InvalidArgumentError(
+        "encryption_config.encryption_type must be specified");
+  }
+  if (config.encryption_type() ==
+      EncryptionConfig::CUSTOMER_MANAGED_ENCRYPTION) {
+    if (!has_kms_key) {
+      return absl::InvalidArgumentError(
+          "CUSTOMER_MANAGED_ENCRYPTION requires kms_key_name or "
+          "kms_key_names");
+    }
+    return absl::UnimplementedError(
+        "CUSTOMER_MANAGED_ENCRYPTION is not supported by the emulator, which "
+        "stores backups and databases unencrypted");
+  }
+  if (has_kms_key) {
+    return absl::InvalidArgumentError(
+        "kms_key_name and kms_key_names may be set only with "
+        "CUSTOMER_MANAGED_ENCRYPTION");
+  }
+  return absl::OkStatus();
+}
+
+database_api::EncryptionInfo GoogleDefaultEncryption() {
+  database_api::EncryptionInfo info;
+  info.set_encryption_type(
+      database_api::EncryptionInfo::GOOGLE_DEFAULT_ENCRYPTION);
+  return info;
+}
+
+absl::StatusOr<int> ParseCronNumber(std::string_view text, int minimum,
+                                    int maximum) {
+  int value = 0;
+  const auto parsed = std::from_chars(text.data(), text.data() + text.size(),
+                                      value);
+  if (text.empty() || parsed.ec != std::errc() ||
+      parsed.ptr != text.data() + text.size() || value < minimum ||
+      value > maximum) {
+    return absl::InvalidArgumentError("Invalid backup schedule cron field");
+  }
+  return value;
+}
+
+template <size_t N>
+absl::StatusOr<std::array<bool, N>> ParseCronField(
+    std::string_view field, int minimum, int maximum) {
+  std::array<bool, N> allowed{};
+  for (size_t offset = 0; offset < field.size();) {
+    const size_t comma = field.find(',', offset);
+    const std::string_view part = field.substr(
+        offset, comma == std::string_view::npos ? comma : comma - offset);
+    const size_t slash = part.find('/');
+    const std::string_view base = part.substr(0, slash);
+    int step = 1;
+    if (slash != std::string_view::npos) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          step, ParseCronNumber(part.substr(slash + 1), 1, maximum - minimum + 1));
+    }
+    int first = minimum;
+    int last = maximum;
+    if (base != "*") {
+      const size_t dash = base.find('-');
+      GOOGLESQL_ASSIGN_OR_RETURN(first,
+                                 ParseCronNumber(base.substr(0, dash), minimum,
+                                                 maximum));
+      if (dash != std::string_view::npos) {
+        GOOGLESQL_ASSIGN_OR_RETURN(last,
+                                   ParseCronNumber(base.substr(dash + 1),
+                                                   minimum, maximum));
+      } else if (slash == std::string_view::npos) {
+        last = first;
+      }
+    }
+    if (first > last) {
+      return absl::InvalidArgumentError("Invalid backup schedule cron range");
+    }
+    for (int value = first; value <= last; value += step) allowed[value] = true;
+    if (comma == std::string_view::npos) break;
+    offset = comma + 1;
+    if (offset == field.size()) {
+      return absl::InvalidArgumentError("Invalid backup schedule cron list");
+    }
+  }
+  if (std::none_of(allowed.begin(), allowed.end(), [](bool value) {
+        return value;
+      })) {
+    return absl::InvalidArgumentError("Empty backup schedule cron field");
+  }
+  return allowed;
+}
+
+struct ParsedCron {
+  int minute = 0;
+  std::array<bool, 24> hours{};
+  std::array<bool, 32> days{};
+  std::array<bool, 13> months{};
+  std::array<bool, 8> weekdays{};
+  bool all_days = false;
+  bool all_weekdays = false;
+};
+
+// Parses a schedule's cron text. Full backups must be at least 12 hours
+// apart and incremental backups at least 4 hours apart.
+absl::StatusOr<ParsedCron> ParseBackupCron(
+    const database_api::BackupSchedule& schedule) {
+  const std::string& text = schedule.spec().cron_spec().text();
+  const bool incremental = schedule.has_incremental_backup_spec();
+  const int minimum_hours_apart = incremental ? 4 : 12;
+  const absl::Status too_frequent = absl::InvalidArgumentError(absl::StrCat(
+      incremental ? "Incremental" : "Full",
+      " backup schedules must be at least ", minimum_hours_apart,
+      " hours apart"));
+  if (text.empty() || text.size() > 128) {
+    return absl::InvalidArgumentError("Invalid backup schedule cron text");
+  }
+  std::istringstream input{std::string(text)};
+  std::array<std::string, 5> fields;
+  std::string extra;
+  for (std::string& field : fields) {
+    if (!(input >> field)) {
+      return absl::InvalidArgumentError(
+          "Backup schedule cron must have five fields");
+    }
+  }
+  if (input >> extra) {
+    return absl::InvalidArgumentError(
+        "Backup schedule cron must have five fields");
+  }
+  ParsedCron cron;
+  GOOGLESQL_ASSIGN_OR_RETURN(auto minutes,
+                             ParseCronField<60>(fields[0], 0, 59));
+  if (std::count(minutes.begin(), minutes.end(), true) != 1) {
+    return too_frequent;
+  }
+  cron.minute = std::find(minutes.begin(), minutes.end(), true) -
+                minutes.begin();
+  GOOGLESQL_ASSIGN_OR_RETURN(cron.hours,
+                             ParseCronField<24>(fields[1], 0, 23));
+  GOOGLESQL_ASSIGN_OR_RETURN(cron.days,
+                             ParseCronField<32>(fields[2], 1, 31));
+  GOOGLESQL_ASSIGN_OR_RETURN(cron.months,
+                             ParseCronField<13>(fields[3], 1, 12));
+  GOOGLESQL_ASSIGN_OR_RETURN(cron.weekdays,
+                             ParseCronField<8>(fields[4], 0, 7));
+  std::vector<int> hours;
+  for (int hour = 0; hour < 24; ++hour) {
+    if (cron.hours[hour]) hours.push_back(hour);
+  }
+  for (size_t index = 0; hours.size() > 1 && index < hours.size(); ++index) {
+    const int next = hours[(index + 1) % hours.size()];
+    if ((next - hours[index] + 24) % 24 < minimum_hours_apart) {
+      return too_frequent;
+    }
+  }
+  cron.all_days = std::all_of(cron.days.begin() + 1, cron.days.end(),
+                              [](bool value) { return value; });
+  const bool sunday = cron.weekdays[0] || cron.weekdays[7];
+  cron.all_weekdays = sunday && std::all_of(
+      cron.weekdays.begin() + 1, cron.weekdays.begin() + 7,
+      [](bool value) { return value; });
+  const bool all_months = std::all_of(
+      cron.months.begin() + 1, cron.months.end(),
+      [](bool value) { return value; });
+  const int selected_days =
+      std::count(cron.days.begin() + 1, cron.days.end(), true);
+  const int selected_weekdays =
+      (sunday ? 1 : 0) + std::count(cron.weekdays.begin() + 1,
+                                  cron.weekdays.begin() + 7, true);
+  const bool daily = cron.all_days && cron.all_weekdays;
+  const bool weekly = cron.all_days && selected_weekdays == 1;
+  const bool monthly = selected_days == 1 && cron.all_weekdays;
+  if (!all_months || (hours.size() > 1 ? !daily
+                                       : !(daily || weekly || monthly))) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Backup schedule cron must be every ", minimum_hours_apart,
+        " or more hours, daily, weekly, or monthly"));
+  }
+  return cron;
+}
+
+absl::StatusOr<absl::Time> NextBackupDue(const ParsedCron& cron,
+                                          absl::Time after) {
+  const absl::TimeZone utc = absl::UTCTimeZone();
+  const absl::CivilSecond civil = absl::ToCivilSecond(after, utc);
+  absl::CivilDay day(civil.year(), civil.month(), civil.day());
+  for (int offset = 0; offset < 366 * 5; ++offset, day += 1) {
+    if (!cron.months[day.month()]) continue;
+    const std::string weekday_text =
+        absl::FormatTime("%w", absl::FromCivil(day, utc), utc);
+    const int weekday = weekday_text.front() - '0';
+    const bool date_match =
+        cron.all_days && cron.all_weekdays
+            ? true
+            : cron.all_days
+                  ? cron.weekdays[weekday] ||
+                        (weekday == 0 && cron.weekdays[7])
+                  : cron.all_weekdays
+                        ? cron.days[day.day()]
+                        : cron.days[day.day()] || cron.weekdays[weekday] ||
+                              (weekday == 0 && cron.weekdays[7]);
+    if (!date_match) continue;
+    for (int hour = 0; hour < 24; ++hour) {
+      if (!cron.hours[hour]) continue;
+      const absl::Time due = absl::FromCivil(
+          absl::CivilSecond(day.year(), day.month(), day.day(), hour,
+                            cron.minute, 0),
+          utc);
+      if (due > after) return due;
+    }
+  }
+  return absl::InvalidArgumentError(
+      "Backup schedule cron has no future occurrence");
+}
+
+absl::Status ValidateBackupSchedule(database_api::BackupSchedule* schedule) {
+  if (!schedule->has_spec() || !schedule->spec().has_cron_spec()) {
+    return absl::InvalidArgumentError("Backup schedule cron_spec is required");
+  }
+  if (!schedule->has_full_backup_spec() &&
+      !schedule->has_incremental_backup_spec()) {
+    return absl::InvalidArgumentError(
+        "Backup schedule full_backup_spec or incremental_backup_spec is "
+        "required");
+  }
+  GOOGLESQL_ASSIGN_OR_RETURN(const ParsedCron cron, ParseBackupCron(*schedule));
+  GOOGLESQL_RETURN_IF_ERROR(
+      NextBackupDue(cron, absl::UnixEpoch()).status());
+  if (schedule->has_encryption_config()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        ValidateEncryptionConfig(schedule->encryption_config()));
+  }
+  if (!schedule->has_retention_duration()) {
+    schedule->mutable_retention_duration()->set_seconds(7 * 24 * 60 * 60);
+  }
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      const absl::Duration retention,
+      DurationFromProto(schedule->retention_duration()));
+  if (retention < kMinimumBackupRetention ||
+      retention > kMaximumBackupRetention) {
+    return absl::InvalidArgumentError(
+        "Backup schedule retention must be between 6 hours and 366 days");
+  }
+  schedule->mutable_spec()->mutable_cron_spec()->set_time_zone("UTC");
+  schedule->mutable_spec()
+      ->mutable_cron_spec()
+      ->mutable_creation_window()
+      ->set_seconds(4 * 60 * 60);
+  return absl::OkStatus();
 }
 
 absl::StatusOr<int64_t> DirectorySize(const std::string& directory) {
@@ -194,6 +492,182 @@ absl::Status ValidateBackupExpiration(absl::Time expire_time,
   }
   return absl::OkStatus();
 }
+
+// Resolves the documented ListBackups filter fields. Field names may omit
+// their underscores, as in sizeBytes.
+absl::StatusOr<bool> MatchBackupField(const database_api::Backup& backup,
+                                      std::string_view filter_field,
+                                      std::string_view op,
+                                      std::string_view value) {
+  std::string field(filter_field);
+  field.erase(std::remove(field.begin(), field.end(), '_'), field.end());
+  if (field == "name") {
+    return CompareString(backup.name(), value, op);
+  }
+  if (field == "database") {
+    return CompareString(backup.database(), value, op);
+  }
+  if (field == "state") {
+    const std::string state =
+        backup.state() == database_api::Backup::READY
+            ? "READY"
+            : backup.state() == database_api::Backup::CREATING
+                  ? "CREATING"
+                  : "STATE_UNSPECIFIED";
+    return CompareString(state, value, op);
+  }
+  if (field == "backupschedules") {
+    if (op == "!=") {
+      for (const std::string& schedule : backup.backup_schedules()) {
+        if (CompareString(schedule, value, "=")) return false;
+      }
+      return true;
+    }
+    for (const std::string& schedule : backup.backup_schedules()) {
+      if (CompareString(schedule, value, op)) return true;
+    }
+    return false;
+  }
+  if (field == "sizebytes") {
+    int64_t size = 0;
+    const char* begin = value.data();
+    const char* end = begin + value.size();
+    const auto parsed = std::from_chars(begin, end, size);
+    if (parsed.ec != std::errc() || parsed.ptr != end) {
+      return absl::InvalidArgumentError("Invalid backup size filter value");
+    }
+    return op == ":" ? std::to_string(backup.size_bytes()).find(value) !=
+                           std::string::npos
+                     : CompareOrdered(backup.size_bytes(), size, op);
+  }
+  const google::protobuf::Timestamp* timestamp = nullptr;
+  if (field == "createtime") timestamp = &backup.create_time();
+  if (field == "expiretime") timestamp = &backup.expire_time();
+  if (field == "versiontime") timestamp = &backup.version_time();
+  if (timestamp != nullptr) {
+    absl::Time requested;
+    std::string error;
+    if (!absl::ParseTime(absl::RFC3339_full, value, &requested, &error)) {
+      return absl::InvalidArgumentError("Invalid backup time filter value");
+    }
+    GOOGLESQL_ASSIGN_OR_RETURN(const absl::Time actual,
+                               TimestampFromProto(*timestamp));
+    return op == ":" ?
+               absl::FormatTime(absl::RFC3339_full, actual,
+                                absl::UTCTimeZone()).find(value) !=
+                   std::string::npos
+                     : CompareOrdered(actual, requested, op);
+  }
+  return absl::InvalidArgumentError(
+      absl::StrCat("Unsupported backup filter field: ", field));
+}
+
+bool NewerBackup(const database_api::Backup& left,
+                 const database_api::Backup& right) {
+  if (left.create_time().seconds() != right.create_time().seconds()) {
+    return left.create_time().seconds() > right.create_time().seconds();
+  }
+  if (left.create_time().nanos() != right.create_time().nanos()) {
+    return left.create_time().nanos() > right.create_time().nanos();
+  }
+  return left.name() < right.name();
+}
+
+std::string BackupPageToken(std::string_view parent, std::string_view filter,
+                            const database_api::Backup& backup) {
+  database_api::Backup cursor;
+  cursor.set_name(backup.name());
+  *cursor.mutable_create_time() = backup.create_time();
+  std::string payload(parent);
+  payload.push_back('\0');
+  payload.append(filter);
+  payload.push_back('\0');
+  payload.append(cursor.SerializeAsString());
+  return absl::Base64Escape(payload);
+}
+
+absl::StatusOr<database_api::Backup> ParseBackupPageToken(
+    std::string_view token, std::string_view parent, std::string_view filter) {
+  if (token.size() > 16 * 1024) {
+    return absl::InvalidArgumentError("Backup page_token is too long");
+  }
+  std::string payload;
+  if (!absl::Base64Unescape(token, &payload)) {
+    return absl::InvalidArgumentError("Invalid backup page_token");
+  }
+  const size_t first = payload.find('\0');
+  const size_t second = first == std::string::npos
+                            ? std::string::npos
+                            : payload.find('\0', first + 1);
+  if (second == std::string::npos ||
+      std::string_view(payload).substr(0, first) != parent ||
+      std::string_view(payload).substr(first + 1, second - first - 1) !=
+          filter) {
+    return absl::InvalidArgumentError(
+        "Backup page_token does not match parent and filter");
+  }
+  database_api::Backup cursor;
+  if (!cursor.ParseFromString(payload.substr(second + 1)) ||
+      !cursor.has_create_time() ||
+      !absl::StartsWith(cursor.name(), absl::StrCat(parent, "/backups/")) ||
+      !ValidateBackupName(cursor.name()).ok()) {
+    return absl::InvalidArgumentError("Invalid backup page_token");
+  }
+  GOOGLESQL_RETURN_IF_ERROR(TimestampFromProto(cursor.create_time()).status());
+  return cursor;
+}
+
+std::string BackupSchedulePageToken(std::string_view parent,
+                                    std::string_view name) {
+  std::string payload(parent);
+  payload.push_back('\0');
+  payload.append(name);
+  return absl::Base64Escape(payload);
+}
+
+absl::StatusOr<std::string> ParseBackupSchedulePageToken(
+    std::string_view token, std::string_view parent) {
+  if (token.size() > 8192) {
+    return absl::InvalidArgumentError("Backup schedule page_token is too long");
+  }
+  std::string payload;
+  if (!absl::Base64Unescape(token, &payload)) {
+    return absl::InvalidArgumentError("Invalid backup schedule page_token");
+  }
+  const size_t separator = payload.find('\0');
+  if (separator == std::string::npos ||
+      std::string_view(payload).substr(0, separator) != parent) {
+    return absl::InvalidArgumentError(
+        "Backup schedule page_token does not match parent");
+  }
+  std::string name = payload.substr(separator + 1);
+  if (!absl::StartsWith(name, absl::StrCat(parent, "/backupSchedules/")) ||
+      !ValidateBackupScheduleName(name).ok()) {
+    return absl::InvalidArgumentError("Invalid backup schedule page_token");
+  }
+  return name;
+}
+
+absl::Status DeleteExpiredBackups(RequestContext* ctx) {
+  // ponytail: deleting each expired backup rewrites the catalog; batch only if
+  // large local backup catalogs make this sweep expensive.
+  for (const auto& entry : ctx->env()->backup_catalog()->AllBackups()) {
+    if (!entry.backup.has_expire_time()) continue;
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        const absl::Time expire_time,
+        TimestampFromProto(entry.backup.expire_time()));
+    if (expire_time > ctx->env()->clock()->Now()) continue;
+    database_api::DeleteBackupRequest request;
+    request.set_name(entry.backup.name());
+    protobuf_api::Empty response;
+    const absl::Status status = DeleteBackup(ctx, &request, &response);
+    if (!status.ok() && status.code() != absl::StatusCode::kNotFound) {
+      return status;
+    }
+  }
+  return absl::OkStatus();
+}
+
 class DirectoryCleanup {
  public:
   explicit DirectoryCleanup(std::filesystem::path path)
@@ -310,12 +784,133 @@ absl::Status PersistRestoredDatabase(
   return absl::OkStatus();
 }
 
+// Returns the version_time a CreateBackup request asks for, or nullopt when it
+// asks for none. The time must lie between the database's
+// earliest_version_time and now. A scheduled backup asks for its cron time,
+// which is moved into that range instead of being rejected.
+absl::StatusOr<std::optional<absl::Time>> RequestedVersionTime(
+    const database_api::Backup& backup, Database* database, Clock* clock,
+    bool scheduled) {
+  if (!backup.has_version_time()) return std::nullopt;
+  GOOGLESQL_ASSIGN_OR_RETURN(const absl::Time version_time,
+                             TimestampFromProto(backup.version_time()));
+  database_api::Database database_proto;
+  GOOGLESQL_RETURN_IF_ERROR(database->ToProto(&database_proto));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      const absl::Time earliest_version_time,
+      TimestampFromProto(database_proto.earliest_version_time()));
+  const absl::Time now = clock->Now();
+  if (scheduled) return std::clamp(version_time, earliest_version_time, now);
+  if (version_time > now) {
+    return absl::InvalidArgumentError(
+        "Backup version_time must not be in the future");
+  }
+  if (version_time < earliest_version_time) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Backup version_time must not be earlier than the database's "
+        "earliest_version_time ",
+        absl::FormatTime(absl::RFC3339_full, earliest_version_time,
+                         absl::UTCTimeZone())));
+  }
+  return version_time;
+}
+
+// Returns the persisted schema-change batches committed at or before
+// version_time, or nullopt when a later batch has no recorded commit time
+// (metadata written by older emulator builds).
+std::optional<std::vector<PersistedSchemaChangeBatch>> SchemaChangeBatchesAt(
+    const std::vector<PersistedSchemaChangeBatch>& batches,
+    absl::Time version_time) {
+  std::vector<PersistedSchemaChangeBatch> visible;
+  for (const PersistedSchemaChangeBatch& batch : batches) {
+    // The first batch creates the database, which predates any version_time.
+    if (!visible.empty()) {
+      absl::Time committed;
+      if (!absl::ParseTime(absl::RFC3339_full, batch.schema_change_timestamp,
+                           &committed, nullptr)) {
+        return std::nullopt;
+      }
+      if (committed > version_time) break;
+    }
+    visible.push_back(batch);
+  }
+  return visible;
+}
+
+// An incremental chain that a scheduled backup extends.
+struct ChainLink {
+  BackupCatalog::BackupChain chain;
+  // version_time of the chain's newest backup.
+  absl::Time previous_version_time;
+};
+
+// Returns the chain that the schedule's backup at version_time extends, or
+// nullopt when the backup starts a new chain: the chain already has 13
+// incremental backups, its full backup is 28 days old, or its newest backup
+// is gone.
+absl::StatusOr<std::optional<ChainLink>> ExtendableChain(
+    const BackupCatalog& catalog, const std::string& schedule_name,
+    absl::Time version_time) {
+  std::optional<BackupCatalog::BackupChain> chain =
+      catalog.GetBackupChain(schedule_name);
+  if (!chain.has_value() ||
+      chain->backup_count > kMaximumIncrementalBackupsPerChain) {
+    return std::nullopt;
+  }
+  GOOGLESQL_ASSIGN_OR_RETURN(const absl::Time oldest_version_time,
+                             TimestampFromProto(chain->oldest_version_time));
+  if (version_time - oldest_version_time >= kMaximumBackupChainAge) {
+    return std::nullopt;
+  }
+  absl::StatusOr<BackupCatalog::BackupEntry> newest =
+      catalog.GetBackup(chain->newest_backup);
+  if (absl::IsNotFound(newest.status())) return std::nullopt;
+  GOOGLESQL_RETURN_IF_ERROR(newest.status());
+  GOOGLESQL_ASSIGN_OR_RETURN(const absl::Time previous_version_time,
+                             TimestampFromProto(newest->backup.version_time()));
+  return ChainLink{.chain = *std::move(chain),
+                   .previous_version_time = previous_version_time};
+}
+
+// Quotes a table name, part by part for a table in a named schema.
+std::string QuoteTableName(std::string_view name,
+                           database_api::DatabaseDialect dialect) {
+  std::vector<std::string> parts;
+  for (std::string_view part : absl::StrSplit(name, '.')) {
+    if (dialect == database_api::DatabaseDialect::POSTGRESQL) {
+      parts.push_back(absl::StrCat(
+          "\"", absl::StrReplaceAll(part, {{"\"", "\"\""}}), "\""));
+    } else if (backend::ddl::IsReservedWord(part)) {
+      parts.push_back(absl::StrCat("`", part, "`"));
+    } else {
+      parts.emplace_back(part);
+    }
+  }
+  return absl::StrJoin(parts, ".");
+}
+
+// Returns the DDL that drops every row deletion policy (TTL) in schema.
+std::vector<std::string> DropRowDeletionPolicyStatements(
+    const backend::Schema& schema, database_api::DatabaseDialect dialect) {
+  std::vector<std::string> statements;
+  for (const backend::Table* table : schema.tables()) {
+    if (!table->row_deletion_policy().has_value()) continue;
+    statements.push_back(absl::StrCat(
+        "ALTER TABLE ", QuoteTableName(table->Name(), dialect),
+        dialect == database_api::DatabaseDialect::POSTGRESQL
+            ? " DROP TTL"
+            : " DROP ROW DELETION POLICY"));
+  }
+  return statements;
+}
 
 }  // namespace
 
-absl::Status CreateBackup(RequestContext* ctx,
-                          const database_api::CreateBackupRequest* request,
-                          operations_api::Operation* response) {
+absl::Status CreateBackupInternal(
+    RequestContext* ctx, const database_api::CreateBackupRequest* request,
+    operations_api::Operation* response,
+    std::optional<BackupCatalog::ScheduleRun> schedule_run) {
+  GOOGLESQL_RETURN_IF_ERROR(DeleteExpiredBackups(ctx));
   absl::MutexLock admin_transaction_lock(
       &ctx->env()->admin_transaction_mutex());
   GOOGLESQL_RETURN_IF_ERROR(ValidateInstance(request->parent(), ctx->env()));
@@ -324,11 +919,11 @@ absl::Status CreateBackup(RequestContext* ctx,
   if (!request->has_backup() || request->backup().database().empty()) {
     return absl::InvalidArgumentError("Backup database must be provided");
   }
-  if (request->backup().has_version_time()) {
-    return absl::InvalidArgumentError(
-        "Historical backup version_time is not supported by the emulator");
+  if (request->has_encryption_config()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        ValidateEncryptionConfig(request->encryption_config()));
   }
-  if (!request->backup().has_expire_time()) {
+  if (!schedule_run.has_value() && !request->backup().has_expire_time()) {
     return absl::InvalidArgumentError("Backup expire_time must be provided");
   }
 
@@ -355,6 +950,10 @@ absl::Status CreateBackup(RequestContext* ctx,
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::shared_ptr<Instance> source_instance,
       ctx->env()->instance_manager()->GetInstance(request->parent()));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      const std::optional<absl::Time> version_time,
+      RequestedVersionTime(request->backup(), database.get(),
+                           ctx->env()->clock(), schedule_run.has_value()));
   BackupCatalog* catalog = ctx->env()->backup_catalog();
   if (!catalog->persistent()) {
     return absl::FailedPreconditionError(
@@ -369,46 +968,102 @@ absl::Status CreateBackup(RequestContext* ctx,
     return existing.status();
   }
 
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      absl::Time expire_time,
-      TimestampFromProto(request->backup().expire_time()));
-  if (expire_time <= ctx->env()->clock()->Now()) {
-    return absl::InvalidArgumentError(
-        "Backup expire_time must be after the capture time");
+  absl::Time expire_time;
+  if (!schedule_run.has_value()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        expire_time, TimestampFromProto(request->backup().expire_time()));
+    if (expire_time <= ctx->env()->clock()->Now()) {
+      return absl::InvalidArgumentError(
+          "Backup expire_time must be after the capture time");
+    }
+    GOOGLESQL_RETURN_IF_ERROR(
+        ValidateBackupExpiration(expire_time, ctx->env()->clock()->Now()));
   }
-  GOOGLESQL_RETURN_IF_ERROR(
-      ValidateBackupExpiration(expire_time, ctx->env()->clock()->Now()));
+
+  std::optional<database_api::BackupSchedule> schedule;
+  std::optional<ChainLink> chain_link;
+  if (schedule_run.has_value()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(schedule,
+                               catalog->GetBackupSchedule(schedule_run->name));
+    if (schedule->has_incremental_backup_spec()) {
+      GOOGLESQL_ASSIGN_OR_RETURN(
+          chain_link,
+          ExtendableChain(*catalog, schedule_run->name,
+                          version_time.value_or(ctx->env()->clock()->Now())));
+    }
+  }
 
   absl::MutexLock schema_change_lock(&database->schema_change_mutex());
   const std::string snapshot_directory =
       catalog->SnapshotDirectory(backup_name);
+  GOOGLESQL_RETURN_IF_ERROR(catalog->PrepareSnapshot(backup_name));
+  const std::filesystem::path snapshot_root =
+      std::filesystem::path(snapshot_directory).parent_path();
+  DirectoryCleanup snapshot_cleanup(snapshot_root);
+  DirectoryCleanup intent_cleanup(snapshot_root.string() + ".creating");
   GOOGLESQL_ASSIGN_OR_RETURN(
-      const absl::Time capture_time,
-      database->backend()->CreateBackupCheckpoint(snapshot_directory));
-  DirectoryCleanup snapshot_cleanup(
-      std::filesystem::path(snapshot_directory).parent_path());
+      const backend::Database::BackupCheckpoint checkpoint,
+      database->backend()->CreateBackupCheckpoint(
+          snapshot_directory, version_time.value_or(absl::InfiniteFuture()),
+          chain_link.has_value() ? chain_link->previous_version_time
+                                 : absl::InfiniteFuture()));
 
+  if (schedule.has_value()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        const absl::Duration retention,
+        DurationFromProto(schedule->retention_duration()));
+    expire_time = checkpoint.capture_time + retention;
+  }
   GOOGLESQL_RETURN_IF_ERROR(
-      ValidateBackupExpiration(expire_time, capture_time));
+      ValidateBackupExpiration(expire_time, checkpoint.capture_time));
   GOOGLESQL_ASSIGN_OR_RETURN(auto capture_timestamp,
-                             TimestampToProto(capture_time));
+                             TimestampToProto(checkpoint.capture_time));
 
   BackupCatalog::BackupEntry entry;
   entry.backup = request->backup();
+  entry.backup.clear_backup_schedules();
+  if (schedule_run.has_value()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(*entry.backup.mutable_expire_time(),
+                               TimestampToProto(expire_time));
+    entry.backup.add_backup_schedules(schedule_run->name);
+  }
   entry.backup.set_name(backup_name);
   entry.backup.set_database_dialect(database->backend()->dialect());
   entry.backup.set_state(database_api::Backup::READY);
   *entry.backup.mutable_create_time() = capture_timestamp;
-  *entry.backup.mutable_version_time() = capture_timestamp;
+  if (version_time.has_value()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(*entry.backup.mutable_version_time(),
+                               TimestampToProto(*version_time));
+  } else {
+    *entry.backup.mutable_version_time() = capture_timestamp;
+  }
+  *entry.backup.mutable_encryption_info() = GoogleDefaultEncryption();
+  entry.backup.clear_encryption_information();
   GOOGLESQL_ASSIGN_OR_RETURN(int64_t size_bytes,
                              DirectorySize(snapshot_directory));
   entry.backup.set_size_bytes(size_bytes);
-  GOOGLESQL_ASSIGN_OR_RETURN(
-      entry.proto_descriptor_bytes,
-      database->backend()
-          ->GetLatestSchema()
-          ->proto_bundle()
-          ->GetProtoDescriptorBytes());
+  // Every snapshot is a full copy. An incremental backup still reports only
+  // the bytes of the versions committed since its chain's previous backup as
+  // exclusive to it, as production does.
+  const int64_t exclusive_size_bytes =
+      chain_link.has_value() ? std::min(checkpoint.changed_bytes, size_bytes)
+                             : size_bytes;
+  entry.backup.set_exclusive_size_bytes(exclusive_size_bytes);
+  entry.backup.set_freeable_size_bytes(exclusive_size_bytes);
+  entry.backup.clear_incremental_backup_chain_id();
+  if (chain_link.has_value()) {
+    entry.backup.set_incremental_backup_chain_id(chain_link->chain.id);
+    *entry.backup.mutable_oldest_version_time() =
+        chain_link->chain.oldest_version_time;
+  } else {
+    if (schedule.has_value() && schedule->has_incremental_backup_spec()) {
+      entry.backup.set_incremental_backup_chain_id(request->backup_id());
+    }
+    *entry.backup.mutable_oldest_version_time() = entry.backup.version_time();
+  }
+  const backend::Schema* schema = checkpoint.schema;
+  GOOGLESQL_ASSIGN_OR_RETURN(entry.proto_descriptor_bytes,
+                             schema->proto_bundle()->GetProtoDescriptorBytes());
 
   bool found_persisted_ddl = false;
   if (auto* metadata = ctx->env()->metadata_store(); metadata != nullptr) {
@@ -418,17 +1073,33 @@ absl::Status CreateBackup(RequestContext* ctx,
       auto database_it =
           instance_it->second.databases.find(std::string(database_id));
       if (database_it != instance_it->second.databases.end()) {
-        entry.ddl_statements = database_it->second.ddl_statements;
-        entry.schema_change_batches =
+        const std::vector<PersistedSchemaChangeBatch>& persisted =
             database_it->second.schema_change_batches;
-        found_persisted_ddl = true;
+        std::optional<std::vector<PersistedSchemaChangeBatch>> batches =
+            SchemaChangeBatchesAt(
+                persisted, version_time.value_or(absl::InfiniteFuture()));
+        // Batches without commit times are all visible when no later schema
+        // exists.
+        if (!batches.has_value() &&
+            schema == database->backend()->GetLatestSchema()) {
+          batches = persisted;
+        }
+        if (batches.has_value()) {
+          entry.schema_change_batches = *std::move(batches);
+          for (const PersistedSchemaChangeBatch& batch :
+               entry.schema_change_batches) {
+            entry.ddl_statements.insert(entry.ddl_statements.end(),
+                                        batch.statements.begin(),
+                                        batch.statements.end());
+          }
+          found_persisted_ddl = true;
+        }
       }
     }
   }
   if (!found_persisted_ddl) {
-    GOOGLESQL_ASSIGN_OR_RETURN(
-        entry.ddl_statements,
-        backend::PrintDDLStatements(database->backend()->GetLatestSchema()));
+    GOOGLESQL_ASSIGN_OR_RETURN(entry.ddl_statements,
+                               backend::PrintDDLStatements(schema));
     entry.schema_change_batches.push_back(
         {.statements = entry.ddl_statements,
          .proto_descriptor_bytes = entry.proto_descriptor_bytes});
@@ -452,7 +1123,7 @@ absl::Status CreateBackup(RequestContext* ctx,
   operations_api::Operation persisted_operation;
   operation->ToProto(&persisted_operation);
   absl::Status catalog_status =
-      catalog->CreateBackup(entry, persisted_operation);
+      catalog->CreateBackup(entry, persisted_operation, schedule_run);
   if (!catalog_status.ok()) {
     ctx->env()->operation_manager()->DeleteOperation(entry.operation_name);
     return catalog_status;
@@ -462,12 +1133,118 @@ absl::Status CreateBackup(RequestContext* ctx,
   *response = std::move(persisted_operation);
   return absl::OkStatus();
 }
+
+absl::Status CreateBackup(RequestContext* ctx,
+                          const database_api::CreateBackupRequest* request,
+                          operations_api::Operation* response) {
+  return CreateBackupInternal(ctx, request, response, std::nullopt);
+}
 REGISTER_GRPC_HANDLER(DatabaseAdmin, CreateBackup);
+
+absl::Status RunDueBackupSchedules(ServerEnv* env, absl::Time now) {
+  grpc::ServerContext grpc_context;
+  RequestContext ctx(env, &grpc_context);
+  GOOGLESQL_RETURN_IF_ERROR(DeleteExpiredBackups(&ctx));
+  absl::Status first_error;
+  for (const auto& entry : env->backup_catalog()->AllBackupSchedules()) {
+    const auto& schedule = entry.schedule;
+    auto cron = ParseBackupCron(schedule);
+    if (!cron.ok()) {
+      if (first_error.ok()) first_error = cron.status();
+      continue;
+    }
+    int64_t due_seconds = entry.next_due_seconds;
+    if (due_seconds == 0) {
+      absl::Time origin = now;
+      if (schedule.has_update_time()) {
+        auto parsed = TimestampFromProto(schedule.update_time());
+        if (!parsed.ok()) {
+          if (first_error.ok()) first_error = parsed.status();
+          continue;
+        }
+        origin = *parsed;
+      }
+      auto initial_due = NextBackupDue(*cron, origin);
+      if (!initial_due.ok()) {
+        if (first_error.ok()) first_error = initial_due.status();
+        continue;
+      }
+      due_seconds = absl::ToUnixSeconds(*initial_due);
+      absl::Status initialized = env->backup_catalog()->AdvanceBackupSchedule(
+          schedule.name(), 0, due_seconds, schedule.SerializeAsString());
+      if (!initialized.ok()) {
+        if (initialized.code() != absl::StatusCode::kAborted &&
+            first_error.ok()) {
+          first_error = initialized;
+        }
+        continue;
+      }
+    }
+    const absl::Time due = absl::FromUnixSeconds(due_seconds);
+    if (now < due) continue;
+    auto following = NextBackupDue(*cron, due);
+    if (!following.ok()) {
+      if (first_error.ok()) first_error = following.status();
+      continue;
+    }
+    if (now > due + absl::Hours(4)) {
+      auto future = NextBackupDue(*cron, now);
+      if (!future.ok()) {
+        if (first_error.ok()) first_error = future.status();
+        continue;
+      }
+      absl::Status skipped = env->backup_catalog()->AdvanceBackupSchedule(
+          schedule.name(), due_seconds, absl::ToUnixSeconds(*future),
+          schedule.SerializeAsString());
+      if (!skipped.ok() && skipped.code() != absl::StatusCode::kAborted &&
+          first_error.ok()) {
+        first_error = skipped;
+      }
+      continue;
+    }
+    absl::string_view project_id;
+    absl::string_view instance_id;
+    absl::string_view database_id;
+    const std::string database_name =
+        schedule.name().substr(0, schedule.name().rfind("/backupSchedules/"));
+    absl::Status parsed_name = ParseDatabaseUri(
+        database_name, &project_id, &instance_id, &database_id);
+    if (!parsed_name.ok()) {
+      if (first_error.ok()) first_error = parsed_name;
+      continue;
+    }
+    const std::string parent = MakeInstanceUri(project_id, instance_id);
+    database_api::CreateBackupRequest request;
+    request.set_parent(parent);
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (unsigned char ch : schedule.name()) {
+      hash = (hash ^ ch) * 1099511628211ULL;
+    }
+    request.set_backup_id(
+        absl::StrCat("scheduled-", absl::Hex(hash), "-", due_seconds));
+    request.mutable_backup()->set_database(
+        MakeDatabaseUri(parent, database_id));
+    // A scheduled backup holds the database as of its cron time.
+    request.mutable_backup()->mutable_version_time()->set_seconds(due_seconds);
+    operations_api::Operation operation;
+    absl::Status status = CreateBackupInternal(
+        &ctx, &request, &operation,
+        BackupCatalog::ScheduleRun{
+            schedule.name(), due_seconds, absl::ToUnixSeconds(*following),
+            schedule.SerializeAsString()});
+    if (!status.ok() && status.code() != absl::StatusCode::kAborted &&
+        first_error.ok()) {
+      first_error = status;
+    }
+  }
+  return first_error;
+}
 
 absl::Status GetBackup(RequestContext* ctx,
                        const database_api::GetBackupRequest* request,
                        database_api::Backup* response) {
   GOOGLESQL_RETURN_IF_ERROR(ValidateBackupName(request->name()));
+  GOOGLESQL_RETURN_IF_ERROR(DeleteExpiredBackups(ctx));
   GOOGLESQL_ASSIGN_OR_RETURN(
       BackupCatalog::BackupEntry entry,
       ctx->env()->backup_catalog()->GetBackup(request->name()));
@@ -480,18 +1257,40 @@ absl::Status ListBackups(RequestContext* ctx,
                          const database_api::ListBackupsRequest* request,
                          database_api::ListBackupsResponse* response) {
   GOOGLESQL_RETURN_IF_ERROR(ValidateInstance(request->parent(), ctx->env()));
+  GOOGLESQL_ASSIGN_OR_RETURN(const ListFilter filter,
+                             ListFilter::Parse(request->filter()));
+  const auto matches = [&filter](const database_api::Backup& backup) {
+    return filter.Matches([&backup](std::string_view field,
+                                    std::string_view op,
+                                    std::string_view value) {
+      return MatchBackupField(backup, field, op, value);
+    });
+  };
+  GOOGLESQL_RETURN_IF_ERROR(matches(database_api::Backup()).status());
+  std::optional<database_api::Backup> cursor;
+  if (!request->page_token().empty()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        cursor, ParseBackupPageToken(request->page_token(), request->parent(),
+                                     request->filter()));
+  }
+  GOOGLESQL_RETURN_IF_ERROR(DeleteExpiredBackups(ctx));
   int32_t page_size = request->page_size();
   if (page_size <= 0 || page_size > kMaximumPageSize) {
     page_size = kMaximumPageSize;
   }
-  for (const auto& entry :
-       ctx->env()->backup_catalog()->ListBackups(request->parent())) {
-    if (!request->page_token().empty() &&
-        entry.backup.name() < request->page_token()) {
-      continue;
-    }
+  std::vector<BackupCatalog::BackupEntry> backups =
+      ctx->env()->backup_catalog()->ListBackups(request->parent());
+  std::sort(backups.begin(), backups.end(), [](const auto& left, const auto& right) {
+    return NewerBackup(left.backup, right.backup);
+  });
+  for (const auto& entry : backups) {
+    if (cursor.has_value() && !NewerBackup(*cursor, entry.backup)) continue;
+    GOOGLESQL_ASSIGN_OR_RETURN(const bool matched, matches(entry.backup));
+    if (!matched) continue;
     if (response->backups_size() >= page_size) {
-      response->set_next_page_token(entry.backup.name());
+      response->set_next_page_token(BackupPageToken(
+          request->parent(), request->filter(),
+          response->backups(response->backups_size() - 1)));
       break;
     }
     *response->add_backups() = entry.backup;
@@ -503,6 +1302,7 @@ REGISTER_GRPC_HANDLER(DatabaseAdmin, ListBackups);
 absl::Status UpdateBackup(RequestContext* ctx,
                           const database_api::UpdateBackupRequest* request,
                           database_api::Backup* response) {
+  GOOGLESQL_RETURN_IF_ERROR(DeleteExpiredBackups(ctx));
   absl::MutexLock admin_transaction_lock(
       &ctx->env()->admin_transaction_mutex());
   if (!request->has_backup()) {
@@ -531,6 +1331,10 @@ absl::Status UpdateBackup(RequestContext* ctx,
   GOOGLESQL_ASSIGN_OR_RETURN(
       const absl::Time expire_time,
       TimestampFromProto(entry.backup.expire_time()));
+  if (expire_time <= ctx->env()->clock()->Now()) {
+    return absl::InvalidArgumentError(
+        "Backup expire_time must be in the future");
+  }
   GOOGLESQL_RETURN_IF_ERROR(
       ValidateBackupExpiration(expire_time, create_time));
   GOOGLESQL_RETURN_IF_ERROR(
@@ -598,6 +1402,7 @@ REGISTER_GRPC_HANDLER(DatabaseAdmin, DeleteBackup);
 absl::Status CopyBackup(RequestContext* ctx,
                         const database_api::CopyBackupRequest* request,
                         operations_api::Operation* response) {
+  GOOGLESQL_RETURN_IF_ERROR(DeleteExpiredBackups(ctx));
   absl::MutexLock admin_transaction_lock(
       &ctx->env()->admin_transaction_mutex());
   GOOGLESQL_RETURN_IF_ERROR(ValidateInstance(request->parent(), ctx->env()));
@@ -606,6 +1411,10 @@ absl::Status CopyBackup(RequestContext* ctx,
   GOOGLESQL_RETURN_IF_ERROR(ValidateBackupName(request->source_backup()));
   if (!request->has_expire_time()) {
     return absl::InvalidArgumentError("Copied backup expire_time is required");
+  }
+  if (request->has_encryption_config()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        ValidateEncryptionConfig(request->encryption_config()));
   }
 
   BackupCatalog* catalog = ctx->env()->backup_catalog();
@@ -636,17 +1445,32 @@ absl::Status CopyBackup(RequestContext* ctx,
       absl::Time expire_time, TimestampFromProto(request->expire_time()));
   GOOGLESQL_RETURN_IF_ERROR(
       ValidateBackupExpiration(expire_time, source_create_time));
+  if (expire_time < ctx->env()->clock()->Now() + kMinimumBackupRetention) {
+    return absl::InvalidArgumentError(
+        "Copied backup expire_time must be at least 6 hours from now");
+  }
 
   const std::string destination_directory = catalog->SnapshotDirectory(name);
+  GOOGLESQL_RETURN_IF_ERROR(catalog->PrepareSnapshot(name));
+  const std::filesystem::path destination_root =
+      std::filesystem::path(destination_directory).parent_path();
+  DirectoryCleanup destination_cleanup(destination_root);
+  DirectoryCleanup intent_cleanup(destination_root.string() + ".creating");
   GOOGLESQL_RETURN_IF_ERROR(CopySnapshot(
       source_lease->snapshot_directory(), destination_directory));
   source_lease.reset();
-  DirectoryCleanup destination_cleanup(
-      std::filesystem::path(destination_directory).parent_path());
 
   BackupCatalog::BackupEntry copy = source;
   copy.backup.set_name(name);
+  copy.backup.clear_backup_schedules();
   *copy.backup.mutable_expire_time() = request->expire_time();
+  // The copy is a full snapshot outside any incremental chain.
+  copy.backup.clear_incremental_backup_chain_id();
+  *copy.backup.mutable_oldest_version_time() = copy.backup.version_time();
+  copy.backup.set_exclusive_size_bytes(copy.backup.size_bytes());
+  copy.backup.set_freeable_size_bytes(copy.backup.size_bytes());
+  *copy.backup.mutable_encryption_info() = GoogleDefaultEncryption();
+  copy.backup.clear_encryption_information();
   GOOGLESQL_ASSIGN_OR_RETURN(*copy.backup.mutable_create_time(),
                              TimestampToProto(ctx->env()->clock()->Now()));
   GOOGLESQL_ASSIGN_OR_RETURN(
@@ -672,6 +1496,7 @@ REGISTER_GRPC_HANDLER(DatabaseAdmin, CopyBackup);
 absl::Status RestoreDatabase(
     RequestContext* ctx, const database_api::RestoreDatabaseRequest* request,
     operations_api::Operation* response) {
+  GOOGLESQL_RETURN_IF_ERROR(DeleteExpiredBackups(ctx));
   absl::MutexLock admin_transaction_lock(
       &ctx->env()->admin_transaction_mutex());
   GOOGLESQL_RETURN_IF_ERROR(ValidateInstance(request->parent(), ctx->env()));
@@ -680,6 +1505,10 @@ absl::Status RestoreDatabase(
     return absl::InvalidArgumentError("Restore backup source is required");
   }
   GOOGLESQL_RETURN_IF_ERROR(ValidateBackupName(request->backup()));
+  if (request->has_encryption_config()) {
+    GOOGLESQL_RETURN_IF_ERROR(
+        ValidateEncryptionConfig(request->encryption_config()));
+  }
   MetadataStore* metadata = ctx->env()->metadata_store();
   if (metadata == nullptr) {
     return absl::FailedPreconditionError(
@@ -840,6 +1669,29 @@ absl::Status RestoreDatabase(
       std::shared_ptr<Database> restored,
       creation->Build(schema_change_operations, counters,
                       ctx->env()->clock()->Now()));
+  // Like production, a restored database has no row deletion policies. The
+  // drop is replayed after the backup's own schema changes on restart.
+  const std::vector<std::string> drop_ttl_statements =
+      DropRowDeletionPolicyStatements(*restored->backend()->GetLatestSchema(),
+                                      entry.dialect);
+  if (!drop_ttl_statements.empty()) {
+    int successful_statements = 0;
+    absl::Time commit_timestamp;
+    absl::Status backfill_status;
+    GOOGLESQL_RETURN_IF_ERROR(restored->backend()->UpdateSchema(
+        {.statements = drop_ttl_statements, .database_dialect = entry.dialect},
+        &successful_statements, &commit_timestamp, &backfill_status));
+    GOOGLESQL_RETURN_IF_ERROR(backfill_status);
+    if (entry.schema_change_batches.empty()) {
+      entry.schema_change_batches.push_back(
+          {.statements = entry.ddl_statements,
+           .proto_descriptor_bytes = entry.proto_descriptor_bytes});
+    }
+    entry.schema_change_batches.push_back(
+        {.statements = drop_ttl_statements,
+         .schema_change_timestamp = absl::FormatTime(
+             absl::RFC3339_full, commit_timestamp, absl::UTCTimeZone())});
+  }
   database_api::Database restored_proto;
   GOOGLESQL_RETURN_IF_ERROR(restored->ToProto(&restored_proto));
 
@@ -972,10 +1824,26 @@ absl::Status CreateBackupSchedule(
   schedule.set_name(
       MakeBackupScheduleName(request->parent(), request->backup_schedule_id()));
   GOOGLESQL_RETURN_IF_ERROR(ValidateBackupScheduleName(schedule.name()));
+  if (!ctx->env()->backup_catalog()->persistent()) {
+    return absl::FailedPreconditionError(
+        "Backup schedules require emulator --data_dir persistent storage");
+  }
+  GOOGLESQL_RETURN_IF_ERROR(ValidateBackupSchedule(&schedule));
+  if (ctx->env()->backup_catalog()->ListBackupSchedules(request->parent())
+          .size() >= kMaximumBackupSchedulesPerDatabase) {
+    return absl::ResourceExhaustedError(absl::StrCat(
+        "Database ", request->parent(), " already has the maximum of ",
+        kMaximumBackupSchedulesPerDatabase, " backup schedules"));
+  }
+  const absl::Time now = ctx->env()->clock()->Now();
+  GOOGLESQL_ASSIGN_OR_RETURN(const ParsedCron cron, ParseBackupCron(schedule));
+  GOOGLESQL_ASSIGN_OR_RETURN(const absl::Time next_due,
+                             NextBackupDue(cron, now));
   GOOGLESQL_ASSIGN_OR_RETURN(*schedule.mutable_update_time(),
-                             TimestampToProto(ctx->env()->clock()->Now()));
+                             TimestampToProto(now));
   GOOGLESQL_RETURN_IF_ERROR(
-      ctx->env()->backup_catalog()->CreateBackupSchedule(schedule));
+      ctx->env()->backup_catalog()->CreateBackupSchedule(
+          schedule, absl::ToUnixSeconds(next_due)));
   *response = schedule;
   return absl::OkStatus();
 }
@@ -1001,14 +1869,20 @@ absl::Status ListBackupSchedules(
   if (page_size <= 0 || page_size > kMaximumPageSize) {
     page_size = kMaximumPageSize;
   }
+  std::string cursor;
+  if (!request->page_token().empty()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        cursor, ParseBackupSchedulePageToken(request->page_token(),
+                                             request->parent()));
+  }
   for (const auto& schedule :
        ctx->env()->backup_catalog()->ListBackupSchedules(request->parent())) {
-    if (!request->page_token().empty() &&
-        schedule.name() < request->page_token()) {
+    if (!cursor.empty() && schedule.name() < cursor) {
       continue;
     }
     if (response->backup_schedules_size() >= page_size) {
-      response->set_next_page_token(schedule.name());
+      response->set_next_page_token(
+          BackupSchedulePageToken(request->parent(), schedule.name()));
       break;
     }
     *response->add_backup_schedules() = schedule;
@@ -1036,9 +1910,17 @@ absl::Status UpdateBackupSchedule(
                              ctx->env()->backup_catalog()->GetBackupSchedule(
                                  request->backup_schedule().name()));
   const database_api::BackupSchedule& requested = request->backup_schedule();
+  bool spec_changed = false;
   for (const std::string& path : request->update_mask().paths()) {
     if (path == "spec" && requested.has_spec()) {
       *current.mutable_spec() = requested.spec();
+      spec_changed = true;
+    } else if ((path == "spec.cron_spec" ||
+                path == "spec.cron_spec.text") &&
+               requested.has_spec() && requested.spec().has_cron_spec()) {
+      *current.mutable_spec()->mutable_cron_spec() =
+          requested.spec().cron_spec();
+      spec_changed = true;
     } else if (path == "retention_duration" &&
                requested.has_retention_duration()) {
       *current.mutable_retention_duration() = requested.retention_duration();
@@ -1056,10 +1938,19 @@ absl::Status UpdateBackupSchedule(
           absl::StrCat("Unsupported backup schedule update field: ", path));
     }
   }
+  GOOGLESQL_RETURN_IF_ERROR(ValidateBackupSchedule(&current));
+  const absl::Time now = ctx->env()->clock()->Now();
+  std::optional<int64_t> next_due;
+  if (spec_changed) {
+    GOOGLESQL_ASSIGN_OR_RETURN(const ParsedCron cron, ParseBackupCron(current));
+    GOOGLESQL_ASSIGN_OR_RETURN(const absl::Time due,
+                               NextBackupDue(cron, now));
+    next_due = absl::ToUnixSeconds(due);
+  }
   GOOGLESQL_ASSIGN_OR_RETURN(*current.mutable_update_time(),
-                             TimestampToProto(ctx->env()->clock()->Now()));
+                             TimestampToProto(now));
   GOOGLESQL_RETURN_IF_ERROR(
-      ctx->env()->backup_catalog()->UpdateBackupSchedule(current));
+      ctx->env()->backup_catalog()->UpdateBackupSchedule(current, next_due));
   *response = current;
   return absl::OkStatus();
 }

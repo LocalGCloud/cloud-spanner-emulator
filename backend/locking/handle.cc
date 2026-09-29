@@ -38,8 +38,11 @@ LockHandle::LockHandle(LockManager* manager, TransactionID tid,
       priority_(priority) {}
 
 LockHandle::~LockHandle() {
-  absl::MutexLock lock(mu_);
-  try_abort_transaction_fn_ = nullptr;
+  {
+    absl::MutexLock lock(mu_);
+    try_abort_transaction_fn_ = nullptr;
+  }
+  manager_->UnlockAll(this);
 }
 
 void LockHandle::EnqueueLock(const LockRequest& request) {
@@ -48,11 +51,7 @@ void LockHandle::EnqueueLock(const LockRequest& request) {
 
 void LockHandle::UnlockAll() { manager_->UnlockAll(this); }
 
-bool LockHandle::IsBlocked() {
-  // The current implementation never blocks.
-  absl::MutexLock lock(mu_);
-  return false;
-}
+bool LockHandle::IsBlocked() { return manager_->IsWaiting(this); }
 
 bool LockHandle::IsAborted() {
   absl::MutexLock lock(mu_);
@@ -60,9 +59,18 @@ bool LockHandle::IsAborted() {
 }
 
 absl::Status LockHandle::Wait() {
-  // The current implementation never blocks.
+  manager_->WaitForLocks(this);
+  return status();
+}
+
+absl::Status LockHandle::status() {
   absl::MutexLock lock(mu_);
   return status_;
+}
+
+bool LockHandle::IsAbortable() {
+  absl::MutexLock lock(mu_);
+  return try_abort_transaction_fn_ != nullptr;
 }
 
 void LockHandle::Abort(const absl::Status& status) {
@@ -85,6 +93,15 @@ absl::Status LockHandle::TryAbortTransaction(const absl::Status& status) {
   return error::CouldNotObtainLockHandleMutex(tid_);
 }
 
+bool LockHandle::ForceAbortTransaction(const absl::Status& status) {
+  absl::MutexLock lock(mu_);
+  if (try_abort_transaction_fn_ == nullptr || !status_.ok()) {
+    return false;
+  }
+  status_ = status;
+  return true;
+}
+
 void LockHandle::Reset() {
   absl::MutexLock lock(mu_);
   status_ = absl::OkStatus();
@@ -100,6 +117,20 @@ absl::Status LockHandle::MarkCommitted() {
 
 void LockHandle::WaitForSafeRead(absl::Time read_time) {
   manager_->WaitForSafeRead(read_time);
+}
+
+absl::Time LockHandle::AcquireSnapshot() {
+  return manager_->AcquireSnapshot(this);
+}
+
+void LockHandle::RecordCommittedWrites(absl::Span<const CommittedRow> rows) {
+  manager_->RecordCommittedWrites(this, rows);
+}
+
+bool LockHandle::HasCommittedWriteAfter(absl::Time snapshot,
+                                        absl::Span<const CommittedRow> rows,
+                                        absl::Span<const LockedRange> ranges) {
+  return manager_->HasCommittedWriteAfter(snapshot, rows, ranges);
 }
 
 }  // namespace backend

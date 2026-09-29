@@ -33,9 +33,11 @@
 #include "backend/schema/catalog/locality_group.h"
 #include "backend/schema/catalog/model.h"
 #include "backend/schema/catalog/named_schema.h"
+#include "backend/schema/catalog/grants.h"
 #include "backend/schema/catalog/placement.h"
 #include "backend/schema/catalog/property_graph.h"
 #include "backend/schema/catalog/proto_bundle.h"
+#include "backend/schema/catalog/role.h"
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/catalog/table.h"
 #include "backend/schema/catalog/udf.h"
@@ -77,6 +79,11 @@ class Schema {
   // Dumps the schema to ddl::DDLStatementList.
   ddl::DDLStatementList Dump() const;
 
+  // Dumps the granted privileges and role memberships as GRANT and REVOKE
+  // statements. They must follow the statements that create the objects they
+  // refer to.
+  ddl::DDLStatementList DumpGrants() const;
+
   // Finds a view by its name. Returns a const pointer of the view, or
   // nullptr if the view is not found. Name comparison is case-insensitive.
   const View* FindView(const std::string& view_name) const;
@@ -116,6 +123,14 @@ class Schema {
 
   // Dumps the index to ddl::CreateIndex.
   void DumpIndex(const Index* index, ddl::CreateIndex& create_index) const;
+
+  // Dumps the search index to ddl::CreateSearchIndex.
+  void DumpSearchIndex(const Index* index,
+                       ddl::CreateSearchIndex& create_search_index) const;
+
+  // Dumps the vector index to ddl::CreateVectorIndex.
+  void DumpVectorIndex(const Index* index,
+                       ddl::CreateVectorIndex& create_vector_index) const;
 
   // Finds all indexes with the given name.
   std::vector<const Index*> FindIndexesUnderName(
@@ -160,6 +175,9 @@ class Schema {
   // case-insensitive.
   const LocalityGroup* FindLocalityGroup(
       const std::string& locality_group_name) const;
+
+  // Database roles have their own case-insensitive namespace.
+  const Role* FindRole(const std::string& role_name) const;
 
   // List all the user-visible tables in this schema.
   absl::Span<const Table* const> tables() const { return tables_; }
@@ -208,6 +226,12 @@ class Schema {
   absl::Span<const LocalityGroup* const> locality_groups() const {
     return locality_groups_;
   }
+
+  absl::Span<const Role* const> roles() const { return roles_; }
+
+  // Returns the privileges and role memberships granted in this schema, or
+  // nullptr if nothing was ever granted.
+  const Grants* grants() const { return grants_; }
 
   // Returns the default time zone for this schema.
   std::string default_time_zone() const {
@@ -370,6 +394,11 @@ class Schema {
   // A map that owns all the property graphs. Key is the name of the property
   // graph. Hash and comparison on the keys are case-insensitive.
   CaseInsensitiveStringMap<const PropertyGraph*> property_graphs_map_;
+
+  std::vector<const Role*> roles_;
+  CaseInsensitiveStringMap<const Role*> roles_map_;
+
+  const Grants* grants_ = nullptr;
 
   // Database options in the DDL.
   const DatabaseOptions* database_options_ = nullptr;

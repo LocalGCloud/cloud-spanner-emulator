@@ -16,6 +16,8 @@
 
 #include "frontend/entities/database.h"
 
+#include <algorithm>
+
 #include "absl/status/status.h"
 #include "frontend/converters/time.h"
 #include "google/spanner/admin/database/v1/spanner_database_admin.pb.h"
@@ -27,12 +29,27 @@ namespace emulator {
 namespace frontend {
 
 absl::Status Database::ToProto(admin::database::v1::Database* database) {
+  const backend::Schema* schema = backend()->GetLatestSchema();
   database->set_name(database_uri_);
   database->set_state(admin::database::v1::Database::READY);
   GOOGLESQL_ASSIGN_OR_RETURN(*database->mutable_create_time(),
                              TimestampToProto(create_time_));
   database->set_database_dialect(backend()->dialect());
   database->set_enable_drop_protection(enable_drop_protection());
+  database->set_version_retention_period(schema->version_retention_period());
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      *database->mutable_earliest_version_time(),
+      TimestampToProto(std::max(create_time_, backend()->VersionRetentionFloor())));
+  database->clear_default_leader();
+  if (schema->options() != nullptr) {
+    for (const auto& option : schema->options()->options()) {
+      if ((option.option_name() == "default_leader" ||
+           option.option_name() == "spanner.internal.cloud_default_leader") &&
+          option.has_string_value()) {
+        database->set_default_leader(option.string_value());
+      }
+    }
+  }
   return absl::OkStatus();
 }
 

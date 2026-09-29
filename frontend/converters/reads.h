@@ -28,6 +28,7 @@
 #include "backend/common/ids.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/transaction/options.h"
+#include "frontend/proto/resume_token.pb.h"
 #include "absl/status/status.h"
 
 namespace google {
@@ -61,6 +62,15 @@ absl::Status RowCursorToResultSetProto(
 // multiple partial result sets.
 absl::StatusOr<std::vector<google::spanner::v1::PartialResultSet>>
 RowCursorToPartialResultSetProtos(backend::RowCursor* cursor, int limit);
+
+// Converts a RowCursor to PartialResultSet protos like the function above, for
+// a stream that starts at the row position of `start`: after the first
+// `start.rows().row_count()` rows, which must match the fingerprint in
+// `start`. `limit` includes those rows. Each PartialResultSet that ends on a
+// row boundary gets a resume token: `start` advanced past its rows.
+absl::StatusOr<std::vector<google::spanner::v1::PartialResultSet>>
+RowCursorToPartialResultSetProtos(backend::RowCursor* cursor, int limit,
+                                  ResumeToken start);
 
 }  // namespace frontend
 }  // namespace emulator

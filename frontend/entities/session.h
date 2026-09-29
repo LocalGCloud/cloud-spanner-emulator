@@ -70,11 +70,13 @@ class Session {
   Session(const std::string& session_uri, const Labels& labels,
           const bool multiplexed, const absl::Time create_time,
           std::shared_ptr<Database> database,
-          MultiplexedSessionTransactionManager* mux_txn_manager)
+          MultiplexedSessionTransactionManager* mux_txn_manager,
+          const std::string& creator_role = "")
       : session_uri_(session_uri),
         labels_(labels),
         create_time_(create_time),
         multiplexed_(multiplexed),
+        creator_role_(creator_role),
         database_(database),
         mux_txn_manager_(mux_txn_manager) {}
 
@@ -88,6 +90,9 @@ class Session {
   absl::Time create_time() const { return create_time_; }
 
   const bool multiplexed() const { return multiplexed_; }
+
+  // The database role of the session, or empty if it has none.
+  const std::string& creator_role() const { return creator_role_; }
 
   // Return the time this session was last used.
   absl::Time approximate_last_use_time() const ABSL_LOCKS_EXCLUDED(mu_) {
@@ -156,6 +161,9 @@ class Session {
 
   // Whether this session is multiplexed.
   const bool multiplexed_;
+
+  // The fine-grained access control role that the session's operations use.
+  const std::string creator_role_;
 
   // The database to which this session is attached.
   std::shared_ptr<Database> database_;

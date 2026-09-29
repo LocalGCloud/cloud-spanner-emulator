@@ -669,13 +669,40 @@ void target_type():
   | <CHANGE> <STREAM> #change_stream
   | <VIEW> #view
   | <SEQUENCE> #sequence
-  | <LOCALITY> <GROUP> #locality_group
+  | <MODEL> #model
+}
+
+// A schema name, where DEFAULT is the default schema.
+void schema_names():
+{}
+{
+  ( <DEFAULTT> #default_schema | identifier() #identifier )
+  ( "," ( <DEFAULTT> #default_schema | identifier() #identifier ) )*
+}
+
+// ALL {TABLES | VIEWS | SEQUENCES | CHANGE STREAMS} IN SCHEMA schema_names.
+// The object kinds are not keywords, so they are checked by the visitor.
+void all_in_schema_target():
+{}
+{
+  <ALL>
+  ( LOOKAHEAD(2) <CHANGE> identifier() #change_streams
+    | identifier() #object_kind )
+  <IN> <SCHEMA> schema_names()
+}
+
+void schema_target():
+{}
+{
+  <SCHEMA> schema_names()
 }
 
 void privilege_target():
 {}
 {
-  target_type() qualified_identifier_list()
+    all_in_schema_target()
+  | schema_target()
+  | target_type() qualified_identifier_list()
 }
 
 void grantees() :
@@ -924,6 +951,7 @@ void alter_statement() #void :
     | alter_locality_group_statement()
     | alter_placement_statement()
     | alter_vector_index_statement()
+    | alter_search_index_statement()
   )
 }
 
@@ -1027,6 +1055,17 @@ void alter_vector_index_statement() :
   )
 }
 
+
+void alter_search_index_statement() :
+{}
+{
+  <SEARCH> <INDEX> (qualified_identifier() #name)
+  (   LOOKAHEAD(2) <ADD> <STORED> <COLUMN> identifier() #add_stored_column_name
+    | LOOKAHEAD(2) <DROP> <STORED> <COLUMN> identifier() #drop_stored_column_name
+    | <ADD> <COLUMN> identifier() #add_column_name
+    | <DROP> <COLUMN> identifier() #drop_column_name
+  )
+}
 
 void analyze_statement() :
 {}

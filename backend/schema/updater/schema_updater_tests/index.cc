@@ -1286,6 +1286,109 @@ TEST_P(SchemaUpdaterTest, BasicCreateDropSearchIndex) {
   EXPECT_EQ(new_schema->FindIndex("Idx"), nullptr);
 }
 
+TEST_P(SchemaUpdaterTest, AlterSearchIndexColumns) {
+  std::unique_ptr<const Schema> schema;
+  if (GetParam() == POSTGRESQL) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema,
+                         CreateSchema({R"sql(
+        CREATE TABLE "T" (
+          col1 bigint NOT NULL,
+          col2 varchar,
+          col3 spanner.tokenlist GENERATED ALWAYS AS (
+            spanner.tokenize_fulltext(col2)) STORED HIDDEN,
+          col4 spanner.tokenlist GENERATED ALWAYS AS (
+            spanner.tokenize_substring(col2)) STORED HIDDEN,
+          col5 bigint,
+          PRIMARY KEY (col1)
+        )
+        )sql",
+                                       R"sql(
+          CREATE SEARCH INDEX "Idx" ON "T"(col3)
+        )sql"},
+                                      /*proto_descriptor_bytes=*/"",
+                                      /*dialect=*/POSTGRESQL,
+                                      /*use_gsql_to_pg_translation=*/false));
+  } else {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema, CreateSchema({
+                                     R"sql(
+        CREATE TABLE T (
+          col1 INT64 NOT NULL,
+          col2 STRING(MAX),
+          col3 TOKENLIST AS(TOKENIZE_FULLTEXT(col2)) STORED HIDDEN,
+          col4 TOKENLIST AS(TOKENIZE_SUBSTRING(col2)) STORED HIDDEN,
+          col5 INT64
+        ) PRIMARY KEY (col1)
+      )sql",
+                                     R"sql(
+        CREATE SEARCH INDEX Idx ON T(col3)
+      )sql"}));
+  }
+
+  // Add a TOKENLIST key column and a stored column.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      schema, UpdateSchema(schema.get(),
+                           {"ALTER SEARCH INDEX Idx ADD COLUMN col4",
+                            "ALTER SEARCH INDEX Idx ADD STORED COLUMN col5"}));
+  const Index* index = schema->FindIndex("Idx");
+  ASSERT_NE(index, nullptr);
+  EXPECT_TRUE(index->is_search_index());
+  ASSERT_EQ(index->key_columns().size(), 2);
+  EXPECT_EQ(index->key_columns()[1]->column()->Name(), "col4");
+  ASSERT_EQ(index->stored_columns().size(), 1);
+  EXPECT_EQ(index->stored_columns()[0]->Name(), "col5");
+
+  // Drop them again.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      schema, UpdateSchema(schema.get(),
+                           {"ALTER SEARCH INDEX Idx DROP STORED COLUMN col5",
+                            "ALTER SEARCH INDEX Idx DROP COLUMN col4"}));
+  index = schema->FindIndex("Idx");
+  ASSERT_NE(index, nullptr);
+  ASSERT_EQ(index->key_columns().size(), 1);
+  EXPECT_EQ(index->key_columns()[0]->column()->Name(), "col3");
+  EXPECT_TRUE(index->stored_columns().empty());
+
+  EXPECT_THAT(UpdateSchema(schema.get(), {"ALTER SEARCH INDEX Idx ADD COLUMN "
+                                          "col3"}),
+              StatusIs(error::ColumnInIndexAlreadyExists("Idx", "col3")));
+  EXPECT_THAT(
+      UpdateSchema(schema.get(), {"ALTER SEARCH INDEX Idx DROP COLUMN col3"}),
+      StatusIs(error::SearchIndexRequiresTokenlistColumn("Idx")));
+  EXPECT_THAT(
+      UpdateSchema(schema.get(), {"ALTER SEARCH INDEX Missing ADD COLUMN col4"}),
+      StatusIs(error::IndexNotFound("Missing")));
+
+  // Changing both kinds of columns in one batch keeps the index usable by
+  // later statements.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      schema, UpdateSchema(schema.get(),
+                           {"ALTER SEARCH INDEX Idx ADD COLUMN col4",
+                            "ALTER SEARCH INDEX Idx ADD STORED COLUMN col5",
+                            "ALTER SEARCH INDEX Idx DROP COLUMN col3"}));
+  index = schema->FindIndex("Idx");
+  ASSERT_NE(index, nullptr);
+  ASSERT_EQ(index->key_columns().size(), 1);
+  EXPECT_EQ(index->key_columns()[0]->column()->Name(), "col4");
+  ASSERT_EQ(index->stored_columns().size(), 1);
+  EXPECT_EQ(index->stored_columns()[0]->Name(), "col5");
+
+  if (GetParam() == POSTGRESQL) {
+    // PostgreSQL spells stored columns as INCLUDE columns.
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        schema, UpdateSchema(schema.get(),
+                             {"ALTER SEARCH INDEX \"Idx\" DROP INCLUDE COLUMN "
+                              "col5",
+                              "ALTER SEARCH INDEX \"Idx\" ADD COLUMN col3"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false));
+    index = schema->FindIndex("Idx");
+    ASSERT_NE(index, nullptr);
+    EXPECT_EQ(index->key_columns().size(), 2);
+    EXPECT_TRUE(index->stored_columns().empty());
+  }
+}
+
 TEST_P(SchemaUpdaterTest, ComplexCreateSearchIndex) {
   std::unique_ptr<const Schema> schema;
   if (GetParam() == POSTGRESQL) {

@@ -14,6 +14,8 @@
 // limitations under the License.
 //
 
+#include <cstdint>
+#include <set>
 #include <string>
 
 #include "google/protobuf/empty.pb.h"
@@ -24,9 +26,10 @@
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/status/status.h"
+#include "googlesql/base/status_macros.h"
 #include "frontend/common/protos.h"
 #include "frontend/common/uris.h"
-#include "tests/common/proto_matchers.h"
 #include "tests/common/test_env.h"
 
 namespace google {
@@ -163,6 +166,111 @@ TEST_F(SessionApiTest, CanBeginAndUseMultipleTransactionsInSameSession) {
   *read_request.mutable_transaction() = selector;
   EXPECT_THAT(Read(read_request, &read_response),
               StatusIs(absl::StatusCode::kFailedPrecondition));
+}
+
+TEST_F(SessionApiTest, SessionsUseExistingDatabaseRoles) {
+  GOOGLESQL_ASSERT_OK(UpdateDatabaseDdl(test_database_uri_, {"CREATE ROLE reader"}));
+
+  spanner_api::CreateSessionRequest request;
+  request.set_database(test_database_uri_);
+  request.mutable_session()->set_creator_role("reader");
+  GOOGLESQL_ASSERT_OK(test_env()->spanner_client()->CreateSession(&context_, request,
+                                                        &response_));
+  EXPECT_EQ(response_.creator_role(), "reader");
+
+  request.mutable_session()->set_creator_role("spanner_info_reader");
+  grpc::ClientContext system_role_context;
+  GOOGLESQL_EXPECT_OK(test_env()->spanner_client()->CreateSession(
+      &system_role_context, request, &response_));
+
+  request.mutable_session()->set_creator_role("nobody");
+  grpc::ClientContext unknown_role_context;
+  grpc::Status status = test_env()->spanner_client()->CreateSession(
+      &unknown_role_context, request, &response_);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::PERMISSION_DENIED);
+  EXPECT_EQ(status.error_message(), "Role not found: nobody.");
+
+  spanner_api::BatchCreateSessionsRequest batch_request;
+  batch_request.set_database(test_database_uri_);
+  batch_request.set_session_count(1);
+  batch_request.mutable_session_template()->set_creator_role("nobody");
+  spanner_api::BatchCreateSessionsResponse batch_response;
+  grpc::ClientContext batch_context;
+  status = test_env()->spanner_client()->BatchCreateSessions(
+      &batch_context, batch_request, &batch_response);
+  EXPECT_EQ(status.error_code(), grpc::StatusCode::PERMISSION_DENIED);
+}
+
+TEST_F(SessionApiTest, ListSessionsFiltersByLabels) {
+  const auto create = [this](const std::string& env) -> std::string {
+    spanner_api::CreateSessionRequest request;
+    request.set_database(test_database_uri_);
+    if (!env.empty()) {
+      (*request.mutable_session()->mutable_labels())["env"] = env;
+    }
+    spanner_api::Session session;
+    grpc::ClientContext context;
+    EXPECT_TRUE(test_env()
+                    ->spanner_client()
+                    ->CreateSession(&context, request, &session)
+                    .ok());
+    return session.name();
+  };
+  const std::string dev = create("dev");
+  const std::string dev2 = create("dev2");
+  const std::string prod = create("prod");
+  const std::string unlabeled = create("");
+
+  const auto list = [this](const std::string& filter, int32_t page_size,
+                           const std::string& page_token,
+                           std::set<std::string>* names,
+                           std::string* next_page_token) -> absl::Status {
+    spanner_api::ListSessionsRequest request;
+    request.set_database(test_database_uri_);
+    request.set_filter(filter);
+    request.set_page_size(page_size);
+    request.set_page_token(page_token);
+    spanner_api::ListSessionsResponse response;
+    grpc::ClientContext context;
+    GOOGLESQL_RETURN_IF_ERROR(test_env()->spanner_client()->ListSessions(
+        &context, request, &response));
+    names->clear();
+    for (const auto& session : response.sessions()) {
+      names->insert(session.name());
+    }
+    *next_page_token = response.next_page_token();
+    return absl::OkStatus();
+  };
+  std::set<std::string> names;
+  std::string next_page_token;
+  GOOGLESQL_ASSERT_OK(list("labels.env:*", 0, "", &names, &next_page_token));
+  EXPECT_EQ(names, (std::set<std::string>{dev, dev2, prod}));
+  GOOGLESQL_ASSERT_OK(list("LABELS.ENV:DEV", 0, "", &names, &next_page_token));
+  EXPECT_EQ(names, (std::set<std::string>{dev, dev2}));
+  GOOGLESQL_ASSERT_OK(list("labels.env = dev OR labels.env = prod", 0, "",
+                           &names, &next_page_token));
+  EXPECT_EQ(names, (std::set<std::string>{dev, prod}));
+  GOOGLESQL_ASSERT_OK(
+      list("NOT labels.env:*", 0, "", &names, &next_page_token));
+  EXPECT_EQ(names, (std::set<std::string>{unlabeled}));
+
+  // Filtering happens before pagination, and the token keeps the filter.
+  std::set<std::string> all;
+  std::string page_token;
+  do {
+    GOOGLESQL_ASSERT_OK(
+        list("labels.env:dev", 1, page_token, &names, &next_page_token));
+    ASSERT_EQ(names.size(), 1);
+    all.insert(names.begin(), names.end());
+    page_token = next_page_token;
+  } while (!page_token.empty());
+  EXPECT_EQ(all, (std::set<std::string>{dev, dev2}));
+  GOOGLESQL_ASSERT_OK(list("labels.env:dev", 1, "", &names, &next_page_token));
+  EXPECT_THAT(list("labels.env:prod", 1, next_page_token, &names, &page_token),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_THAT(list("name:x", 0, "", &names, &next_page_token),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

@@ -31,6 +31,24 @@ LockRequest::LockRequest(LockMode mode, TableID table_id,
       key_range_(key_range),
       column_ids_(column_ids) {}
 
+bool LockRequest::ConflictsWith(const LockRequest& other) const {
+  if (mode_ == LockMode::kShared && other.mode_ == LockMode::kShared) {
+    return false;
+  }
+  if (table_id_.empty() || other.table_id_.empty()) {
+    return true;
+  }
+  if (table_id_ != other.table_id_) {
+    return false;
+  }
+  const KeyRange range = key_range_.ToClosedOpen();
+  const KeyRange other_range = other.key_range_.ToClosedOpen();
+  return range.start_key() < range.limit_key() &&
+         other_range.start_key() < other_range.limit_key() &&
+         range.start_key() < other_range.limit_key() &&
+         other_range.start_key() < range.limit_key();
+}
+
 }  // namespace backend
 }  // namespace emulator
 }  // namespace spanner

@@ -21,6 +21,7 @@
 #include <string>
 
 #include "googlesql/public/numeric_value.h"
+#include "googlesql/public/uuid_value.h"
 #include "googlesql/public/value.h"
 #include "absl/time/time.h"
 
@@ -43,6 +44,7 @@ constexpr uint8_t kBytes = 0x06;
 constexpr uint8_t kTimestamp = 0x07;
 constexpr uint8_t kDate = 0x08;
 constexpr uint8_t kNumeric = 0x09;
+constexpr uint8_t kUuid = 0x0A;
 constexpr uint8_t kNullLast = 0xFE;
 constexpr uint8_t kInfinity = 0xFF;
 
@@ -190,6 +192,11 @@ void EncodeColumn(const googlesql::Value& value, bool is_descending,
         out->push_back(0x01);  // Positive prefix.
       }
       AppendByteStuffed(out, normalized);
+      break;
+    }
+    case googlesql::TYPE_UUID: {
+      out->push_back(kUuid);
+      value.uuid_value().value().SerializeAndAppendToBytes(out);
       break;
     }
     default: {

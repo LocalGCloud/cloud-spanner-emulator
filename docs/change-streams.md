@@ -107,17 +107,17 @@ DROP CHANGE STREAM contact_changes;
 | `retention_period` | `<N>s`, `<N>m`, `<N>h`, or `<N>d`, from 24 hours to 7 days | `1d` | Values outside the range fail with `Invalid retention_period`. |
 | `value_capture_type` | `OLD_AND_NEW_VALUES`, `NEW_VALUES`, `NEW_ROW`, `NEW_ROW_AND_OLD_VALUES` | `OLD_AND_NEW_VALUES` | See [Value capture types](#value-capture-types). |
 | `exclude_insert`, `exclude_update`, `exclude_delete` | `true`, `false` | `false` | Skip that kind of change. |
-| `exclude_ttl_deletes` | `true`, `false` | `false` | Accepted and shown in the DDL, but has no effect: the emulator never runs TTL deletions. |
+| `exclude_ttl_deletes` | `true`, `false` | `false` | When `true`, rows deleted by row deletion policies (TTL) aren't recorded. The emulator's TTL sweeper runs every `--row_deletion_policy_sweep_interval_seconds` (default 60). |
 | `allow_txn_exclusion` | `true`, `false` | `false` | When `true`, this change stream skips transactions that set `exclude_txn_from_change_streams`. Other change streams still record them. |
 | `partition_mode` | `IMMUTABLE_KEY_RANGE`, `MUTABLE_KEY_RANGE` | `IMMUTABLE_KEY_RANGE` | Can't be changed after creation. See [Mutable key range change streams](#mutable-key-range-change-streams). |
 
-Setting an option to `NULL` doesn't reset it. In GoogleSQL,
+Setting `value_capture_type` to `NULL` resets it to the default. Other options
+may retain their previous effective values. In GoogleSQL,
 `ALTER CHANGE STREAM ... SET OPTIONS (retention_period = NULL)` succeeds and
 the DDL then shows `retention_period = NULL`, but the change stream keeps its
 earlier value. `INFORMATION_SCHEMA.CHANGE_STREAM_OPTIONS` shows the value that
-applies. In PostgreSQL, `SET (option = null)` doesn't reset the option either
-(for `value_capture_type` it fails with an error); use `RESET (option)`
-instead.
+applies. PostgreSQL `SET (value_capture_type = null)` resets the capture type;
+`RESET (value_capture_type)` also selects the default.
 
 ## Read a change stream
 
@@ -173,6 +173,13 @@ the query can keep waiting. A reader must follow child tokens to keep reading.
 
 Records from different partitions aren't ordered relative to each other. Sort
 by `commit_timestamp` if you need one order.
+
+Each response carries a resume token that names the partition, the commit
+timestamp and the record's index within it (fork). If a client library
+retries a broken partition query with that token, the query skips the records
+it already returned, so records don't repeat. For `MUTABLE_KEY_RANGE`
+streams, a partition's start (`move_in`) records are sent once, from the
+first scan.
 
 A heartbeat record means the partition has no more records up to its
 `timestamp`. The emulator sends one when a partition has no records for
@@ -341,9 +348,10 @@ For a PostgreSQL database, the flow is the same with these changes:
 - **`number_of_records_in_transaction`** counts this change stream's records
   for the transaction. The last one has
   `is_last_record_in_transaction_in_partition = true`.
-- **Fixed fields.** `number_of_partitions_in_transaction` is always `1`,
-  `transaction_tag` is always empty, and `is_system_transaction` is always
-  `false`.
+- **Fixed fields.** `number_of_partitions_in_transaction` is always `1`. For
+  user transactions `transaction_tag` is empty and `is_system_transaction` is
+  `false`; deletes by row deletion policies (TTL) have
+  `transaction_tag = 'RowDeletionPolicy'` and `is_system_transaction = true`.
 - **Empty values** are `{}`, not `null`.
 - **`keys`** always holds the primary key columns.
 - **`column_types`** lists the key columns and the tracked columns that appear
@@ -383,6 +391,11 @@ A change stream created with `partition_mode = 'MUTABLE_KEY_RANGE'` returns
 records in the `google.spanner.v1.ChangeStreamRecord` proto format: data
 change, heartbeat, partition start, partition event, and partition end
 records.
+
+Besides splits and merges, the churner performs `MOVE` churns on these
+streams: the old partition ends with a `move_out` partition event and its
+child starts with a matching `move_in` event, in both dialects. A move keeps
+one child partition.
 
 - GoogleSQL: `READ_<name>` returns a `PROTO` column of that type.
 - PostgreSQL: the TVF is `spanner.read_proto_bytes_<name>` and returns
@@ -448,9 +461,10 @@ partition tokens from before the restart stay valid.
     DDL batch timestamps. A change stream from a later DDL batch in that
     metadata gets the restart time as its creation time, so you can't read
     from before the restart.
-- **No retention cleanup.** Records older than `retention_period` aren't
-  deleted. They can no longer be queried, but they stay on disk until you drop
-  the change stream or the database.
+- **Retention cleanup.** Each churn pass deletes records older than
+  `retention_period`. With `--enable_change_stream_churning=false` there are
+  no passes, so old records stay on disk (they can no longer be queried) until
+  you drop the change stream or the database.
 
 Without `--data_dir`, change streams and their records are lost when the
 emulator stops. See [Persistence](persistence.md) for the storage layout.
@@ -471,12 +485,9 @@ These views list change streams:
 |------------|--------|
 | All writes go to one partition: the active token that sorts first. | You can't test how work spreads across partitions. The other partitions return only heartbeats and child partitions records. |
 | Partitions are normally replaced on a timer (20–40 seconds), not by load. | Readers must follow child tokens often. A partition query with no end returns when its partition is replaced; churn retries can delay it. |
-| `REPLACE` on an existing row gives one `INSERT` record, not a `DELETE` and an `INSERT`. | Consumers see an `INSERT` for replaced rows. Columns that the `REPLACE` didn't set show as `null`. |
-| Records for writes to several tables in one transaction may not follow the order of the writes. | Don't rely on record order within a transaction. |
-| A DML `INSERT` writes `null` to the columns it doesn't list; production doesn't write them. | Records for rows inserted by DML can differ from production (disabled test `DISABLED_MultipleDMLVerifyDataChangeRecordContent`). |
-| `transaction_tag` is always empty, `number_of_partitions_in_transaction` is always 1, and `is_system_transaction` is always `false`. | You can't test logic that uses these fields. |
-| Resume tokens are placeholders, and the emulator ignores resume tokens in requests. | If a client library retries a broken change stream query, the query starts over and records can repeat. |
-| `exclude_ttl_deletes` has no effect, and TTL deletions never run. | You can't test TTL filtering. |
-| Setting an option to `NULL` doesn't reset it. | The old value still applies. Set an explicit value, or use `RESET` in PostgreSQL. |
+| `transaction_tag` is empty for user transactions, and `number_of_partitions_in_transaction` is always 1. TTL deletes carry `transaction_tag = 'RowDeletionPolicy'` and `is_system_transaction = true`. | You can't test logic that uses user transaction tags or multi-partition transactions. |
+| TTL deletions run every `--row_deletion_policy_sweep_interval_seconds` (default 60), not within production's roughly 72 hours. | Expired rows disappear, and their delete records appear, much sooner than in production. |
+| Setting some options to `NULL` doesn't reset them. | For example, the old `retention_period` still applies. `value_capture_type = NULL` does reset to its default. |
 | Partition replacement uses a read-write transaction that can contend with user transactions. | Conflicting transactions can abort. Retry aborted transactions, as the client libraries do. |
-| Records aren't deleted after `retention_period`. | Disk use grows with change volume. |
+| Records past `retention_period` are deleted by the partition churner, not continuously. | Deletion lags by up to one churn pass. With `--enable_change_stream_churning=false`, records are never deleted and disk use grows with change volume. |
+| A partition query's scan windows meet at a microsecond boundary, and a commit exactly on the boundary can be skipped (a pre-existing bug found by reading the code). | Rare; it needs a commit at exactly that microsecond. |

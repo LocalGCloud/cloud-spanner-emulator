@@ -747,7 +747,9 @@ absl::StatusOr<std::vector<WriteOp>> BuildMutation(
         data_change_records_in_transaction_by_change_stream,
     TransactionID transaction_id,
     absl::flat_hash_map<const ChangeStream*, ModGroup>*
-        last_mod_group_by_change_stream) {
+        last_mod_group_by_change_stream,
+    bool row_deletion_policy_txn,
+    absl::string_view transaction_tag) {
   std::vector<WriteOp> write_ops;
   // After the last user WriteOp passed into this buffer, there may be grouped
   // column types and mods by change streams that haven't been converted to
@@ -787,6 +789,13 @@ absl::StatusOr<std::vector<WriteOp>> BuildMutation(
     for (DataChangeRecord record : records) {
       record.number_of_records_in_transaction =
           number_of_records_in_transaction;
+      if (row_deletion_policy_txn) {
+        record.transaction_tag = kRowDeletionPolicyTransactionTag;
+        record.is_system_transaction = true;
+      } else if (!transaction_tag.empty()) {
+        record.transaction_tag = std::string(transaction_tag);
+        record.is_system_transaction = false;
+      }
       GOOGLESQL_ASSIGN_OR_RETURN(WriteOp write_op, ConvertDataChangeRecordToWriteOp(
                                              change_stream, record, columns));
       write_ops.push_back(write_op);
@@ -798,7 +807,8 @@ absl::StatusOr<std::vector<WriteOp>> BuildMutation(
 absl::StatusOr<std::vector<WriteOp>> BuildChangeStreamWriteOps(
     const Schema* schema, std::vector<WriteOp> buffered_write_ops,
     ReadOnlyStore* store, TransactionID transaction_id,
-    bool exclude_txn_from_change_streams) {
+    bool exclude_txn_from_change_streams, bool row_deletion_policy_txn,
+    absl::string_view transaction_tag) {
   // Map for change streams and their partition tokens within the transaction.
   absl::flat_hash_map<const ChangeStream*, googlesql::Value>
       change_stream_with_partition_token;
@@ -821,6 +831,10 @@ absl::StatusOr<std::vector<WriteOp>> BuildChangeStreamWriteOps(
           change_stream->allow_txn_exclusion().value_or(false)) {
         continue;
       }
+      if (row_deletion_policy_txn &&
+          change_stream->exclude_ttl_deletes().value_or(false)) {
+        continue;
+      }
       if (!change_stream_with_partition_token.contains(change_stream)) {
         GOOGLESQL_ASSIGN_OR_RETURN(
             googlesql::Value partition_token,
@@ -837,7 +851,8 @@ absl::StatusOr<std::vector<WriteOp>> BuildChangeStreamWriteOps(
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::vector<WriteOp> write_ops,
       BuildMutation(&data_change_records_in_transaction_by_change_stream,
-                    transaction_id, &last_mod_group_by_change_stream));
+                    transaction_id, &last_mod_group_by_change_stream,
+                    row_deletion_policy_txn, transaction_tag));
   return write_ops;
 }
 

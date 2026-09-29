@@ -98,21 +98,34 @@ absl::Status LogTableMod(
         last_mod_group_by_change_stream,
     ReadOnlyStore* store);
 
+// Transaction tag of the data change records written by the system
+// transactions that delete rows expired by a row deletion policy (TTL).
+inline constexpr char kRowDeletionPolicyTransactionTag[] = "RowDeletionPolicy";
+
 // Build DataChangeRecords with ModGroups, set the
 // number_of_records_in_transaction field of DataChangeRecords, and then convert
-// DataChangeRecords to write_ops for change_stream_data_table.
+// DataChangeRecords to write_ops for change_stream_data_table. When
+// `row_deletion_policy_txn` is true, the records are tagged as written by the
+// row deletion policy system transaction.
 absl::StatusOr<std::vector<WriteOp>> BuildMutation(
     absl::flat_hash_map<const ChangeStream*, std::vector<DataChangeRecord>>*
         data_change_records_in_transaction_by_change_stream,
     TransactionID transaction_id,
     absl::flat_hash_map<const ChangeStream*, ModGroup>*
-        last_mod_group_by_change_stream);
+        last_mod_group_by_change_stream,
+    bool row_deletion_policy_txn = false,
+    absl::string_view transaction_tag = "");
 
-// Build change stream write_ops.
+// Build change stream write_ops. When `row_deletion_policy_txn` is true, the
+// buffered write ops are row deletion policy (TTL) deletes: change streams with
+// `exclude_ttl_deletes` set to true skip them, and the records of the other
+// change streams are tagged as written by a system transaction.
 absl::StatusOr<std::vector<WriteOp>> BuildChangeStreamWriteOps(
     const Schema* schema, std::vector<WriteOp> buffered_write_ops,
     ReadOnlyStore* store, TransactionID transaction_id,
-    bool exclude_txn_from_change_streams);
+    bool exclude_txn_from_change_streams,
+    bool row_deletion_policy_txn = false,
+    absl::string_view transaction_tag = "");
 }  // namespace backend
 }  // namespace emulator
 }  // namespace spanner

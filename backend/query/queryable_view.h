@@ -42,8 +42,13 @@ namespace backend {
 class QueryEvaluator {
  public:
   virtual ~QueryEvaluator() = default;
+  // Evaluates `query`. With `definer_rights`, the query of a SQL SECURITY
+  // DEFINER view, the database role of the caller is not checked.
   virtual absl::StatusOr<std::unique_ptr<RowCursor>> Evaluate(
-      const std::string& query) = 0;
+      const std::string& query, bool definer_rights) = 0;
+  // Analyzes `query` without evaluating it and checks that the database role
+  // of the caller holds the privileges that it needs.
+  virtual absl::Status CheckPrivileges(const std::string& query) = 0;
 };
 
 // A wrapper over View class which implements the googlesql::Table interface.
@@ -74,12 +79,20 @@ class QueryableView : public googlesql::Table {
 
   const backend::View* wrapped_view() const { return wrapped_view_; }
 
+  // Checks that the database role of the caller holds the privileges that the
+  // query of a SQL SECURITY INVOKER view needs. The query of a DEFINER view
+  // runs with the privileges of the view's definer and is not checked.
+  absl::Status CheckInvokerPrivileges() const;
+
   // Override CreateEvaluatorTableIterator.
   absl::StatusOr<std::unique_ptr<googlesql::EvaluatorTableIterator>>
   CreateEvaluatorTableIterator(
       absl::Span<const int> column_idxs) const override;
 
  private:
+  // Returns the query that defines the view, as the user wrote it.
+  std::string ViewBody() const;
+
   // The underlying View object which backs the QueryableView.
   const backend::View* wrapped_view_;
 

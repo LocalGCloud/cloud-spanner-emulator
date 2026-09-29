@@ -4,6 +4,380 @@ Changes in this fork (`jay-spanner-extended`), newest first. Upstream emulator
 releases are merged separately; the last one merged is the 2026-08-03 import.
 Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
+## [2026-09-28] Docker Packaging & Image Test Qualification
+
+Full qualification of the packaged Docker image `spanner-emulator-extended:local`
+across client SDKs, persistence volume restarts, directory locking, flag
+forwarding, and feature spot checks, plus build caching optimizations. Evidence:
+`tests/image_verification_test.py` and `tests/client_matrix/` passed 100%.
+
+### Added
+- Automated Docker image qualification suite `tests/image_verification_test.py`:
+  - Persistent volume restart test covering GoogleSQL and PostgreSQL databases:
+    database roles and privilege enforcement (`creator_role`), DEFINER views,
+    database options (`versionRetentionPeriod = 2h`), TTL policies (`ADD ROW DELETION POLICY`
+    and `TTL INTERVAL`), sequences (`BIT_REVERSED_POSITIVE`), unique secondary
+    indexes, point-in-time backup restore (`version_time`), split points
+    (`AddSplitPoints`), and `SPANNER_SYS` query statistics across container restarts.
+  - Data directory lock test: verifies that a second container mounting an active
+    `--data_dir` volume immediately exits with code 1 and lock acquisition error.
+  - Flag forwarding verification: confirms `--row_deletion_policy_sweep_interval_seconds=5`
+    (expired rows swept within 5s) and `--spanner_sys_expose_open_interval=true`
+    (open-interval statistics visible in `QUERY_STATS_TOP_MINUTE`).
+  - Feature spot checks: verifies `REPEATABLE_READ` snapshot conflict aborts (409),
+    wound-wait lock wait and commit, `PLAN` and `PROFILE` query plans (16-node trees
+    with execution statistics), GQL `CALL PageRank(...)` scores, full-text Unicode
+    search, and PostgreSQL ScaNN index creation with `spanner.approx_cosine_distance`.
+- Build caching enhancements in `build.sh`:
+  - Build context transfer reduced by 99.2% (from 324 MB to 2.65 MB) via `.dockerignore`.
+  - Offline repository cache auto-skips redundant host `bazel fetch` when
+    `bazel-distdir/content_addressable` is already populated.
+  - Local image build time cut to 410s (~6.8 minutes) via BuildKit cache mounts and
+    Bazel disk cache hits.
+
+### Changed
+- Client matrix (`tests/client_matrix/`) qualified 100% against the running
+  container: REST (22/22 with Google JSON error envelopes for 400, 403, 404, 409),
+  Go (16/16), Node.js (16/16), Python (16/16), Java (16/16), JDBC (18/18),
+  PGAdapter (13/13), and psql (100%).
+- Updated feature coverage inventory (`docs/feature-coverage.yaml`,
+  `docs/feature-coverage.md`) marking `clients.docker` and `emulator.packaging` as
+  fully tested.
+
+## [2026-09-28] Remaining Limitations
+
+Three batches after the developer-usability closure. Evidence: the combined
+native suite (fixed-environment Bazel) passed 164 of 164 targets on
+`bd6a9646`. The client SDK matrix and the `--data_dir` restart probe were not
+re-run for these batches, and the packaged Docker/LocalCloud image was not
+qualified. See the
+[usability worksheet](plans/2026-09-27-usability-audit-worksheet.md#remaining-limitations-round-2026-09-28).
+
+### Added
+- Graph algorithms are computed in memory instead of zero-argument stand-ins:
+  `PageRank` (including personalized), `BetweennessCentrality`,
+  `ClosenessCentrality`, `WeaklyConnectedComponents`, `ModularityClustering`,
+  `CorrelationClustering`, `LabelPropagation`, `CliqueFinding`, Jaccard,
+  cosine, common-neighbors and total-neighbors similarity, and `ShortestPath`
+  (path and cost). `GRAPH g CALL Algo(...) YIELD ...` and `CALL PER ()` over a
+  `FULL UNION ALL` input take the documented named arguments, and the
+  documented `PageRank` example returns the documented results. `EXPORT DATA`
+  with `format = 'CLOUD_SPANNER'` writes results back to Spanner tables
+  (update or upsert; rows that violate constraints are skipped); CSV, Parquet
+  and Avro validate their options and then discard the rows.
+  `ELEMENT_DEFINITION_NAME` is allowed.
+- Resume tokens for `ExecuteStreamingSql` and `StreamingRead` at row
+  boundaries (responses hold whole rows up to 1 MB; a larger row is still
+  split). A request resent with a token continues after that row in the same
+  transaction or at the original read timestamp. Mismatched or garbled tokens,
+  or a `begin` selector, return `INVALID_ARGUMENT`; results that differ on
+  re-execution (for example `RAND()`) return `FAILED_PRECONDITION`. DML has no
+  tokens.
+- Change stream resume tokens (partition token, commit timestamp and record
+  index) replace the placeholders; a resumed query skips the records already
+  returned.
+- Wound-wait lock waits: an older transaction wounds a younger holder, and a
+  younger requester waits up to the new `--lock_wait_timeout_ms` (default
+  10000; `0` restores abort-at-once, forwarded by `gateway_main`) and then
+  aborts. `--abort_current_transaction_probability` now sets how often a
+  younger transaction aborts an idle older holder instead of waiting. Schema
+  changes never wait. `SPANNER_SYS.LOCK_STATS` `LOCK_WAIT_SECONDS` and
+  `TOTAL_LOCK_WAIT_SECONDS` are measured.
+- `SPANNER_SYS` statistics persist per database with `--data_dir`
+  (`spanner_sys_statistics.json`), saved when each minute interval ends and on
+  `SIGTERM`/`SIGINT`; a crash loses at most the current minute, and dropping
+  the database deletes the file.
+- `SPANNER_SYS` tables `ROW_DELETION_POLICIES`, `USER_SPLIT_POINTS`,
+  `TABLE_SIZES_STATS_1HOUR` (a logical estimate sampled every 5 minutes and
+  averaged per hour; HDD bytes 0) and `ACTIVE_PARTITIONED_DMLS` (one partition,
+  progress 0 until done).
+- `AddSplitPoints` validates and stores split points, persisted with
+  `--data_dir` and shown in `USER_SPLIT_POINTS` until they expire. They still
+  don't change how data is stored.
+- `--data_dir` lock: `emulator_main` holds `<data_dir>/.lock` with its PID, and
+  a second process on the same directory exits at startup with a clear error.
+- Fine-grained access control: `SQL SECURITY INVOKER` view bodies are checked
+  at analysis, so `PLAN` mode is checked too; sequences used by `DEFAULT` or
+  generated columns need `SELECT` or `UPDATE` on the sequence; `pg_catalog`
+  rows are filtered by role like `INFORMATION_SCHEMA`.
+- PostgreSQL `GetDatabaseDdl` prints `CREATE SEARCH INDEX` (with `INCLUDE`,
+  `PARTITION BY`, `ORDER BY`, `WHERE` and `WITH`) and
+  `CREATE INDEX ... USING scann (...) WITH (...)` instead of plain
+  `CREATE INDEX`.
+- `CommitRequest.max_commit_delay` is validated to 0–500 ms
+  (`INVALID_ARGUMENT` otherwise); commits are still immediate.
+- `google.longrunning` `ListOperations` applies the shared AIP-160 filter;
+  unknown fields are rejected.
+- `OPTIMIZER_VERSION` and `OPTIMIZER_STATISTICS_PACKAGE` hints are accepted on
+  DML (`OPTIMIZER_VERSION` used to fail there), and
+  `OPTIMIZER_STATISTICS_PACKAGE` on queries; package names aren't validated.
+- Search: the `SCORE_NGRAMS` `array_aggregator` argument (`flatten`,
+  `max_element`; GoogleSQL only); `SCORE` `version` (no local effect) and
+  `token_category_weights` options, while `bigram_weight` and `idf_weight`
+  stay `UNIMPLEMENTED`; PostgreSQL `SCORE` options take effect; Unicode terms
+  in RQUERY; HTML content skips `script` and `style` and decodes numeric and
+  the 253 HTML 4 named entities; `short_tokens_only_for_anchors` has its
+  documented effect; `TOKENLIST_CONCAT` of mixed `remove_diacritics` settings
+  is diacritic-insensitive; French text follows the documented rules; CJK text
+  is split where the script changes (there are no CJK dictionaries, so pure
+  Chinese text isn't segmented); `DEBUG_TOKENLIST` matches both documented
+  examples (`TOKENLIST`s stored earlier lack the boundary and hashtag
+  markers); PostgreSQL `spanner.tokenize_fulltext` accepts `remove_diacritics`
+  and `spanner.tokenize_substring` exposes `support_relative_search`.
+- Change stream records older than the retention period are deleted on each
+  partition churner cycle.
+
+### Fixed
+- Data correctness: with `--data_dir`, range reads and range deletes could
+  skip rows, because the on-disk key order is length-then-content while range
+  scans assumed content order. Unique index checks then missed existing
+  values, so duplicates could commit and later break the restore; this was
+  the root cause of the earlier unique-index incident, now closed. Fixed in
+  `backend/storage/persistent_storage.cc` without a format change; a
+  concurrent stress test failed about half its runs before the fix and passed
+  30 of 30 after.
+- PostgreSQL `spanner.tokenize_substring` passed its arguments in the wrong
+  order and crashed with `relative_search_types`.
+- `MUTABLE_KEY_RANGE` change streams re-sent partition start (`move_in`)
+  records on every scan.
+
+### Known issues (pre-existing, not fixed)
+- Graph `RETURN ... ORDER BY` is ignored.
+- A change stream scan can skip a commit at the exact scan-boundary
+  microsecond.
+- No 10-second idle-transaction abort, lock waits ignore the RPC deadline, and
+  `READ_STATS` `AVG_LOCKING_DELAY_SECONDS` is still 0.
+
+### Docs
+- `docs/feature-coverage.yaml`: `graph.algorithms` is now supported (138
+  supported, 8 accepted-no-op, 9 not-applicable); `database.split_points` and
+  `googlesql.hints` stay accepted-no-op because their documented effects are
+  physical or performance-only. Notes and evidence updated for the records
+  above; the `emulator.persistence` note no longer credits the restart probe
+  with checks it didn't run.
+- Known gaps, capabilities, configuration, persistence, change stream,
+  README and testing docs updated for the changes above.
+
+## [2026-09-28] Developer-Usability Closure
+
+Closes the plan in [docs/plans/2026-09-27-usability-closure-plan.md](plans/2026-09-27-usability-closure-plan.md).
+Evidence (full native suite, public-endpoint client matrix, doc-example
+conformance, and a `--data_dir` restart probe) is in the
+[usability worksheet](plans/2026-09-27-usability-audit-worksheet.md). The
+packaged Docker/LocalCloud image was not re-qualified.
+
+### Added
+- Database roles and fine-grained access control in both dialects: `GRANT` and
+  `REVOKE` on tables (with column lists), views, change streams and their
+  read functions, sequences, models and schemas, and role membership, persisted, printed by
+  `GetDatabaseDdl`, and carried by backups. Sessions with a `creator_role` are
+  restricted on queries, DML, reads, mutations, and change stream reads;
+  `SQL SECURITY DEFINER` views (now also in PostgreSQL) need only `SELECT` on
+  the view. `ListDatabaseRoles` includes the system roles.
+- `INFORMATION_SCHEMA` `ROLES`, `ROLE_GRANTEES`, the privilege and
+  `ROLE_*_GRANTS` views, `ROUTINES`, `ROUTINE_OPTIONS`, `PARAMETERS`, and
+  `TABLE_SYNONYMS` (PostgreSQL `enabled_roles` and `applicable_roles`), with
+  documented role filtering.
+- `SPANNER_SYS` query, read, transaction, and lock statistics, table and
+  column operation statistics, `OLDEST_ACTIVE_QUERIES`, and
+  `ACTIVE_QUERIES_SUMMARY`, measured per database in both dialects. New flag
+  `--spanner_sys_expose_open_interval`, forwarded by `gateway_main`.
+- Query plans for `PLAN`, `PROFILE`, `WITH_STATS`, and `WITH_PLAN_AND_STATS`,
+  built from the query, with per-scan `PROFILE` statistics and plans on
+  streaming responses.
+- `REPEATABLE_READ` isolation with snapshot reads and commit-time write-write
+  validation.
+- Row deletion policies (TTL) delete expired rows in system transactions
+  tagged `RowDeletionPolicy`, honoring `exclude_ttl_deletes`. New flag
+  `--row_deletion_policy_sweep_interval_seconds` (default 60), forwarded by
+  `gateway_main`.
+- `CreateBackup` `version_time`; Google-default backup encryption types with
+  `encryption_info`; incremental backup schedules as metadata chains over full
+  copies.
+- `MUTABLE_KEY_RANGE` change streams emit `MOVE` partition events.
+- AIP-160 list filters for `ListInstances`, `ListSessions`, `ListBackups`, and
+  the Spanner operation lists.
+- `CommitStats.mutation_count` with `return_commit_stats`.
+- `ALTER SEARCH INDEX` column changes in both dialects; PostgreSQL vector
+  indexes (`USING ScaNN`) and `spanner.approx_*` functions.
+- Functions: `ZSTD_COMPRESS`, `ZSTD_DECOMPRESS_TO_BYTES`,
+  `ZSTD_DECOMPRESS_TO_STRING`, `SPLIT_SUBSTR`,
+  `LCASE`/`UCASE`/`ADDDATE`/`SUBDATE`, `DEBUG_TOKENLIST`; PostgreSQL
+  `generate_series`, `spanner.split_substr`, `make_interval`,
+  `pg.ilike`/`pg.not_ilike`, `!~~`, `NOT LIKE/ILIKE ... ESCAPE`, and
+  `array_agg(uuid)`.
+- `tests/client_matrix`: public-endpoint smoke programs for Python, Go, Node,
+  Java, JDBC, PGAdapter/pgJDBC/psql, and REST.
+
+### Fixed
+- REST errors now use Google's `{"error": {"code", "message", "status",
+  "details"}}` envelope with the HTTP status code.
+- DML `UPDATE` writes only the key, `SET`, and commit-timestamp/`ON UPDATE`
+  columns, so change stream records match `Update` mutations. (The docs had
+  blamed DML `INSERT`.)
+- `LOCK_SCANNED_RANGES=exclusive` takes exclusive locks; in a two-key deadlock
+  exactly one transaction aborts; a future-timestamp read past the request
+  deadline fails with `DEADLINE_EXCEEDED`.
+- `InternalUpdateGraphOperation` with an OK status or 100% progress completes
+  the operation.
+- Search regressions that crashed or returned wrong rows: `SEARCH` over a SQL
+  NULL token list returns NULL, an empty `TOKENLIST_CONCAT` matches nothing
+  instead of failing a `RET_CHECK`, and search functions over numeric, boolean,
+  or exact-match token columns are rejected at analysis time. `SNIPPET` uses
+  the documented JSON layout.
+- `TO_BASE32` and `FROM_BASE32` were registered but failed at execution (the
+  docs had called them working); they now run.
+- PostgreSQL: `jsonb || jsonb` no longer puts the right array first;
+  `->`/`->>` with a negative index return NULL, as Spanner documents;
+  `regexp_replace` replaces only the first match, not every match;
+  `pg_proc.proname` is no longer schema-qualified for functions in named
+  schemas;
+  `information_schema.locality_group_options` has `locality_group_name` and
+  shows option values instead of their type.
+- ML and remote-UDF requests no longer reuse a constant `requestId`; each call
+  carries a distinct one (tests updated).
+- A data race in the per-schema action registry: change stream churner threads
+  writing alongside user transactions could insert into its table map during
+  lookups. Lookups no longer modify the map.
+- `ListBackups` filter precedence now follows AIP-160 (OR binds tighter than
+  AND); `AND` had bound tighter.
+
+### Docs
+- `docs/feature-coverage.yaml`: every former partial, unsupported, and unknown
+  record re-evaluated (now 137 supported, 9 accepted-no-op, 9 not-applicable);
+  new not-applicable records `security.iam_enforcement`, `ops.rate_quotas`, and
+  `vector.ann_recall_latency`.
+- Added the usability audit worksheet with post-implementation results, and
+  corrected stale claims (DML `INSERT` blamed for change stream `NULL`s,
+  `TO_BASE32`, PostgreSQL `APPROX_*`, graph algorithms, the 80,000-cell
+  limit, `SPANNER_SYS`, and backup `version_time`).
+- Marked the independent audit prompt and the partial-feature support plan as
+  superseded, and noted the usability definition and new records in the
+  coverage design record.
+
+## [2026-09-27] Additional Partial-Feature Slices
+
+### Improved
+- `GetDatabase` now reports a moving `earliest_version_time`, and
+  `INFORMATION_SCHEMA.DATABASE_OPTIONS` projects stored regional options.
+  Focused native readback and metadata-replay tests pass; real process restart
+  and packaged qualification remain open.
+- A direct native REST regression now preserves a 2,052-byte invalid-mask
+  error within a 4,096-byte shared cap. The focused gateway and status tests
+  pass; packaged REST and PostgreSQL SQLSTATE over HTTP remain open.
+- Full backup schedules now run with `--data_dir`, persist each due backup and
+  next cursor together, and recover across process restart. Cron validation
+  covers 12-hour, daily, weekly, and monthly UTC runs; incremental schedules
+  and encryption remain unavailable.
+- Key/range locks allow disjoint active writes. The full lock/transaction
+  targets and 20 SELECT FOR UPDATE conformance cases passed; broad-scan and
+  direct-DML conflict coverage remains open.
+- SQL NULL tokenizer inputs return SQL NULL, and PostgreSQL floating SUM/AVG
+  empty/all-NULL and NUMERIC/JSONB/OID ARRAY_AGG cases pass focused tests.
+- Configured local ML predictions passed public gRPC tests in both dialects.
+  GoogleSQL remote UDF calls now propagate provider errorMessage and send a
+  distinct requestId for each call. Packaged LocalCloud remains unqualified.
+- `gateway_main` now forwards `--remote_functions_host_port` to the native
+  emulator. The native gateway test and binary build pass; packaged LocalCloud
+  behavior has not been qualified.
+- `CREATE ROLE` and `DROP ROLE` now persist in both dialects, and
+  `ListDatabaseRoles` lists and paginates stored roles. Durable schema replay
+  has a separate native test. Role grants, privilege views, and session
+  authorization remain open.
+- Custom instance configs now rotate opaque etags and reject stale updates or
+  deletes. Their operation list validates parent-bound page tokens and applies
+  simple filters. A native `--data_dir` restart probe verified persisted etags;
+  full Cloud filter semantics and physical placement remain open.
+- Commit and BatchWrite reject more than 80,000 distinct explicit write cells
+  with `INVALID_ARGUMENT`; generated, index, delete, and DML effects are not
+  counted yet.
+- `SEARCH` applies `language_tag` casing to WORDS and WORDS_PHRASE queries.
+  PostgreSQL change-stream `value_capture_type = NULL` resets an explicit
+  value; native PostgreSQL `RESET` is covered by focused updater tests.
+- PostgreSQL errors preserve standard rich-status details and the capped
+  message. `SetIamPolicy` checks supplied etags and rotates them on success.
+  IAM permissions are still not evaluated or enforced.
+
+## [2026-09-27] Database Drop Protection and Backup Metadata
+
+### Fixed
+- `UpdateDatabase` returns typed completion metadata and its documented drop
+  protection now prevents `DeleteInstance`, including when a persisted
+  database is unavailable. Focused handler tests and a direct gRPC restart,
+  invalid-mask, disable, and delete probe passed. `database.update` is
+  supported in the native emulator.
+- `ListBackups` applies filters, newest-first ordering, and bounded opaque
+  pagination. Backup metadata calls prune expired backups through the existing
+  deletion path; update and copy enforce expiry bounds. The full backup
+  handler target and a direct gRPC update/copy/filter/two-restart expiry probe
+  passed. `backups.metadata` is supported natively, with opportunistic
+  expiration cleanup. Packaged LocalCloud qualification remains open.
+
+## [2026-09-27] Read After Failed DML
+
+### Fixed
+- A constraint-tagged DML error now leaves the active transaction readable,
+  including earlier buffered writes. Further DML and commit replay the saved
+  error; a rejected commit invalidates the transaction. The formerly disabled
+  conformance case passed in both dialects, and 32 surrounding transaction
+  error cases passed. Batch DML and backend Write failures remain unqualified,
+  so `transactions.transaction_errors` remains partial.
+
+## [2026-09-27] Unicode Search Tokenization Slice
+
+### Improved
+- Full-text, substring, and n-gram tokenization now use ICU word boundaries,
+  Unicode code points, and optional diacritic removal. Basic HTML text and
+  token categories are represented in token lists and local scoring. Five
+  focused tokenizer/category test targets and a filtered GoogleSQL SQL
+  conformance case passed. Full HTML5/language/rquery/NULL behavior remains
+  partial; packaged LocalCloud qualification is open.
+
+## [2026-09-27] UpdateInstance Operation Metadata
+
+### Fixed
+- `UpdateInstance` now returns the declared `UpdateInstanceMetadata` in its
+  completed operation, with the updated instance and start/end timestamps.
+  Focused handler and persistence tests passed, followed by a direct gRPC
+  create/update/get test across an `emulator_main --data_dir` restart.
+  Display name, labels, and capacity fields persist; capacity remains metadata
+  only. The native `instance.update` row is supported, while packaged
+  LocalCloud qualification remains open.
+
+## [2026-09-27] Exact Vector Distance Conformance
+
+### Verified
+- Native conformance tests now cover exact cosine, Euclidean, and dot-product
+  functions for FLOAT32 and FLOAT64 vectors in both dialects, including
+  PostgreSQL's INT64 dot product, stored-vector queries, and representative
+  NULL, invalid-vector, NaN, infinity, and overflow cases. The existing
+  GoogleSQL evaluator and PostgreSQL mapping needed no code change.
+- `vector.distance_functions` is supported in the native emulator. Approximate
+  vector indexing and packaged LocalCloud qualification remain open.
+
+## [2026-09-27] UUID Public-API and Persistence Support
+
+### Added
+- Conformance tests for UUID keys and values through mutations, keyed reads,
+  typed SQL results and casts in both dialects, GoogleSQL `NEW_UUID()` and
+  `GENERATE_UUID()`, and PostgreSQL `gen_random_uuid()` with default-key
+  `INSERT ... RETURNING`. The focused conformance run passed five cases; the
+  GoogleSQL parameter of the PostgreSQL-only default case skipped as intended.
+  Converter value and read test targets also passed.
+- PostgreSQL change-stream conformance now checks UUID type metadata and key
+  and value JSON for INSERT and UPDATE. A direct gRPC test starts
+  `emulator_main` twice with one disposable `--data_dir` and confirms typed
+  PostgreSQL UUID reads after restart. UUID is supported in the native emulator;
+  packaged LocalCloud image qualification remains separate.
+
+### Fixed
+- Persistent storage now encodes UUID values and UUID array elements and uses
+  a distinct, ordered encoding for UUID keys. Before this fix, committing a
+  UUID row with `--data_dir` aborted in the value codec. Codec, database
+  close/reopen, and complete storage/database test targets pass.
+- Conformance's macOS link failed because two test helper libraries defined
+  `GetRunfilesDir`. The shared test utility now owns its sole definition.
+
 ## [2026-09-24] REST Field Masks in the URL Accept camelCase
 
 ### Fixed

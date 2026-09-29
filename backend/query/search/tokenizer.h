@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
+#include "unicode/uscript.h"
 
 namespace google {
 namespace spanner {
@@ -48,6 +49,10 @@ static constexpr int kSubstringTokenizerSignatureArgumentSize = 5;
 static constexpr char kDelimiter[] =
     "~!@#$%^&*()_+-={}[]|\\/\"`:;'<>,.?\r\n\t\b\f ";
 
+// Index attribute of the tokens at the start and at the end of a tokenized
+// value. DEBUG_TOKENLIST shows it as "(boundary)".
+static constexpr uint64_t kBoundaryIndexAttribute = 1;
+
 // String indicate a gap between tokens. This is used to indicate tokens on both
 // sides were created from different elements of an array.
 static constexpr char kGapString[] = "\x01";
@@ -56,6 +61,13 @@ googlesql::Value TokenListFromStrings(std::vector<std::string> strings);
 
 absl::StatusOr<std::vector<std::string>> StringsFromTokenList(
     const googlesql::Value& tokenList);
+
+// Returns the tokens in `tokenlist` as a comma-separated list for
+// DEBUG_TOKENLIST, in the documented format: tokens at the same position are
+// listed in brackets, and boundary tokens are followed by "(boundary)", as in
+// `hello(boundary), db, [#world, world](boundary)`. Tokenizer signatures and
+// array gaps are emulator internals and are left out.
+absl::StatusOr<std::string> DebugTokenList(const googlesql::Value& tokenlist);
 
 googlesql::Value TokenListFromBytes(std::string& bytes);
 
@@ -88,6 +100,45 @@ bool GetBoolParameterValue(absl::Span<const googlesql::Value> args,
 
 absl::Status TokenizeSubstring(absl::string_view str,
                                std::vector<std::string>& token_list);
+
+// Lowercases text using the requested language and optionally removes Unicode
+// combining marks. Used for both indexed values and search queries.
+absl::StatusOr<std::string> NormalizeSearchText(
+    absl::string_view str, bool remove_diacritics = false,
+    absl::string_view language_tag = "", bool lowercase = true);
+
+// Returns whether text changes from the `previous` to the `current` script
+// and one of them is an East Asian script (Han, Hiragana, Katakana or Hangul).
+// Words are split there, as in "東京タワー", because the emulator's ICU data
+// has no dictionaries for segmenting such text.
+bool IsEastAsianScriptChange(UScriptCode previous, UScriptCode current);
+
+// Splits `str` into words using the word boundaries of `language_tag`, and
+// where East Asian text changes scripts. When
+// `hashtags` is set, it receives for every word whether it directly follows a
+// '#' that starts a hashtag.
+absl::Status TokenizeWords(absl::string_view str,
+                           absl::string_view language_tag,
+                           std::vector<std::string>& token_list,
+                           std::vector<bool>* hashtags = nullptr);
+
+struct HtmlTextSegment {
+  std::string text;
+  int category;  // small=0, medium=1, large=2, title=3.
+};
+
+// Returns the text of `html` with its prominence. Tags and comments are
+// removed, the contents of <script> and <style> elements are skipped, and
+// character references (numeric, and the named references of HTML 4 plus
+// &apos;) are decoded.
+std::vector<HtmlTextSegment> ExtractHtmlText(absl::string_view html);
+
+// Returns whether the tokenizer signature `signature` has the `flag` option,
+// such as "d" for remove_diacritics.
+bool SignatureHasFlag(absl::string_view signature, absl::string_view flag);
+
+absl::StatusOr<bool> TokenListRemovesDiacritics(
+    const googlesql::Value& tokenlist);
 
 absl::Status TokenizeNgrams(absl::string_view str, int ngram_size_min,
                             int ngram_size_max,

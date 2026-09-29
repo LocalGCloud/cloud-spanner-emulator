@@ -482,6 +482,27 @@ index a432666c..6b17e767 100644
  
   private:
    const Type* type_;
+diff --git a/googlesql/reference_impl/relational_op.cc b/googlesql/reference_impl/relational_op.cc
+--- a/googlesql/reference_impl/relational_op.cc
++++ b/googlesql/reference_impl/relational_op.cc
+@@ -736,7 +736,7 @@
+     } else if (argument.relation) {
+       GOOGLESQL_RETURN_IF_ERROR(argument.relation->relational_op->SetSchemasForEvaluation(
+           params_schemas));
+-    } else if (argument.model) {
++    } else if (argument.model || argument.graph) {
+       // No-op.
+     } else {
+       GOOGLESQL_RET_CHECK_FAIL() << "Unexpected TvfAlgebraArgument";
+@@ -780,6 +780,8 @@
+                std::move(tuple_iterator))}});
+     } else if (argument.model) {
+       input_arguments.push_back({.model = argument.model});
++    } else if (argument.graph) {
++      input_arguments.push_back({.graph = argument.graph});
+     } else {
+       GOOGLESQL_RET_CHECK_FAIL() << "Unexpected TvfAlgebraArgument";
+     }
 diff --git a/googlesql/resolved_ast/BUILD b/googlesql/resolved_ast/BUILD
 index e036906c..f93565ba 100644
 --- a/googlesql/resolved_ast/BUILD

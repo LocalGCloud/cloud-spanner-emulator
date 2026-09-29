@@ -238,6 +238,43 @@ TEST_P(QueryHintsTest, QueryWithOtherEngineHints) {
   }
 }
 
+TEST_P(QueryHintsTest, OptimizerHintsOnQueries) {
+  if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+    GOOGLESQL_EXPECT_OK(Query("/*@ OPTIMIZER_VERSION=1 */ SELECT ID FROM Users"));
+    GOOGLESQL_EXPECT_OK(
+        Query("/*@ OPTIMIZER_VERSION=latest_version, "
+              "OPTIMIZER_STATISTICS_PACKAGE=latest */ SELECT ID FROM Users"));
+  } else {
+    GOOGLESQL_EXPECT_OK(Query("@{OPTIMIZER_VERSION=1} SELECT ID FROM Users"));
+    GOOGLESQL_EXPECT_OK(
+        Query("@{OPTIMIZER_VERSION=latest_version, "
+              "OPTIMIZER_STATISTICS_PACKAGE=latest} SELECT ID FROM Users"));
+  }
+}
+
+TEST_P(QueryHintsTest, OptimizerHintsOnDml) {
+  if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
+    GOOGLESQL_EXPECT_OK(CommitDml(
+        {SqlStatement("/*@ OPTIMIZER_VERSION=1 */ INSERT INTO Users(ID, Name, "
+                      "Age) VALUES (1, 'a', 10)"),
+         SqlStatement("/*@ OPTIMIZER_STATISTICS_PACKAGE=latest */ UPDATE Users "
+                      "SET Age = 11 WHERE ID = 1"),
+         SqlStatement("/*@ OPTIMIZER_VERSION=default_version, "
+                      "OPTIMIZER_STATISTICS_PACKAGE=latest */ DELETE FROM "
+                      "Users WHERE ID = 1")}));
+  } else {
+    GOOGLESQL_EXPECT_OK(CommitDml(
+        {SqlStatement("@{OPTIMIZER_VERSION=1} INSERT INTO Users(ID, Name, Age) "
+                      "VALUES (1, 'a', 10)"),
+         SqlStatement("@{OPTIMIZER_STATISTICS_PACKAGE=latest} UPDATE Users "
+                      "SET Age = 11 WHERE ID = 1"),
+         SqlStatement("@{OPTIMIZER_VERSION=default_version, "
+                      "OPTIMIZER_STATISTICS_PACKAGE=latest} DELETE FROM Users "
+                      "WHERE ID = 1")}));
+  }
+  EXPECT_THAT(Query("SELECT ID FROM Users"), IsOkAndHoldsRows({}));
+}
+
 TEST_P(QueryHintsTest, InvalidIndexHintInQueryReturnsError) {
   if (dialect_ == database_api::DatabaseDialect::POSTGRESQL) {
     GTEST_SKIP() << "PostgreSQL ignores the index hint instead of failing";

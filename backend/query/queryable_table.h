@@ -48,7 +48,8 @@ class QueryableTable : public googlesql::Table {
       const backend::Table* table, RowReader* reader,
       std::optional<const googlesql::AnalyzerOptions> options = std::nullopt,
       googlesql::Catalog* catalog = nullptr,
-      googlesql::TypeFactory* type_factory = nullptr, bool is_synonym = false);
+      googlesql::TypeFactory* type_factory = nullptr, bool is_synonym = false,
+      const bool* select_for_update = nullptr);
 
   std::string Name() const override {
     return std::string(SDLObjectName::GetInSchemaName(SynonymOrName()));
@@ -100,6 +101,9 @@ class QueryableTable : public googlesql::Table {
   // A RowReader which data of the table can be read from to build a
   // EvalutorTableIterator when CreateEvaluatorTableIterator is called.
   RowReader* reader_;
+
+  // Points to ExecuteSql's query-local lock mode; it outlives evaluation.
+  const bool* select_for_update_;
 
   // The columns in the table.
   std::vector<std::unique_ptr<const QueryableColumn>> columns_;

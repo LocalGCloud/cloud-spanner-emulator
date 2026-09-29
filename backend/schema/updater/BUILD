@@ -140,6 +140,8 @@ cc_library(
 cc_library(
     name = "schema_updater",
     srcs = [
+        "grant_resolver.cc",
+        "grant_resolver.h",
         "schema_updater.cc",
     ],
     hdrs = [
@@ -167,6 +169,7 @@ cc_library(
         "//backend/schema/graph:schema_graph_editor",
         "//backend/schema/graph:schema_node",
         "//backend/schema/parser:ddl_parser",
+        "//backend/schema/printer:print_ddl",
         "//backend/schema/verifiers:check_constraint_verifiers",
         "//backend/schema/verifiers:foreign_key_verifiers",
         "//backend/schema/verifiers:interleaving_verifiers",

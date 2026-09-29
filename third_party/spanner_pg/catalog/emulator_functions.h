@@ -58,6 +58,14 @@ namespace postgres_translator {
 
   inline constexpr char kGoogleSQLSubscriptFunctionName[] = "$subscript";
   inline constexpr char kGoogleSQLJsonTypeFunctionName[] = "json_type";
+
+  // GoogleSQL approximate vector distance functions.
+  inline constexpr char kGoogleSQLApproxCosineDistanceFunctionName[] =
+      "approx_cosine_distance";
+  inline constexpr char kGoogleSQLApproxDotProductFunctionName[] =
+      "approx_dot_product";
+  inline constexpr char kGoogleSQLApproxEuclideanDistanceFunctionName[] =
+      "approx_euclidean_distance";
   inline constexpr char kGoogleSQLJsonQueryArrayFunctionName[] =
       "json_query_array";
 
@@ -96,6 +104,8 @@ namespace postgres_translator {
 
   // PG comparison functions.
   inline constexpr char kPGTextregexneFunctionName[] = "pg.textregexne";
+  inline constexpr char kPGTextregexreplaceFunctionName[] =
+      "pg.textregexreplace";
   inline constexpr char kPGILikeFunctionName[] = "pg.ilike";
   inline constexpr char kPGNotILikeFunctionName[] = "pg.not_ilike";
 

@@ -122,12 +122,15 @@ TEST_P(SnippetEvaluatorTest, TestEvaluation) {
   EXPECT_EQ(test_case.expected_result, snippets.value());
 }
 
+// `positions` holds (end, begin) pairs of the highlights within `snippet`,
+// which starts at the 1-based position `source_begin` of the searched text.
 std::string GetExpectedResult(absl::Span<const std::pair<int, int>> positions,
-                              absl::string_view snippet) {
+                              absl::string_view snippet, int source_begin = 1) {
   static constexpr absl::string_view positions_format =
-      "{\"end_position\":$0,\"start_position\":$1}";
+      "{\"begin\":\"$1\",\"end\":\"$0\"}";
   static constexpr absl::string_view snippets_format =
-      "{\"snippets\":[{\"highlights\":[$0],\"snippet\":\"$1\"}]}";
+      "{\"snippets\":[{\"highlights\":[$0],\"snippet\":\"$1\","
+      "\"source_begin\":$2,\"source_end\":$3}]}";
 
   std::string highlights = absl::StrJoin(
       positions, ",", [](std::string* result, const std::pair<int, int>& pos) {
@@ -135,7 +138,9 @@ std::string GetExpectedResult(absl::Span<const std::pair<int, int>> positions,
             absl::Substitute(positions_format, pos.first, pos.second));
       });
 
-  std::string result = absl::Substitute(snippets_format, highlights, snippet);
+  std::string result =
+      absl::Substitute(snippets_format, highlights, snippet, source_begin,
+                       source_begin + snippet.size());
 
   return result;
 }
@@ -155,7 +160,7 @@ INSTANTIATE_TEST_SUITE_P(
          {"foo bar foo", "foo", std::nullopt, std::nullopt,
           GetExpectedResult({{4, 1}, {12, 9}}, "foo bar foo")},
          {"foo bar foo", "foo", 7, 3, GetExpectedResult({{4, 1}}, "foo")},
-         {"foo bar foo", "bar", 6, 3, GetExpectedResult({{4, 1}}, "bar")},
+         {"foo bar foo", "bar", 6, 3, GetExpectedResult({{4, 1}}, "bar", 5)},
          {"foo", "", 160, 3, GetExpectedResult({}, "foo")},
          {"foo foo", "fo", 160, 3, GetExpectedResult({}, "foo foo")},
          {"foo", "foo", 2, 3, GetExpectedResult({}, "")},
@@ -163,9 +168,10 @@ INSTANTIATE_TEST_SUITE_P(
           GetExpectedResult({{4, 1}, {8, 5}, {12, 9}}, "foo foo foo")},
          {"foo foo", "foo", 4, 3, GetExpectedResult({{4, 1}}, "foo")},
          {"foo foo", "foo", 5, 3, GetExpectedResult({{4, 1}}, "foo")},
-         {"bar foo", "foo", 5, 3, GetExpectedResult({{4, 1}}, "foo")},
-         {"bar, bar foo", "foo", 7, 3, GetExpectedResult({{4, 1}}, "foo")},
-         {"bar, bar foo", "foo", 8, 3, GetExpectedResult({{8, 5}}, "bar foo")},
+         {"bar foo", "foo", 5, 3, GetExpectedResult({{4, 1}}, "foo", 5)},
+         {"bar, bar foo", "foo", 7, 3, GetExpectedResult({{4, 1}}, "foo", 10)},
+         {"bar, bar foo", "foo", 8, 3,
+          GetExpectedResult({{8, 5}}, "bar foo", 6)},
          {"bar foo foo", "bar", 8, 3, GetExpectedResult({{4, 1}}, "bar foo")},
          {"bar foo", "foo bar", 120, 3,
           GetExpectedResult({{4, 1}, {8, 5}}, "bar foo")},

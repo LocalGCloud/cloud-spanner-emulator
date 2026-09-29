@@ -54,6 +54,9 @@ var (
 			"requests to allow testing application abort-retry behavior).")
 	disableQueryNullFilteredIndexCheck = flag.Bool("disable_query_null_filtered_index_check", false,
 		"If true, then queries that use NULL_FILTERED indexes will be answered.")
+	spannerSysExposeOpenInterval = flag.Bool("spanner_sys_expose_open_interval", false,
+		"If true, the SPANNER_SYS statistics tables also show the interval that is still in "+
+			"progress. Production Cloud Spanner shows only intervals that have ended.")
 	enforcePlacementDmlRestrictions = flag.Bool("enforce_placement_dml_restrictions", true,
 		"If true, read-write transactions enforce the geo-partitioning (placement) DML limits of "+
 			"production Cloud Spanner: an INSERT or DELETE on a placement table must be the only "+
@@ -68,6 +71,15 @@ var (
 	overrideChangeStreamPartitionTokenAliveSeconds = flag.Int("override_change_stream_partition_token_alive_seconds", -1,
 		"If set to X seconds, and X is greater than 0, then override the default partition token alive"+
 			"time from 20-40 seconds(default for Emulator only, not for production Spanner) to X-2X seconds.")
+	rowDeletionPolicySweepIntervalSeconds = flag.Int("row_deletion_policy_sweep_interval_seconds", 60,
+		"How often, in seconds, each database deletes the rows that its row deletion policies (TTL) "+
+			"have expired. Production Cloud Spanner deletes expired rows within about 72 hours. Zero "+
+			"or a negative value disables background row deletion.")
+	lockWaitTimeoutMs = flag.Int("lock_wait_timeout_ms", 10000,
+		"How long, in milliseconds, a read-write transaction waits for a lock that an older "+
+			"transaction holds before it aborts. An older transaction never waits for a younger one: "+
+			"it aborts (wounds) the younger holder instead. Zero means that a transaction that "+
+			"requests a conflicting lock aborts at once instead of waiting.")
 	printNotices = flag.Bool("notices", false,
 		"If true, the emulator will print all third-party notices to stdout.")
 	dataDir = flag.String("data_dir", "",
@@ -78,6 +90,8 @@ var (
 			"metadata.json entry is removed, so it no longer appears. Otherwise it "+
 			"stays in place and is reported as unavailable. Other databases start "+
 			"either way.")
+	remoteFunctionsHostPort = flag.String("remote_functions_host_port", "",
+		"Localhost host:port for remote model and function calls. Empty uses deterministic test responses.")
 )
 
 // resolveGRPCBinary figures out the full path to the grpc binary from the --grpc_binary flag.
@@ -163,19 +177,23 @@ func main() {
 	// Start the gateway http server. This will run the emulator grpc server as a subprocess and
 	// proxy http/json requests into grpc requests.
 	gwopts := gateway.Options{
-		GatewayAddress:                     fmt.Sprintf("%s:%d", *hostname, *httpPort),
-		FrontendBinary:                     resolveGRPCBinary(),
-		FrontendAddress:                    fmt.Sprintf("%s:%d", *hostname, *grpcPort),
-		CopyEmulatorStdout:                 *copyEmulatorStdout,
-		CopyEmulatorStderr:                 *copyEmulatorStderr,
-		LogRequests:                        *logRequests,
-		EnableFaultInjection:               *enableFaultInjection,
-		DisableQueryNullFilteredIndexCheck: *disableQueryNullFilteredIndexCheck,
-		EnforcePlacementDmlRestrictions:    *enforcePlacementDmlRestrictions,
-		RepairCorruptedDatabases:           *repairCorruptedDatabases,
-		OverrideMaxDatabasesPerInstance:    instanceDbs,
+		GatewayAddress:                                 fmt.Sprintf("%s:%d", *hostname, *httpPort),
+		FrontendBinary:                                 resolveGRPCBinary(),
+		FrontendAddress:                                fmt.Sprintf("%s:%d", *hostname, *grpcPort),
+		CopyEmulatorStdout:                             *copyEmulatorStdout,
+		CopyEmulatorStderr:                             *copyEmulatorStderr,
+		LogRequests:                                    *logRequests,
+		EnableFaultInjection:                           *enableFaultInjection,
+		DisableQueryNullFilteredIndexCheck:             *disableQueryNullFilteredIndexCheck,
+		SpannerSysExposeOpenInterval:                   *spannerSysExposeOpenInterval,
+		EnforcePlacementDmlRestrictions:                *enforcePlacementDmlRestrictions,
+		RepairCorruptedDatabases:                       *repairCorruptedDatabases,
+		OverrideMaxDatabasesPerInstance:                instanceDbs,
 		OverrideChangeStreamPartitionTokenAliveSeconds: overrideChangeStreamPartitionTokenAliveSeconds,
+		RowDeletionPolicySweepIntervalSeconds:          *rowDeletionPolicySweepIntervalSeconds,
+		LockWaitTimeoutMs:                              *lockWaitTimeoutMs,
 		DataDir:                                        *dataDir,
+		RemoteFunctionsHostPort:                        *remoteFunctionsHostPort,
 	}
 	gw := gateway.New(gwopts)
 	gw.Run()

@@ -16,9 +16,11 @@
 
 #include "backend/query/ml/model_evaluator.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>  // NOLINT
+#include <vector>
 
 #include "googlesql/public/json_value.h"
 #include "googlesql/public/type.h"
@@ -30,13 +32,17 @@
 #include "absl/flags/flag.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
 #include "backend/common/case.h"
+#include "backend/query/ml/ml_predict_row_function.h"
 #include "backend/query/queryable_model.h"
 #include "backend/query/remote_udf/remote_udf_evaluator.h"
 #include "backend/schema/catalog/model.h"
 #include "backend/schema/catalog/schema.h"
 #include "tests/common/schema_constructor.h"
 #include "httplib.h"
+#include "third_party/spanner_pg/datatypes/extended/pg_jsonb_type.h"
+#include "third_party/spanner_pg/interface/pg_arena_factory.h"
 
 using ::testing::HasSubstr;
 using ::googlesql_base::testing::StatusIs;
@@ -66,6 +72,7 @@ absl::StatusOr<std::unique_ptr<const Schema>> CreateModelSchema() {
 class ModelEvaluatorTest : public testing::Test {
  public:
   void SetUp() override {
+    absl::SetFlag(&FLAGS_remote_functions_host_port, "");
     GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema_, CreateModelSchema());
     model_ = schema_->FindModel("test_model");
     ASSERT_NE(model_, nullptr);
@@ -74,6 +81,10 @@ class ModelEvaluatorTest : public testing::Test {
     model_inputs_ = {{"in_a", &in_a_val_}, {"in_b", &in_b_val_}};
     model_params_ = {{"p", &param_val_}};
     model_outputs_ = {{"out_c", &out_c_val_}, {"out_d", &out_d_val_}};
+  }
+
+  void TearDown() override {
+    absl::SetFlag(&FLAGS_remote_functions_host_port, "");
   }
 
  protected:
@@ -108,7 +119,19 @@ TEST_F(ModelEvaluatorTest, RemotePredictSuccess) {
   svr.Post("/", [&request_body](const httplib::Request& req,
                                 httplib::Response& res) {
     request_body = googlesql::JSONValue::ParseJSONString(req.body);
-    res.set_content(R"({"replies": [{"out_c": 456, "out_d": "result"}]})",
+    if (!request_body.ok()) {
+      res.status = 400;
+      return;
+    }
+    const int64_t input = request_body->GetConstRef()
+                              .GetMember("calls")
+                              .GetArrayElement(0)
+                              .GetArrayElement(0)
+                              .GetMember("in_a")
+                              .GetInt64();
+    const int64_t output = 2 * input + 1;
+    res.set_content("{\"replies\":[{\"out_c\":" + std::to_string(output) +
+                        ",\"out_d\":\"" + std::to_string(output) + "\"}]}",
                     "application/json");
   });
   int port = svr.bind_to_any_port("localhost");
@@ -120,8 +143,14 @@ TEST_F(ModelEvaluatorTest, RemotePredictSuccess) {
 
   GOOGLESQL_EXPECT_OK(ModelEvaluator::Predict(queryable_model_.get(), model_inputs_,
                                     model_params_, model_outputs_));
-  EXPECT_EQ(out_c_val_, googlesql::Value::Int64(456));
-  EXPECT_EQ(out_d_val_, googlesql::Value::String("result"));
+  EXPECT_EQ(out_c_val_, googlesql::Value::Int64(247));
+  EXPECT_EQ(out_d_val_, googlesql::Value::String("247"));
+
+  in_a_val_ = googlesql::Value::Int64(7);
+  GOOGLESQL_EXPECT_OK(ModelEvaluator::Predict(queryable_model_.get(), model_inputs_,
+                                    model_params_, model_outputs_));
+  EXPECT_EQ(out_c_val_, googlesql::Value::Int64(15));
+  EXPECT_EQ(out_d_val_, googlesql::Value::String("15"));
 
   svr.stop();
   server_thread.join();
@@ -134,10 +163,14 @@ TEST_F(ModelEvaluatorTest, RemotePredictSuccess) {
     "sessionUser":"",
     "userDefinedContext":{},
     "requestId":"00000000-0000-0000-0000-000000000000",
-    "calls":[[{"in_a":123,"in_b":"test"}, {"p": 456}]]
+    "calls":[[{"in_a":7,"in_b":"test"}, {"p": 456}]]
   })json"));
 
   GOOGLESQL_ASSERT_OK(request_body);
+  // Each request carries a distinct opaque ID.
+  ASSERT_TRUE(request_body->GetConstRef().GetMember("requestId").IsString());
+  expected_request_body.GetRef().GetMember("requestId").SetString(
+      request_body->GetConstRef().GetMember("requestId").GetString());
   EXPECT_EQ(request_body->GetConstRef().ToString(),
             expected_request_body.GetConstRef().ToString());
 }
@@ -160,6 +193,27 @@ TEST_F(ModelEvaluatorTest, RemotePredictFailure) {
                                       model_params_, model_outputs_),
               StatusIs(absl::StatusCode::kFailedPrecondition,
                        HasSubstr("Prediction failed")));
+
+  svr.stop();
+  server_thread.join();
+}
+
+TEST_F(ModelEvaluatorTest, RemotePredictMalformedProviderResponse) {
+  httplib::Server svr;
+  svr.Post("/", [](const httplib::Request&, httplib::Response& res) {
+    res.set_content("not-json", "application/json");
+  });
+  int port = svr.bind_to_any_port("localhost");
+  std::thread server_thread([&svr]() { svr.listen_after_bind(); });
+  svr.wait_until_ready();
+  absl::SetFlag(&FLAGS_remote_functions_host_port,
+                "localhost:" + std::to_string(port));
+
+  EXPECT_THAT(ModelEvaluator::Predict(queryable_model_.get(), model_inputs_,
+                                      model_params_, model_outputs_),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       testing::AllOf(HasSubstr("invalid JSON"),
+                                      HasSubstr("test_endpoint"))));
 
   svr.stop();
   server_thread.join();
@@ -209,7 +263,19 @@ TEST_F(ModelEvaluatorTest, PgPredictRemote) {
   svr.Post("/", [&request_body](const httplib::Request& req,
                                 httplib::Response& res) {
     request_body = googlesql::JSONValue::ParseJSONString(req.body);
-    res.set_content(R"({"replies": [{"Outcome": true}]})", "application/json");
+    if (!request_body.ok()) {
+      res.status = 400;
+      return;
+    }
+    const int64_t input = request_body->GetConstRef()
+                              .GetMember("calls")
+                              .GetArrayElement(0)
+                              .GetArrayElement(0)
+                              .GetMember("in_a")
+                              .GetInt64();
+    res.set_content("{\"replies\":[{\"score\":" +
+                        std::to_string(2 * input + 1) + "}]}",
+                    "application/json");
   });
 
   int port = svr.bind_to_any_port("localhost");
@@ -231,8 +297,15 @@ TEST_F(ModelEvaluatorTest, PgPredictRemote) {
                                       prediction.GetRef()));
 
   EXPECT_TRUE(prediction.GetConstRef().IsObject());
-  EXPECT_TRUE(prediction.GetConstRef().HasMember("Outcome"));
-  EXPECT_TRUE(prediction.GetConstRef().GetMember("Outcome").GetBoolean());
+  EXPECT_EQ(prediction.GetConstRef().GetMember("score").GetInt64(), 247);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::JSONValue second_instance,
+      googlesql::JSONValue::ParseJSONString(R"({"in_a": 7})"));
+  GOOGLESQL_EXPECT_OK(ModelEvaluator::PgPredict(
+      "test_endpoint", second_instance.GetConstRef(),
+      parameters.GetConstRef(), prediction.GetRef()));
+  EXPECT_EQ(prediction.GetConstRef().GetMember("score").GetInt64(), 15);
 
   svr.stop();
   server_thread.join();
@@ -245,12 +318,97 @@ TEST_F(ModelEvaluatorTest, PgPredictRemote) {
     "sessionUser":"",
     "userDefinedContext":{},
     "requestId":"00000000-0000-0000-0000-000000000000",
-    "calls":[[{"in_a":123}, {}]]
+    "calls":[[{"in_a":7}, {}]]
   })"));
 
   GOOGLESQL_ASSERT_OK(request_body);
+  // Each request carries a distinct opaque ID.
+  ASSERT_TRUE(request_body->GetConstRef().GetMember("requestId").IsString());
+  expected_request_body.GetRef().GetMember("requestId").SetString(
+      request_body->GetConstRef().GetMember("requestId").GetString());
   EXPECT_EQ(request_body->GetConstRef().ToString(),
             expected_request_body.GetConstRef().ToString());
+}
+
+TEST_F(ModelEvaluatorTest, PgPredictProviderErrorDoesNotFallback) {
+  httplib::Server svr;
+  svr.Post("/", [](const httplib::Request&, httplib::Response& res) {
+    res.set_content(R"({"errorMessage":"inference failed"})",
+                    "application/json");
+  });
+  int port = svr.bind_to_any_port("localhost");
+  std::thread server_thread([&svr]() { svr.listen_after_bind(); });
+  svr.wait_until_ready();
+  absl::SetFlag(&FLAGS_remote_functions_host_port,
+                "localhost:" + std::to_string(port));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::JSONValue instance,
+      googlesql::JSONValue::ParseJSONString(R"({"in_a":2})"));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::JSONValue parameters,
+      googlesql::JSONValue::ParseJSONString(R"({})"));
+  googlesql::JSONValue prediction;
+  EXPECT_THAT(ModelEvaluator::PgPredict(
+                  "test_endpoint", instance.GetConstRef(),
+                  parameters.GetConstRef(), prediction.GetRef()),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("inference failed")));
+
+  svr.stop();
+  server_thread.join();
+}
+
+TEST_F(ModelEvaluatorTest, PgPredictRowUsesConfiguredProvider) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto pg_arena, postgres_translator::interfaces::CreatePGArena(nullptr));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::Value input,
+      postgres_translator::spangres::datatypes::CreatePgJsonbValue(
+          R"({"instances":[{"in_a":2},{"in_a":9}],"parameters":{}})"));
+
+  httplib::Server svr;
+  svr.Post("/", [](const httplib::Request& req, httplib::Response& res) {
+    auto body = googlesql::JSONValue::ParseJSONString(req.body);
+    if (!body.ok()) {
+      res.status = 400;
+      return;
+    }
+    const int64_t input = body->GetConstRef()
+                              .GetMember("calls")
+                              .GetArrayElement(0)
+                              .GetArrayElement(0)
+                              .GetMember("in_a")
+                              .GetInt64();
+    res.set_content("{\"replies\":[{\"score\":" +
+                        std::to_string(2 * input + 1) + "}]}",
+                    "application/json");
+  });
+  int port = svr.bind_to_any_port("localhost");
+  std::thread server_thread([&svr]() { svr.listen_after_bind(); });
+  svr.wait_until_ready();
+  absl::SetFlag(&FLAGS_remote_functions_host_port,
+                "localhost:" + std::to_string(port));
+
+  const std::vector<googlesql::Value> args = {
+      googlesql::Value::String("test_endpoint"), input};
+  auto result = EvalMlPredictRow(args);
+  svr.stop();
+  server_thread.join();
+
+  GOOGLESQL_ASSERT_OK(result);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      absl::Cord json,
+      postgres_translator::spangres::datatypes::GetPgJsonbNormalizedValue(
+          *result));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::JSONValue predictions,
+      googlesql::JSONValue::ParseJSONString(json.Flatten()));
+  auto rows = predictions.GetConstRef().GetMember("predictions");
+  ASSERT_TRUE(rows.IsArray());
+  ASSERT_EQ(rows.GetArraySize(), 2);
+  EXPECT_EQ(rows.GetArrayElement(0).GetMember("score").GetInt64(), 5);
+  EXPECT_EQ(rows.GetArrayElement(1).GetMember("score").GetInt64(), 19);
 }
 
 }  // namespace

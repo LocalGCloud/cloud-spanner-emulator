@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "googlesql/public/types/type_factory.h"
+#include "googlesql/public/simple_token_list.h"
 #include "googlesql/public/value.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -69,6 +70,30 @@ TEST(TokenlistConcatTest, ConcatFulltext) {
   ValidateTokenlistConcat(*tokenlist1, *tokenlist2, *concat_tokenlist);
 }
 
+TEST(TokenlistConcatTest, PreservesTokenCategories) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto title,
+      PlainFullTextTokenizer::Tokenize(
+          {googlesql::Value::String("Apple"), googlesql::Value::NullString(),
+           googlesql::Value::NullString(), googlesql::Value::String("title")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto body,
+      PlainFullTextTokenizer::Tokenize({googlesql::Value::String("Apple")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto values,
+      googlesql::Value::MakeArray(googlesql::types::TokenListArrayType(),
+                                  {title, body}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto joined,
+                                TokenlistConcat::Concat({values}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto iter,
+                                joined.tokenlist_value().GetIterator());
+  googlesql::tokens::TextToken token;
+  ASSERT_TRUE(iter.Next(token).ok());  // first signature
+  ASSERT_TRUE(iter.Next(token).ok());
+  EXPECT_EQ(token.text(), "apple");
+  EXPECT_EQ(token.attribute(), 3);
+}
+
 TEST(TokenlistConcatTest, ConcatSubstring) {
   const auto tokenlist1 =
       SubstringTokenizer::Tokenize({googlesql::Value::String("foobar")});
@@ -87,6 +112,8 @@ TEST(TokenlistConcatTest, ConcatSubstring) {
 TEST(TokenlistConcatTest, ConcatNull) {
   const auto concat_tokenlist = TokenlistConcat::Concat(
       {googlesql::Value::Null(googlesql::types::TokenListArrayType())});
+  GOOGLESQL_EXPECT_OK(concat_tokenlist.status());
+  EXPECT_TRUE(concat_tokenlist->type()->IsTokenList());
   EXPECT_TRUE(concat_tokenlist->is_null());
 }
 
@@ -105,6 +132,31 @@ TEST(TokenlistConcatTest, UnmatchSubstringSignature) {
       StatusIs(absl::StatusCode::kInvalidArgument,
                HasSubstr("All elements to TOKENLIST_CONCAT must be produced by "
                          "the same kind of tokenization function.")));
+}
+
+TEST(TokenlistConcatTest, MixedRemoveDiacriticsRemovesThemEverywhere) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto kept,
+      PlainFullTextTokenizer::Tokenize({googlesql::Value::String("Café")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto removed,
+      PlainFullTextTokenizer::Tokenize(
+          {googlesql::Value::String("Crème"), googlesql::Value::NullString(),
+           googlesql::Value::NullString(), googlesql::Value::NullString(),
+           googlesql::Value::Bool(true)}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto values,
+      googlesql::Value::MakeArray(googlesql::types::TokenListArrayType(),
+                                  {kept, removed}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto joined, TokenlistConcat::Concat({values}));
+  // SEARCH removes the diacritics from queries on the result, so the tokens
+  // of the first tokenlist lose theirs too.
+  EXPECT_THAT(StringsFromTokenList(joined),
+              googlesql_base::testing::IsOkAndHolds(testing::ElementsAre(
+                  "fulltext-0", "cafe", kGapString, "fulltext-0-d", "creme",
+                  kGapString)));
+  EXPECT_THAT(TokenListRemovesDiacritics(joined),
+              googlesql_base::testing::IsOkAndHolds(true));
 }
 
 }  // namespace google::spanner::emulator::backend::query::search

@@ -9,7 +9,9 @@
 #   ./build.sh --base-image=ubuntu:22.04          # specify custom base image
 #   ./build.sh --base-image-repo=user/repo        # custom Docker Hub repo for the base image
 #   ./build.sh --rebuild-base-image               # force rebuild+push even if the registry tag exists
+#   ./build.sh --cache-from=myregistry/repo:tag   # import BuildKit cache from registry
 #   ./build.sh --cache-to=myregistry/repo:tag     # export BuildKit cache to registry
+#   ./build.sh --no-registry-cache                # disable importing BuildKit registry cache
 #
 # By default, ./build.sh runs in offline mode using bazel-distdir, builds for
 # linux/arm64 (Apple Silicon native), and uses a base image pulled from
@@ -29,6 +31,12 @@ BASE_IMAGE_REPO="${SPANNER_BASE_IMAGE_REPO:-jaysen2apache/spanner-emulator-base}
 BASE_IMAGE="${SPANNER_BASE_IMAGE:-}"
 REBUILD_BASE_IMAGE=0
 CACHE_TO="${SPANNER_CACHE_TO_REF:-}"
+REGISTRY_CACHE="${SPANNER_REGISTRY_CACHE-__DEFAULT__}"
+LOCAL_CACHE_DIR="${SPANNER_LOCAL_CACHE_DIR:-}"
+FORCE_FETCH="${SPANNER_FORCE_FETCH:-0}"
+SKIP_FETCH="${SPANNER_SKIP_FETCH:-0}"
+RUN_TESTS="${SPANNER_RUN_TESTS:-0}"
+BAZEL_JOBS_CLI=""
 
 for arg in "$@"; do
   case "$arg" in
@@ -39,6 +47,15 @@ for arg in "$@"; do
     --base-image-repo=*)   BASE_IMAGE_REPO="${arg#*=}" ;;
     --rebuild-base-image)  REBUILD_BASE_IMAGE=1 ;;
     --cache-to=*)          CACHE_TO="${arg#*=}" ;;
+    --cache-from=*)        REGISTRY_CACHE="${arg#*=}" ;;
+    --registry-cache=*)    REGISTRY_CACHE="${arg#*=}" ;;
+    --no-registry-cache)   REGISTRY_CACHE="" ;;
+    --local-cache-dir=*)   LOCAL_CACHE_DIR="${arg#*=}" ;;
+    --force-fetch)         FORCE_FETCH=1 ;;
+    --skip-fetch)          SKIP_FETCH=1 ;;
+    --jobs=*)              BAZEL_JOBS_CLI="${arg#*=}" ;;
+    --run-tests)           RUN_TESTS=1 ;;
+    --no-tests|--skip-tests) RUN_TESTS=0 ;;
   esac
 done
 case "$PLATFORM" in
@@ -76,23 +93,28 @@ BAZEL_REPO_CACHE_NAMESPACE="spanner-emulator-${PLATFORM}"
 
 DOCKERFILE="build/docker/Dockerfile.ubuntu"
 IMAGE_TAG="spanner-emulator-extended:local"
-REGISTRY_CACHE="${SPANNER_REGISTRY_CACHE-jaysen2apache/spanner-emulator-extended:buildcache-${PLATFORM}}"
+if [ "$REGISTRY_CACHE" = "__DEFAULT__" ]; then
+  REGISTRY_CACHE="jaysen2apache/spanner-emulator-extended:buildcache-${PLATFORM}"
+fi
 
 echo "============================================"
 echo "  Building Spanner Emulator"
-echo "  Platform:   linux/${PLATFORM}"
-echo "  Base Image: $BASE_IMAGE"
-echo "  Cache:      $TOOLCHAIN_CACHE_EPOCH"
-echo "  Revision:   $SOURCE_REVISION"
+echo "  Platform:     linux/${PLATFORM}"
+echo "  Base Image:   $BASE_IMAGE"
+echo "  Cache:        $TOOLCHAIN_CACHE_EPOCH"
+echo "  Revision:     $SOURCE_REVISION"
 if [ -n "$OFFLINE_DIR" ]; then
-  echo "  Mode:       offline (repo cache: $OFFLINE_DIR)"
+  echo "  Mode:         offline (repo cache: $OFFLINE_DIR)"
 else
-  echo "  Mode:       online"
+  echo "  Mode:         online"
+fi
+if [ -n "$REGISTRY_CACHE" ]; then
+  echo "  Import Cache: $REGISTRY_CACHE"
 fi
 if [ -n "$CACHE_TO" ]; then
   echo "  Export Cache: $CACHE_TO"
 fi
-echo "  Started:    $(date)"
+echo "  Started:      $(date)"
 echo "============================================"
 BUILD_START=$(date +%s)
 
@@ -160,7 +182,7 @@ if [ -n "$OFFLINE_DIR" ]; then
   mkdir -p "$DISTDIR"
 
   echo ""
-  echo "[1/3] Populating repository cache in $OFFLINE_DIR/..."
+  echo "[1/3] Checking repository cache in $OFFLINE_DIR/..."
 
   # Pre-download the Bazel binary itself so Docker doesn't need network for it
   BAZEL_VERSION=$(cat .bazelversion | tr -d '[:space:]')
@@ -174,18 +196,28 @@ if [ -n "$OFFLINE_DIR" ]; then
       "https://releases.bazel.build/${BAZEL_VERSION}/release/${bazel_fname}"
   fi
 
-  # Use bazel fetch to download ALL deps (including transitive) into the
-  # repository cache. This is much more reliable than grepping URLs from
-  # MODULE.bazel, which misses transitive deps and template URLs.
-  if command -v bazel >/dev/null 2>&1; then
-    echo "  Running bazel fetch to discover all deps..."
-    bazel fetch --repository_cache="$DISTDIR" \
-      //... -- -third_party/spanner_pg/src/... 2>&1 \
-      | grep -E "^(INFO|WARNING)" | head -20 || true
-    echo "  Repository cache populated"
+  # Skip host bazel fetch if repository cache is already populated
+  DO_FETCH=1
+  if [ "$SKIP_FETCH" = "1" ]; then
+    DO_FETCH=0
+  elif [ "$FORCE_FETCH" != "1" ] && [ -d "$DISTDIR/content_addressable" ] && [ -n "$(find "$DISTDIR/content_addressable" -type f 2>/dev/null | head -1)" ]; then
+    DO_FETCH=0
+  fi
+
+  if [ "$DO_FETCH" -eq 1 ]; then
+    if command -v bazel >/dev/null 2>&1; then
+      echo "  Running bazel fetch to discover all deps..."
+      bazel fetch --repository_cache="$DISTDIR" \
+        //... -- -third_party/spanner_pg/src/... 2>&1 \
+        | grep -E "^(INFO|WARNING)" | head -20 || true
+      echo "  Repository cache populated"
+    else
+      echo "  WARN: bazel not found on host, skipping fetch."
+      echo "  Install bazel/bazelisk to enable full offline builds."
+    fi
   else
-    echo "  WARN: bazel not found on host, skipping fetch."
-    echo "  Install bazel/bazelisk to enable full offline builds."
+    echo "  Repository cache already populated ($OFFLINE_DIR/content_addressable); skipping host fetch."
+    echo "  (Pass --force-fetch to re-evaluate and fetch dependencies on host)"
   fi
 
   BUILD_ARGS+=(--build-arg "OFFLINE_DIR=$OFFLINE_DIR")
@@ -195,10 +227,17 @@ else
   echo "[1/3] Skipping repo cache (online mode)..."
 fi
 BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE}")
+BUILD_ARGS+=(--build-arg "RUN_TESTS=${RUN_TESTS}")
 
-if [ -z "$OFFLINE_DIR" ] && [ -n "$REGISTRY_CACHE" ]; then
+if [ -n "$REGISTRY_CACHE" ]; then
   echo "  Importing portable BuildKit cache: $REGISTRY_CACHE"
   CACHE_ARGS+=(--cache-from "type=registry,ref=$REGISTRY_CACHE")
+fi
+if [ -n "$LOCAL_CACHE_DIR" ]; then
+  mkdir -p "$LOCAL_CACHE_DIR"
+  echo "  Using local BuildKit cache: $LOCAL_CACHE_DIR"
+  CACHE_ARGS+=(--cache-from "type=local,src=$LOCAL_CACHE_DIR")
+  CACHE_ARGS+=(--cache-to "type=local,dest=$LOCAL_CACHE_DIR,mode=max")
 fi
 if [ -n "$CACHE_TO" ]; then
   echo "  Exporting BuildKit cache to: $CACHE_TO"
@@ -209,9 +248,11 @@ fi
 echo ""
 echo "[2/3] Building emulator for linux/${PLATFORM} in Docker..."
 
-# Use conservative concurrency for memory-heavy GoogleSQL translation units.
-# An explicit BAZEL_JOBS value always wins.
-if [ -z "${BAZEL_JOBS:-}" ]; then
+# Concurrency tuning: an explicit flag or BAZEL_JOBS always wins.
+if [ -n "$BAZEL_JOBS_CLI" ]; then
+  BAZEL_JOBS="$BAZEL_JOBS_CLI"
+  echo "  Using BAZEL_JOBS override: $BAZEL_JOBS"
+elif [ -z "${BAZEL_JOBS:-}" ]; then
   DOCKER_MEMORY_BYTES=$(docker info --format '{{.MemTotal}}' 2>/dev/null || true)
   case "$DOCKER_MEMORY_BYTES" in
     ''|*[!0-9]*|0*)
@@ -222,12 +263,12 @@ if [ -z "${BAZEL_JOBS:-}" ]; then
       DOCKER_MEMORY_GIB=$((DOCKER_MEMORY_BYTES / 1073741824))
       if [ "$DOCKER_MEMORY_GIB" -lt 20 ]; then
         BAZEL_JOBS=1
-      elif [ "$DOCKER_MEMORY_GIB" -lt 32 ]; then
+      elif [ "$DOCKER_MEMORY_GIB" -lt 26 ]; then
         BAZEL_JOBS=2
-      elif [ "$DOCKER_MEMORY_GIB" -lt 44 ]; then
-        BAZEL_JOBS=3
-      else
+      elif [ "$DOCKER_MEMORY_GIB" -lt 40 ]; then
         BAZEL_JOBS=4
+      else
+        BAZEL_JOBS=6
       fi
       echo "  Docker memory: ${DOCKER_MEMORY_GIB} GiB; using $BAZEL_JOBS Bazel jobs."
       ;;
@@ -239,7 +280,7 @@ else
       exit 1
       ;;
   esac
-  echo "  Using BAZEL_JOBS override: $BAZEL_JOBS"
+  echo "  Using BAZEL_JOBS environment: $BAZEL_JOBS"
 fi
 
 DOCKER_BUILDKIT=1 docker buildx build \

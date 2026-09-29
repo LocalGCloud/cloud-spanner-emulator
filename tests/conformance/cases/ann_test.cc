@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "common/errors.h"
+#include "tests/common/scoped_feature_flags_setter.h"
 #include "tests/conformance/common/database_test_base.h"
 #include "googlesql/base/status_macros.h"
 
@@ -57,6 +59,55 @@ class ANNTest : public DatabaseTest {
     return absl::OkStatus();
   }
 };
+
+TEST_F(ANNTest, ExactDistanceFunctions) {
+  EXPECT_THAT(Query(R"sql(SELECT COSINE_DISTANCE(
+      ARRAY<FLOAT32>[1.0, 0.0], ARRAY<FLOAT32>[0.0, 1.0]))sql"),
+              IsOkAndHoldsRows({{1.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT COSINE_DISTANCE(
+      ARRAY<FLOAT64>[1.0, 0.0], ARRAY<FLOAT64>[0.0, 1.0]))sql"),
+              IsOkAndHoldsRows({{1.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT EUCLIDEAN_DISTANCE(
+      ARRAY<FLOAT32>[3.0, 4.0], ARRAY<FLOAT32>[0.0, 0.0]))sql"),
+              IsOkAndHoldsRows({{5.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT EUCLIDEAN_DISTANCE(
+      ARRAY<FLOAT64>[3.0, 4.0], ARRAY<FLOAT64>[0.0, 0.0]))sql"),
+              IsOkAndHoldsRows({{5.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT DOT_PRODUCT(
+      ARRAY<FLOAT32>[1.0, 2.0], ARRAY<FLOAT32>[3.0, 4.0]))sql"),
+              IsOkAndHoldsRows({{11.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT DOT_PRODUCT(
+      ARRAY<FLOAT64>[1.0, 2.0], ARRAY<FLOAT64>[3.0, 4.0]))sql"),
+              IsOkAndHoldsRows({{11.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT MyKey FROM Base
+      ORDER BY COSINE_DISTANCE(Embedding, ARRAY<FLOAT32>[1.0, 0.1])
+      LIMIT 2)sql"),
+              IsOkAndHoldsRows({{1}, {2}}));
+  EXPECT_THAT(Query(R"sql(SELECT MyKey FROM Base
+      ORDER BY EUCLIDEAN_DISTANCE(Embedding3, ARRAY<FLOAT64>[1.0, 0.1])
+      LIMIT 2)sql"),
+              IsOkAndHoldsRows({{1}, {2}}));
+
+  EXPECT_THAT(Query(R"sql(SELECT COSINE_DISTANCE(
+      CAST(NULL AS ARRAY<FLOAT32>), ARRAY<FLOAT32>[1.0]))sql"),
+              IsOkAndHoldsRows({{Null<double>()}}));
+  EXPECT_FALSE(Query(R"sql(SELECT COSINE_DISTANCE(
+      ARRAY<FLOAT32>[0.0, 0.0], ARRAY<FLOAT32>[1.0, 0.0]))sql").ok());
+  EXPECT_FALSE(Query(R"sql(SELECT COSINE_DISTANCE(
+      ARRAY<FLOAT64>[], ARRAY<FLOAT64>[]))sql").ok());
+  EXPECT_FALSE(Query(R"sql(SELECT EUCLIDEAN_DISTANCE(
+      ARRAY<FLOAT64>[1.0], ARRAY<FLOAT64>[1.0, 2.0]))sql").ok());
+  EXPECT_FALSE(Query(R"sql(SELECT DOT_PRODUCT(
+      ARRAY<FLOAT64>[1.0, NULL], ARRAY<FLOAT64>[1.0, 2.0]))sql").ok());
+  EXPECT_THAT(Query(R"sql(SELECT DOT_PRODUCT(
+      ARRAY<FLOAT64>[CAST('NaN' AS FLOAT64)], ARRAY<FLOAT64>[1.0]))sql"),
+              IsOkAndHoldsRows({{std::numeric_limits<double>::quiet_NaN()}}));
+  EXPECT_THAT(Query(R"sql(SELECT EUCLIDEAN_DISTANCE(
+      ARRAY<FLOAT64>[CAST('inf' AS FLOAT64)], ARRAY<FLOAT64>[1.0]))sql"),
+              IsOkAndHoldsRows({{std::numeric_limits<double>::infinity()}}));
+  EXPECT_FALSE(Query(R"sql(SELECT COSINE_DISTANCE(
+      ARRAY<FLOAT64>[1e300, 1e300], ARRAY<FLOAT64>[1e300, -1e300]))sql").ok());
+}
 
 TEST_F(ANNTest, BasicANNQuery) {
   EXPECT_THAT(Query(
@@ -630,6 +681,143 @@ TEST_F(ANNTest, DropVectorIndex) {
       DROP VECTOR INDEX VI_drop
     )sql"}));
 }
+// PostgreSQL creates vector indexes with CREATE INDEX ... USING scann and
+// calls the approximate distance functions in the spanner namespace, passing
+// the options as JSONB.
+class PGANNTest : public DatabaseTest {
+ public:
+  PGANNTest() : feature_flags_({.enable_postgresql_interface = true}) {}
+
+  void SetUp() override {
+    dialect_ = database_api::DatabaseDialect::POSTGRESQL;
+    DatabaseTest::SetUp();
+  }
+
+  absl::Status SetUpDatabase() override {
+    GOOGLESQL_RETURN_IF_ERROR(SetSchemaFromFile("ann.test"));
+    return MultiInsert(
+               "base",
+               {"mykey", "mydata", "embedding", "embedding2", "embedding3"},
+               {{1, "datastr", std::vector<float>{1.0, 0.8},
+                 std::vector<float>{1.0, 0.8}, std::vector<double>{1.0, 0.8}},
+                {2, "datastr", std::vector<float>{0.1, 1.0},
+                 std::vector<float>{0.1, 1.0}, std::vector<double>{0.1, 1.0}}})
+        .status();
+  }
+
+ private:
+  test::ScopedEmulatorFeatureFlagsSetter feature_flags_;
+};
+
+TEST_F(PGANNTest, BasicANNQuery) {
+  EXPECT_THAT(Query(R"sql(
+          SELECT b.mykey FROM base /*@ force_index=vec_index */ b
+          WHERE b.embedding IS NOT NULL
+          ORDER BY spanner.approx_cosine_distance(
+            b.embedding, '{1.0, 0.1}'::float4[],
+            options => '{"num_leaves_to_search": 1}')
+          LIMIT 2)sql"),
+              IsOkAndHoldsRows({{1}, {2}}));
+  EXPECT_THAT(Query(R"sql(
+          SELECT b.mykey FROM base b
+          WHERE b.embedding IS NOT NULL
+          ORDER BY spanner.approx_dot_product(
+            '{1.0, 0.1}'::float4[], b.embedding,
+            options => '{"num_leaves_to_search": 1}'::jsonb)
+          LIMIT 2)sql"),
+              IsOkAndHoldsRows({{2}, {1}}));
+  EXPECT_THAT(Query(R"sql(
+          SELECT b.mykey FROM base b
+          WHERE b.embedding2 IS NOT NULL
+          ORDER BY spanner.approx_euclidean_distance(
+            b.embedding2, '{1.0, 0.1}'::float4[],
+            options => '{"num_leaves_to_search": 1}')
+          LIMIT 2)sql"),
+              IsOkAndHoldsRows({{1}, {2}}));
+  EXPECT_THAT(Query(R"sql(
+          SELECT b.mykey, b.mydata FROM base /*@ force_index=vec_index_store */ b
+          WHERE b.embedding IS NOT NULL
+          ORDER BY spanner.approx_cosine_distance(
+            b.embedding, '{1.0, 0.1}'::float4[],
+            options => '{"num_leaves_to_search": 1}')
+          LIMIT 1)sql"),
+              IsOkAndHoldsRows({{1, "datastr"}}));
+}
+
+TEST_F(PGANNTest, ANNQueryWithFloat8Vectors) {
+  EXPECT_THAT(QueryWithParams(R"sql(
+          SELECT b.mykey FROM base /*@ force_index=vec_index_double */ b
+          WHERE b.embedding3 IS NOT NULL
+          ORDER BY spanner.approx_cosine_distance(
+            $1, b.embedding3, options => '{"num_leaves_to_search": 1}')
+          LIMIT 2)sql",
+                              {{"p1", Value(std::vector<double>{1.0, 0.1})}}),
+              IsOkAndHoldsRows({{1}, {2}}));
+}
+
+TEST_F(PGANNTest, ANNQueryErrors) {
+  EXPECT_THAT(
+      Query(R"sql(
+          SELECT b.mykey FROM base /*@ force_index=vec_index */ b
+          WHERE b.embedding IS NOT NULL
+          ORDER BY spanner.approx_cosine_distance(
+            b.embedding, '{1.0, 0.1}'::float4[])
+          LIMIT 2)sql"),
+      error::ApproxDistanceFunctionOptionsRequired("approx_cosine_distance"));
+  EXPECT_THAT(
+      Query(R"sql(
+          SELECT b.mykey FROM base /*@ force_index=vec_index */ b
+          WHERE b.embedding IS NOT NULL
+          ORDER BY spanner.approx_cosine_distance(
+            b.embedding, '{1.0, 0.1}'::float4[],
+            options => '{"num_leaves": 1}')
+          LIMIT 2)sql"),
+      StatusIs(absl::StatusCode::kInvalidArgument,
+               HasSubstr("Argument `options` of function "
+                         "APPROX_COSINE_DISTANCE is invalid.")));
+  EXPECT_THAT(
+      Query(R"sql(
+          SELECT b.mykey FROM base /*@ force_index=vec_index */ b
+          WHERE b.embedding IS NOT NULL
+          ORDER BY spanner.approx_euclidean_distance(
+            b.embedding, '{1.0, 0.1}'::float4[],
+            options => '{"num_leaves_to_search": 1}')
+          LIMIT 2)sql"),
+      error::VectorIndexesUnusableForceIndexWrongDistanceType(
+          "vec_index", "COSINE", "APPROX_EUCLIDEAN_DISTANCE", "embedding"));
+  // Without ORDER BY ... LIMIT the functions cannot use a vector index.
+  EXPECT_THAT(Query(R"sql(
+          SELECT spanner.approx_cosine_distance(
+            b.embedding, '{1.0, 0.1}'::float4[],
+            options => '{"num_leaves_to_search": 1}')
+          FROM base b WHERE b.embedding IS NOT NULL)sql"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("APPROX_COSINE_DISTANCE is not supported")));
+}
+
+TEST_F(PGANNTest, VectorIndexDdl) {
+  EXPECT_THAT(UpdateSchema({R"sql(
+          CREATE INDEX bad_method ON base USING hash (embedding))sql"}),
+              StatusIs(absl::StatusCode::kFailedPrecondition,
+                       HasSubstr("Setting access method is not supported")));
+  EXPECT_THAT(UpdateSchema({R"sql(
+          CREATE INDEX bad_option ON base USING scann (embedding)
+          WITH (distance_type = 'COSINE', bogus = 1))sql"}),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Invalid vector index option 'bogus'")));
+  EXPECT_THAT(UpdateSchema({R"sql(
+          CREATE INDEX bad_depth ON base USING scann (embedding)
+          WITH (distance_type = 'COSINE', tree_depth = 4))sql"}),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("tree depth must be 2 or 3")));
+  EXPECT_THAT(UpdateSchema({R"sql(
+          CREATE INDEX bad_distance ON base USING scann (embedding)
+          WITH (distance_type = 'MANHATTAN'))sql"}),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("distance_type")));
+  GOOGLESQL_EXPECT_OK(UpdateSchema({"DROP INDEX vec_index_store"}));
+}
+
 }  // namespace
 
 }  // namespace test

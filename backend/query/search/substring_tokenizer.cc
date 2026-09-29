@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "googlesql/public/functions/string.h"
 #include "googlesql/public/types/type_factory.h"
 #include "googlesql/public/value.h"
 #include "absl/status/status.h"
@@ -118,48 +117,71 @@ absl::StatusOr<googlesql::Value> SubstringTokenizer::Tokenize(
   constexpr int kValue = 0;
   constexpr int kNgramMax = 1;
   constexpr int kNgramMin = 2;
+  constexpr int kContentType = 4;
+  constexpr int kRemoveDiacritics = 6;
+  constexpr int kShortTokensOnlyForAnchors = 7;
+  constexpr int kLanguageTag = 8;
 
   int ngram_size_max =
       GetIntParameterValue(args, kNgramMax, kDefaultNgramSizeMax);
   int ngram_size_min =
       GetIntParameterValue(args, kNgramMin, kDefaultNgramSizeMin);
   GOOGLESQL_RETURN_IF_ERROR(ValidateNgramSize(ngram_size_min, ngram_size_max));
+  std::string content_type =
+      args.size() > kContentType && !args[kContentType].is_null()
+          ? args[kContentType].string_value()
+          : "text/plain";
+  if (content_type != "text/plain" && content_type != "text/html") {
+    return absl::InvalidArgumentError("Invalid content_type");
+  }
+  std::string language_tag =
+      args.size() > kLanguageTag && !args[kLanguageTag].is_null()
+          ? args[kLanguageTag].string_value()
+          : "";
+  bool remove_diacritics =
+      GetBoolParameterValue(args, kRemoveDiacritics, false);
+  bool short_tokens_only_for_anchors =
+      GetBoolParameterValue(args, kShortTokensOnlyForAnchors, false);
 
   GOOGLESQL_ASSIGN_OR_RETURN(auto relative_search_types, ParseRelativeSearchTypes(args));
 
   std::vector<std::string> token_list;
   const googlesql::Value& text = args[kValue];
-  // Always add tokenize function signature as the first token. Also add value
-  // to indicate if the source is null .
-  // support_relative_search argument is not currently respected so it is not
-  // embedded in the signature.
+  if (text.is_null()) return googlesql::Value::NullTokenList();
+  // Keep a signature for non-NULL values, including empty strings.
   std::string tokenize_signature =
       absl::StrCat(kSubstringTokenizer, "-", ngram_size_max, "-",
-                   ngram_size_min, "-", std::to_string(text.is_null()), "-",
-                   std::to_string(relative_search_types));
+                   ngram_size_min, "-0-",
+                   std::to_string(relative_search_types),
+                   remove_diacritics ? "-d" : "",
+                   short_tokens_only_for_anchors ? "-a" : "");
   token_list.push_back(tokenize_signature);
 
-  if (!text.is_null()) {
-    auto process_single_value =
-        [&](const googlesql::Value& value) -> absl::Status {
-      std::string lower_str;
-      absl::Status status;
-      googlesql::functions::LowerUtf8(value.string_value(), &lower_str,
-                                      &status);
-      GOOGLESQL_RETURN_IF_ERROR(status);
-      token_list.push_back(lower_str);
-      return absl::OkStatus();
-    };
-
-    if (text.type()->IsArray()) {
-      for (auto& value : text.elements()) {
-        GOOGLESQL_RETURN_IF_ERROR(process_single_value(value));
-        // Add array gap so evaluator will handle cross array phrase search.
-        token_list.push_back(kGapString);
+  auto process_single_value =
+      [&](const googlesql::Value& value) -> absl::Status {
+    std::string source = value.string_value();
+    if (content_type == "text/html") {
+      source.clear();
+      for (const auto& segment : ExtractHtmlText(value.string_value())) {
+        if (!source.empty()) source.push_back(' ');
+        source.append(segment.text);
       }
-    } else {
-      GOOGLESQL_RETURN_IF_ERROR(process_single_value(text));
     }
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string normalized,
+        NormalizeSearchText(source, remove_diacritics, language_tag));
+    token_list.push_back(std::move(normalized));
+    return absl::OkStatus();
+  };
+
+  if (text.type()->IsArray()) {
+    for (auto& value : text.elements()) {
+      GOOGLESQL_RETURN_IF_ERROR(process_single_value(value));
+      // Add array gap so evaluator will handle cross array phrase search.
+      token_list.push_back(kGapString);
+    }
+  } else {
+    GOOGLESQL_RETURN_IF_ERROR(process_single_value(text));
   }
 
   return TokenListFromStrings(token_list);

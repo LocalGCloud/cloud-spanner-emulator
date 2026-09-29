@@ -17,11 +17,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "frontend/common/list_filter.h"
 #include "frontend/common/uris.h"
 #include "frontend/persistence/backup_catalog.h"
 #include "frontend/persistence/metadata_store.h"
@@ -47,11 +50,22 @@ absl::Status ListOperations(
   GOOGLESQL_RETURN_IF_ERROR(
       ParseOperationUri(absl::StrCat(request->name(), "/"),
                         /*resource_uri=*/nullptr, &operation_id));
+  GOOGLESQL_ASSIGN_OR_RETURN(const ListFilter filter,
+                             ListFilter::Parse(request->filter()));
+  // Reject unsupported fields even when there are no operations to filter.
+  GOOGLESQL_RETURN_IF_ERROR(
+      FilterMatchesOperation(filter, operations_api::Operation()).status());
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::vector<std::shared_ptr<Operation>> operations,
       ctx->env()->operation_manager()->ListOperations(request->name()));
   for (const auto& op : operations) {
-    op->ToProto(response->add_operations());
+    operations_api::Operation proto;
+    op->ToProto(&proto);
+    GOOGLESQL_ASSIGN_OR_RETURN(const bool matches,
+                               FilterMatchesOperation(filter, proto));
+    if (matches) {
+      *response->add_operations() = std::move(proto);
+    }
   }
   return absl::OkStatus();
 }

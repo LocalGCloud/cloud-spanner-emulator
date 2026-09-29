@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "googlesql/public/value.h"
 #include "absl/container/flat_hash_set.h"
@@ -36,21 +37,27 @@ namespace search {
 
 class ScoreNgramsEvaluator {
  public:
+  // Arguments: tokens, ngrams_query, algorithm, language_tag and
+  // array_aggregator. The optional arguments may be absent.
   static absl::StatusOr<googlesql::Value> Evaluate(
       absl::Span<const googlesql::Value> args);
 
  private:
   static constexpr int64_t kTrigrams = 3;
 
+  // Builds the unique trigrams of `query_string` and, per array element, of
+  // the source values in `tokenlist`. A TOKENLIST of a scalar has one element.
+  // `is_scalar` is set if the TOKENLIST has a source value that is not an
+  // array element.
   static absl::Status BuildTrigrams(
       const googlesql::Value& tokenlist, absl::string_view query_string,
-      bool& source_is_null,
-      absl::flat_hash_set<std::string>& tokenlist_trigrams,
+      bool& source_is_null, bool& is_scalar,
+      std::vector<absl::flat_hash_set<std::string>>& element_trigrams,
       absl::flat_hash_set<std::string>& query_trigrams);
 
-  static int64_t NumMatchingTrigrams(
-      absl::flat_hash_set<std::string>& tokenlist_trigrams,
-      absl::flat_hash_set<std::string>& query_trigrams);
+  // Returns the trigrams score of source trigrams `source_trigrams`.
+  static double Score(const absl::flat_hash_set<std::string>& source_trigrams,
+                      const absl::flat_hash_set<std::string>& query_trigrams);
 };
 
 }  // namespace search

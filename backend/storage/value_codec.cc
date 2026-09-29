@@ -27,6 +27,7 @@
 #include "googlesql/public/json_value.h"
 #include "googlesql/public/numeric_value.h"
 #include "googlesql/public/types/type.h"
+#include "googlesql/public/uuid_value.h"
 #include "googlesql/public/value.h"
 #include "absl/time/time.h"
 
@@ -51,6 +52,7 @@ constexpr uint8_t kTagNumeric = 0x09;
 constexpr uint8_t kTagJson = 0x0A;
 constexpr uint8_t kTagArray = 0x0B;
 constexpr uint8_t kTagFloat = 0x0C;
+constexpr uint8_t kTagUuid = 0x0D;
 
 // Little-endian encoding helpers for cross-architecture portability.
 void AppendInt64LE(std::string* out, int64_t val) {
@@ -163,6 +165,8 @@ const googlesql::Type* TypeForKind(googlesql::TypeKind type_kind) {
       return googlesql::types::NumericType();
     case googlesql::TYPE_JSON:
       return googlesql::types::JsonType();
+    case googlesql::TYPE_UUID:
+      return googlesql::types::UuidType();
     default:
       return nullptr;
   }
@@ -191,6 +195,8 @@ const googlesql::ArrayType* ArrayTypeForElementKind(
       return googlesql::types::NumericArrayType();
     case googlesql::TYPE_JSON:
       return googlesql::types::JsonArrayType();
+    case googlesql::TYPE_UUID:
+      return googlesql::types::UuidArrayType();
     default:
       return nullptr;
   }
@@ -277,6 +283,11 @@ std::string EncodeValue(const googlesql::Value& value) {
       AppendLengthPrefixedString(&result, json_str);
       break;
     }
+    case googlesql::TYPE_UUID: {
+      result.push_back(static_cast<char>(kTagUuid));
+      value.uuid_value().value().SerializeAndAppendToBytes(&result);
+      break;
+    }
     case googlesql::TYPE_ARRAY: {
       result.push_back(static_cast<char>(kTagArray));
       int32_t element_kind =
@@ -339,6 +350,8 @@ googlesql::Value DecodeValue(const std::string& encoded) {
           return googlesql::values::NullNumeric();
         case googlesql::TYPE_JSON:
           return googlesql::values::NullJson();
+        case googlesql::TYPE_UUID:
+          return googlesql::values::NullUuid();
         case googlesql::TYPE_ARRAY: {
           if (remaining < 8) return googlesql::Value();
           googlesql::TypeKind element_kind =
@@ -426,6 +439,14 @@ googlesql::Value DecodeValue(const std::string& encoded) {
           std::string(data, len));
       if (!json_value.ok()) return googlesql::Value();
       return googlesql::values::Json(std::move(json_value).value());
+    }
+
+    case kTagUuid: {
+      if (remaining != 16) return googlesql::Value();
+      auto uuid = googlesql::UuidValue::DeserializeFromBytes(
+          absl::string_view(data, remaining));
+      if (!uuid.ok()) return googlesql::Value();
+      return googlesql::Value::Uuid(*uuid);
     }
 
     case kTagArray: {

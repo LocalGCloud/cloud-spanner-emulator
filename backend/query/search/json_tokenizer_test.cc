@@ -22,6 +22,8 @@
 #include "googlesql/public/value.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include <utility>
+
 #include "googlesql/base/testing/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "backend/query/search/tokenizer.h"
@@ -54,6 +56,16 @@ TEST(JsonTokenizerTest, TestTokenize) {
 TEST(JsonTokenizerTest, TestTokenizeNull) {
   absl::StatusOr<googlesql::Value> result =
       JsonTokenizer::Tokenize({googlesql::Value::NullJson()});
+  GOOGLESQL_EXPECT_OK(result.status());
+  EXPECT_TRUE(result->type()->IsTokenList());
+  EXPECT_TRUE(result->is_null());
+}
+
+TEST(JsonTokenizerTest, JsonNullIsNotSqlNull) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto json_null, googlesql::JSONValue::ParseJSONString("null"));
+  auto result = JsonTokenizer::Tokenize(
+      {googlesql::Value::Json(std::move(json_null))});
   CheckResult(result);
 }
 

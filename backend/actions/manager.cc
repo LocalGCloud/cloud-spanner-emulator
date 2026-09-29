@@ -56,9 +56,29 @@ namespace spanner {
 namespace emulator {
 namespace backend {
 
+namespace {
+
+// Returns the actions registered for `table`, or no actions. A registry is
+// shared by every transaction on its schema, and change stream churner threads
+// write concurrently with user transactions, so a lookup must never insert into
+// the map (operator[] would, racing with other lookups on a rehash).
+template <typename Action>
+const std::vector<std::unique_ptr<Action>>& ActionsForTable(
+    const absl::flat_hash_map<const Table*,
+                              std::vector<std::unique_ptr<Action>>>& actions,
+    const Table* table) {
+  static const auto* const kNoActions =
+      new std::vector<std::unique_ptr<Action>>();
+  auto it = actions.find(table);
+  return it == actions.end() ? *kNoActions : it->second;
+}
+
+}  // namespace
+
 absl::Status ActionRegistry::ExecuteValidators(const ActionContext* ctx,
                                                const WriteOp& op) {
-  for (auto& validator : table_validators_[TableOf(op)]) {
+  for (const auto& validator :
+       ActionsForTable(table_validators_, TableOf(op))) {
     GOOGLESQL_RETURN_IF_ERROR(validator->Validate(ctx, op));
   }
   return absl::OkStatus();
@@ -66,7 +86,7 @@ absl::Status ActionRegistry::ExecuteValidators(const ActionContext* ctx,
 
 absl::Status ActionRegistry::ExecuteEffectors(const ActionContext* ctx,
                                               const WriteOp& op) {
-  for (auto& effector : table_effectors_[TableOf(op)]) {
+  for (const auto& effector : ActionsForTable(table_effectors_, TableOf(op))) {
     GOOGLESQL_RETURN_IF_ERROR(effector->Effect(ctx, op));
   }
   return absl::OkStatus();
@@ -76,19 +96,19 @@ absl::Status ActionRegistry::ExecuteEvaluatedKeyEffectors(
     const MutationOp& op,
     std::vector<std::vector<googlesql::Value>>* evaluated_values,
     std::vector<const Column*>* columns_with_evaluated_values) {
-  if (table_evaluated_key_effectors_.find(op.table) ==
-      table_evaluated_key_effectors_.end()) {
+  auto it = table_evaluated_key_effectors_.find(op.table);
+  if (it == table_evaluated_key_effectors_.end()) {
     return absl::OkStatus();
   }
 
-  GOOGLESQL_RETURN_IF_ERROR(table_evaluated_key_effectors_[op.table]->Effect(
-      op, evaluated_values, columns_with_evaluated_values));
+  GOOGLESQL_RETURN_IF_ERROR(it->second->Effect(op, evaluated_values,
+                                     columns_with_evaluated_values));
   return absl::OkStatus();
 }
 
 absl::Status ActionRegistry::ExecuteModifiers(const ActionContext* ctx,
                                               const WriteOp& op) {
-  for (auto& modifier : table_modifiers_[TableOf(op)]) {
+  for (const auto& modifier : ActionsForTable(table_modifiers_, TableOf(op))) {
     GOOGLESQL_RETURN_IF_ERROR(modifier->Modify(ctx, op));
   }
   return absl::OkStatus();
@@ -96,7 +116,7 @@ absl::Status ActionRegistry::ExecuteModifiers(const ActionContext* ctx,
 
 absl::Status ActionRegistry::ExecuteVerifiers(const ActionContext* ctx,
                                               const WriteOp& op) {
-  for (auto& verifier : table_verifiers_[TableOf(op)]) {
+  for (const auto& verifier : ActionsForTable(table_verifiers_, TableOf(op))) {
     GOOGLESQL_RETURN_IF_ERROR(verifier->Verify(ctx, op));
   }
   return absl::OkStatus();

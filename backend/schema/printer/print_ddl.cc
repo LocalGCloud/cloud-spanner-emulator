@@ -34,6 +34,8 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "absl/strings/str_replace.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/strings/substitute.h"
@@ -44,12 +46,14 @@
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/catalog/database_options.h"
 #include "backend/schema/catalog/foreign_key.h"
+#include "backend/schema/catalog/grants.h"
 #include "backend/schema/catalog/locality_group.h"
 #include "backend/schema/catalog/model.h"
 #include "backend/schema/catalog/named_schema.h"
 #include "backend/schema/catalog/placement.h"
 #include "backend/schema/catalog/property_graph.h"
 #include "backend/schema/catalog/proto_bundle.h"
+#include "backend/schema/catalog/role.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/catalog/udf.h"
@@ -746,6 +750,9 @@ void TopologicalOrderSchemaNodes(
       named_schema != nullptr) {
     statements->push_back(PrintNamedSchema(named_schema));
   }
+  if (const Role* role = node->As<const Role>(); role != nullptr) {
+    statements->push_back(absl::StrCat("CREATE ROLE ", PrintName(role->Name())));
+  }
 }
 
 std::string PrintCheckConstraint(const CheckConstraint* check_constraint) {
@@ -941,6 +948,123 @@ std::string PrintLocalityGroupOptions(
       });
 }
 
+namespace {
+
+// Quotes a PostgreSQL identifier, which may be qualified by a schema name.
+std::string QuotePostgreSQLName(absl::string_view name) {
+  return absl::StrJoin(
+      absl::StrSplit(name, '.'), ".", [](std::string* out, absl::string_view part) {
+        absl::StrAppend(out, "\"", absl::StrReplaceAll(part, {{"\"", "\"\""}}),
+                        "\"");
+      });
+}
+
+// Prints a list of roles. `public` is a keyword in PostgreSQL.
+std::string PrintRoleNames(
+    const ::google::protobuf::RepeatedPtrField<ddl::Grantee>& roles,
+    bool is_postgresql) {
+  std::string names = absl::StrJoin(
+      roles, ", ", [&](std::string* out, const ddl::Grantee& role) {
+        if (!is_postgresql) {
+          absl::StrAppend(out, PrintName(role.name()));
+        } else if (role.name() == kPublicRole) {
+          absl::StrAppend(out, role.name());
+        } else {
+          absl::StrAppend(out, QuotePostgreSQLName(role.name()));
+        }
+      });
+  return is_postgresql ? names : absl::StrCat("ROLE ", names);
+}
+
+std::string PrintPrivileges(
+    const ::google::protobuf::RepeatedPtrField<ddl::Privilege>& privileges,
+    bool is_postgresql) {
+  return absl::StrJoin(
+      privileges, ", ", [&](std::string* out, const ddl::Privilege& privilege) {
+        absl::StrAppend(out, ddl::Privilege::Type_Name(privilege.type()));
+        if (!privilege.column().empty()) {
+          absl::StrAppend(
+              out, "(",
+              absl::StrJoin(privilege.column(), ", ",
+                            [&](std::string* out, const std::string& column) {
+                              absl::StrAppend(
+                                  out, is_postgresql
+                                           ? QuotePostgreSQLName(column)
+                                           : PrintName(column));
+                            }),
+              ")");
+        }
+      });
+}
+
+std::string PrintPrivilegeTarget(const ddl::PrivilegeTarget& target,
+                                 bool is_postgresql) {
+  std::string keyword;
+  switch (target.type()) {
+    case ddl::PrivilegeTarget::TABLE:
+      keyword = "TABLE";
+      break;
+    case ddl::PrivilegeTarget::VIEW:
+      // PostgreSQL grants privileges on views as privileges on tables.
+      keyword = is_postgresql ? "TABLE" : "VIEW";
+      break;
+    case ddl::PrivilegeTarget::CHANGE_STREAM:
+      keyword = "CHANGE STREAM";
+      break;
+    case ddl::PrivilegeTarget::SEQUENCE:
+      keyword = "SEQUENCE";
+      break;
+    case ddl::PrivilegeTarget::MODEL:
+      keyword = "MODEL";
+      break;
+    case ddl::PrivilegeTarget::SCHEMA:
+      keyword = "SCHEMA";
+      break;
+    default:
+      keyword = is_postgresql ? "FUNCTION" : "TABLE FUNCTION";
+      break;
+  }
+  std::string names = absl::StrJoin(
+      target.name(), ", ", [&](std::string* out, const std::string& name) {
+        if (target.type() == ddl::PrivilegeTarget::SCHEMA && name.empty()) {
+          absl::StrAppend(out, is_postgresql ? "public" : "DEFAULT");
+        } else if (!is_postgresql) {
+          absl::StrAppend(out, PrintName(name));
+        } else if (target.type() == ddl::PrivilegeTarget::TABLE_FUNCTION) {
+          // Change stream read functions are in the `spanner` namespace.
+          absl::StrAppend(out, "spanner.", QuotePostgreSQLName(name));
+        } else {
+          absl::StrAppend(out, QuotePostgreSQLName(name));
+        }
+      });
+  return absl::StrCat(keyword, " ", names);
+}
+
+// Prints a GRANT or REVOKE statement produced by Schema::DumpGrants().
+std::string PrintGrantStatement(const ddl::DDLStatement& statement,
+                                bool is_postgresql) {
+  if (statement.has_grant_membership()) {
+    return absl::StrCat(
+        "GRANT ",
+        PrintRoleNames(statement.grant_membership().role(), is_postgresql),
+        " TO ",
+        PrintRoleNames(statement.grant_membership().grantee(), is_postgresql));
+  }
+  if (statement.has_revoke_privilege()) {
+    const ddl::RevokePrivilege& revoke = statement.revoke_privilege();
+    return absl::StrCat(
+        "REVOKE ", PrintPrivileges(revoke.privilege(), is_postgresql), " ON ",
+        PrintPrivilegeTarget(revoke.target(), is_postgresql), " FROM ",
+        PrintRoleNames(revoke.grantee(), is_postgresql));
+  }
+  const ddl::GrantPrivilege& grant = statement.grant_privilege();
+  return absl::StrCat("GRANT ", PrintPrivileges(grant.privilege(), is_postgresql),
+                      " ON ", PrintPrivilegeTarget(grant.target(), is_postgresql),
+                      " TO ", PrintRoleNames(grant.grantee(), is_postgresql));
+}
+
+}  // namespace
+
 absl::StatusOr<std::vector<std::string>> PrintDDLStatements(
     const Schema* schema) {
   std::vector<std::string> statements;
@@ -950,6 +1074,20 @@ absl::StatusOr<std::vector<std::string>> PrintDDLStatements(
     GOOGLESQL_RETURN_IF_ERROR(printer.status());
     ddl::DDLStatementList ddl_statements = schema->Dump();
     for (const ddl::DDLStatement& statement : ddl_statements.statement()) {
+      // The PostgreSQL schema printer does not handle role statements.
+      if (statement.has_create_role()) {
+        statements.push_back(absl::StrCat(
+            "CREATE ROLE ",
+            QuotePostgreSQLName(statement.create_role().role_name())));
+        continue;
+      }
+      if (statement.has_grant_privilege() ||
+          statement.has_revoke_privilege() ||
+          statement.has_grant_membership()) {
+        statements.push_back(
+            PrintGrantStatement(statement, /*is_postgresql=*/true));
+        continue;
+      }
       absl::StatusOr<std::vector<std::string>> printed_statements =
           (*printer)->PrintDDLStatementForEmulator(statement);
       GOOGLESQL_RETURN_IF_ERROR(printed_statements.status());
@@ -983,6 +1121,9 @@ absl::StatusOr<std::vector<std::string>> PrintDDLStatements(
 
   // Print schema nodes while ensuring that dependencies are printed first.
   absl::flat_hash_set<const SchemaNode*> visited;
+  for (const Role* role : schema->roles()) {
+    TopologicalOrderSchemaNodes(role, &visited, &statements);
+  }
   for (const NamedSchema* named_schema : schema->named_schemas()) {
     TopologicalOrderSchemaNodes(named_schema, &visited, &statements);
   }
@@ -1019,6 +1160,11 @@ absl::StatusOr<std::vector<std::string>> PrintDDLStatements(
     }
   }
 
+  const ddl::DDLStatementList grants = schema->DumpGrants();
+  for (const ddl::DDLStatement& statement : grants.statement()) {
+    statements.push_back(
+        PrintGrantStatement(statement, /*is_postgresql=*/false));
+  }
   return statements;
 }
 

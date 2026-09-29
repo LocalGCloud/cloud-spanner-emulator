@@ -51,6 +51,7 @@ message DDLStatement {
     CreateVectorIndex create_vector_index = 92;
     DropVectorIndex drop_vector_index = 97;
     AlterVectorIndex alter_vector_index = 99;
+    AlterSearchIndex alter_search_index = 100;
 
     // Change Stream statements.
     CreateChangeStream create_change_stream = 56;
@@ -804,8 +805,7 @@ message Analyze {
   // Intentionally empty.
 }
 
-// FGAC protos.  For now, these are parsed by the DDL parser but do not
-// actually impact behavior of the emulator.
+// FGAC protos.
 message CreateRole {
   optional string role_name = 1;
 }
@@ -833,8 +833,9 @@ message Privilege {
   }
   optional Type type = 1;
 
-  // TODO: Add support for column-level FGAC
-  // repeated string column = 2;
+  // The columns of a column-level privilege. Empty for a privilege on the
+  // whole object.
+  repeated string column = 2;
 }
 
 message PrivilegeTarget {
@@ -850,7 +851,13 @@ message PrivilegeTarget {
     SCHEMA = 8;
   }
   optional Type type = 1;
-  repeated string name = 2;  // Empty means all objects.
+  // The object names. For SCHEMA targets, the empty name is the default
+  // schema.
+  repeated string name = 2;
+  // The schemas of an `ALL <objects> IN SCHEMA` target, which applies to the
+  // objects of the target type that exist in these schemas. The empty name is
+  // the default schema.
+  repeated string all_in_schema = 3;
 }
 
 message GrantPrivilege {
@@ -952,6 +959,18 @@ message CreateSearchIndex {
 message SearchIndexOptionsProto {
   optional bool sort_order_sharding = 1;
   optional bool disable_automatic_uid_column = 2;
+}
+
+message AlterSearchIndex {
+  // Required.
+  optional string index_name = 1;
+  oneof alter_type {
+    // TOKENLIST columns that are the search index keys.
+    string add_column = 2;
+    string drop_column = 3;
+    string add_stored_column = 4;
+    string drop_stored_column = 5;
+  }
 }
 
 message DropSearchIndex {

@@ -81,6 +81,28 @@ absl::Status GetAnnFunctionCall(
           ->GetAs<googlesql::ResolvedOrderByScan>()
           ->input_scan()
           ->GetAs<googlesql::ResolvedProjectScan>();
+  // PostgreSQL orders by pg.map_double_to_int(key), computed in a ProjectScan
+  // over the one that computes the DOUBLE key itself.
+  const googlesql::ResolvedExpr* order_by_expr =
+      project_scan->expr_list_size() == 1 ? project_scan->expr_list(0)->expr()
+                                          : nullptr;
+  if (order_by_expr != nullptr &&
+      project_scan->expr_list(0)->column() == order_by_column &&
+      order_by_expr->Is<googlesql::ResolvedFunctionCall>() &&
+      project_scan->input_scan()->Is<googlesql::ResolvedProjectScan>()) {
+    const googlesql::ResolvedFunctionCall* map_double_to_int =
+        order_by_expr->GetAs<googlesql::ResolvedFunctionCall>();
+    if (map_double_to_int->function()->Name() == "pg.map_double_to_int" &&
+        map_double_to_int->argument_list_size() == 1 &&
+        map_double_to_int->argument_list(0)
+            ->Is<googlesql::ResolvedColumnRef>()) {
+      order_by_column = map_double_to_int->argument_list(0)
+                            ->GetAs<googlesql::ResolvedColumnRef>()
+                            ->column();
+      project_scan =
+          project_scan->input_scan()->GetAs<googlesql::ResolvedProjectScan>();
+    }
+  }
   project_scan->GetChildNodes(&child_nodes);
   for (auto child : child_nodes) {
     if (child->Is<googlesql::ResolvedComputedColumn>()) {

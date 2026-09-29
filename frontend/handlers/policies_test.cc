@@ -158,26 +158,56 @@ TEST_F(PolicyApiTest, InstancePoliciesRoundTripAndAllowEveryPermission) {
   EXPECT_EQ(permissions_response.permissions(1), "spanner.databases.list");
 }
 
-TEST_F(PolicyApiTest, DatabasePoliciesRoundTripWithCallerEtag) {
+TEST_F(PolicyApiTest, DatabasePoliciesEnforceEtagPreconditions) {
   const std::string resource =
       "projects/test-project/instances/test-instance/databases/test-database";
   iam_api::SetIamPolicyRequest set_request;
   set_request.set_resource(resource);
-  set_request.mutable_policy()->set_etag("caller-etag");
+  set_request.mutable_policy()->set_etag("missing-policy-etag");
   auto* binding = set_request.mutable_policy()->add_bindings();
   binding->set_role("roles/spanner.databaseUser");
   binding->add_members("serviceAccount:local@example.com");
 
   iam_api::Policy set_response;
-  grpc::ClientContext set_context;
-  grpc::Status set_status = test_env()->database_admin_client()->SetIamPolicy(
-      &set_context, set_request, &set_response);
-  ASSERT_TRUE(set_status.ok()) << set_status.error_message();
-  EXPECT_EQ(set_response.etag(), "caller-etag");
+  grpc::ClientContext missing_context;
+  grpc::Status missing_status =
+      test_env()->database_admin_client()->SetIamPolicy(
+          &missing_context, set_request, &set_response);
+  EXPECT_EQ(missing_status.error_code(), grpc::StatusCode::ABORTED);
 
   iam_api::GetIamPolicyRequest get_request;
   get_request.set_resource(resource);
   iam_api::Policy get_response;
+  grpc::ClientContext empty_context;
+  ASSERT_TRUE(test_env()
+                  ->database_admin_client()
+                  ->GetIamPolicy(&empty_context, get_request, &get_response)
+                  .ok());
+  EXPECT_EQ(get_response.ByteSizeLong(), 0);
+
+  set_request.mutable_policy()->clear_etag();
+  grpc::ClientContext set_context;
+  grpc::Status set_status = test_env()->database_admin_client()->SetIamPolicy(
+      &set_context, set_request, &set_response);
+  ASSERT_TRUE(set_status.ok()) << set_status.error_message();
+  ASSERT_FALSE(set_response.etag().empty());
+  const std::string first_etag = set_response.etag();
+
+  set_request.mutable_policy()->set_etag(first_etag);
+  set_request.mutable_policy()->mutable_bindings(0)->set_role(
+      "roles/spanner.databaseReader");
+  grpc::ClientContext update_context;
+  set_status = test_env()->database_admin_client()->SetIamPolicy(
+      &update_context, set_request, &set_response);
+  ASSERT_TRUE(set_status.ok()) << set_status.error_message();
+  EXPECT_NE(set_response.etag(), first_etag);
+
+  set_request.mutable_policy()->set_etag(first_etag);
+  grpc::ClientContext stale_context;
+  grpc::Status stale_status = test_env()->database_admin_client()->SetIamPolicy(
+      &stale_context, set_request, &get_response);
+  EXPECT_EQ(stale_status.error_code(), grpc::StatusCode::ABORTED);
+
   grpc::ClientContext get_context;
   grpc::Status get_status = test_env()->database_admin_client()->GetIamPolicy(
       &get_context, get_request, &get_response);
@@ -212,14 +242,12 @@ TEST(PolicyPersistenceTest, PoliciesHydrateIntoNewEnvironment) {
 
   iam_api::Policy instance_policy;
   instance_policy.set_version(3);
-  instance_policy.set_etag("instance-etag");
   auto* instance_binding = instance_policy.add_bindings();
   instance_binding->set_role("roles/spanner.viewer");
   instance_binding->add_members("user:instance@example.com");
 
   iam_api::Policy database_policy;
   database_policy.set_version(1);
-  database_policy.set_etag("database-etag");
   auto* database_binding = database_policy.add_bindings();
   database_binding->set_role("roles/spanner.databaseUser");
   database_binding->add_members("user:database@example.com");
@@ -235,6 +263,7 @@ TEST(PolicyPersistenceTest, PoliciesHydrateIntoNewEnvironment) {
     ASSERT_TRUE(first.instance_admin_client()
                     ->SetIamPolicy(&instance_context, request, &response)
                     .ok());
+    instance_policy = response;
 
     grpc::ClientContext database_context;
     request.set_resource(database);
@@ -242,6 +271,7 @@ TEST(PolicyPersistenceTest, PoliciesHydrateIntoNewEnvironment) {
     ASSERT_TRUE(first.database_admin_client()
                     ->SetIamPolicy(&database_context, request, &response)
                     .ok());
+    database_policy = response;
   }
 
   {
@@ -298,7 +328,6 @@ TEST(PolicyPersistenceTest,
 
   iam_api::Policy policy;
   policy.set_version(1);
-  policy.set_etag("broken-etag");
   auto* binding = policy.add_bindings();
   binding->set_role("roles/spanner.databaseUser");
   binding->add_members("user:database@example.com");
@@ -314,6 +343,7 @@ TEST(PolicyPersistenceTest,
     ASSERT_TRUE(first.database_admin_client()
                     ->SetIamPolicy(&context, request, &response)
                     .ok());
+    policy = response;
     // A policy whose resource no longer exists, as older or hand-edited
     // metadata can hold.
     MetadataStore* metadata = first.server()->env()->metadata_store();
@@ -381,7 +411,6 @@ TEST(PolicyPersistenceTest, ResourceDeletionRemovesPolicies) {
   EXPECT_TRUE(std::filesystem::exists(database_root / "storage"));
 
   iam_api::SetIamPolicyRequest set_request;
-  set_request.mutable_policy()->set_etag("policy");
   iam_api::Policy policy;
   grpc::ClientContext set_instance_context;
   set_request.set_resource(instance);
@@ -394,9 +423,8 @@ TEST(PolicyPersistenceTest, ResourceDeletionRemovesPolicies) {
                   ->SetIamPolicy(&set_database_context, set_request, &policy)
                   .ok());
   const std::string child_resource = database + "/backupSchedules/s1";
-  env.server()->env()->SetIamPolicy(child_resource, set_request.policy());
-  env.server()->env()->metadata_store()->SetIamPolicy(child_resource,
-                                                      set_request.policy());
+  env.server()->env()->SetIamPolicy(child_resource, policy);
+  env.server()->env()->metadata_store()->SetIamPolicy(child_resource, policy);
   GOOGLESQL_ASSERT_OK(env.server()->env()->metadata_store()->Save());
 
   database_api::DropDatabaseRequest drop_database;
@@ -460,7 +488,6 @@ TEST(PolicyPersistenceTest, SaveFailureRollsBackMemoryAndMetadata) {
   iam_api::SetIamPolicyRequest request;
   request.set_resource(resource);
   request.mutable_policy()->set_version(1);
-  request.mutable_policy()->set_etag("original");
   request.mutable_policy()->add_bindings()->set_role("roles/spanner.viewer");
   iam_api::Policy response;
   grpc::ClientContext first_context;
@@ -474,7 +501,6 @@ TEST(PolicyPersistenceTest, SaveFailureRollsBackMemoryAndMetadata) {
   request.set_resource(child_resource);
   request.mutable_policy()->Clear();
   request.mutable_policy()->set_version(1);
-  request.mutable_policy()->set_etag("child");
   grpc::ClientContext child_context;
   ASSERT_TRUE(env.database_admin_client()
                   ->SetIamPolicy(&child_context, request, &response)
@@ -485,13 +511,14 @@ TEST(PolicyPersistenceTest, SaveFailureRollsBackMemoryAndMetadata) {
       std::filesystem::create_directory(data_dir.path() + "/metadata.json.tmp"));
   request.set_resource(resource);
   request.mutable_policy()->set_version(3);
-  request.mutable_policy()->set_etag("replacement");
+  request.mutable_policy()->set_etag(original.etag());
   grpc::ClientContext failed_context;
   grpc::Status status = env.instance_admin_client()->SetIamPolicy(
       &failed_context, request, &response);
   EXPECT_EQ(status.error_code(), grpc::StatusCode::FAILED_PRECONDITION);
 
   request.set_resource("projects/p/instances/i2");
+  request.mutable_policy()->clear_etag();
   grpc::ClientContext absent_parent_context;
   status = env.instance_admin_client()->SetIamPolicy(
       &absent_parent_context, request, &response);
@@ -545,8 +572,6 @@ TEST(PolicyPersistenceTest, ConcurrentUpdatesKeepLiveAndDiskStateEqual) {
         }
         iam_api::SetIamPolicyRequest request;
         request.set_resource(resource);
-        request.mutable_policy()->set_etag(
-            "writer-" + std::to_string(writer));
         request.mutable_policy()->add_bindings()->set_role(
             "roles/spanner.viewer");
         iam_api::Policy response;

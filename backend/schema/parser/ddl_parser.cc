@@ -2880,6 +2880,34 @@ void VisitAlterVectorIndexNode(const SimpleNode* node,
   }
 }
 
+void VisitAlterSearchIndexNode(const SimpleNode* node,
+                               AlterSearchIndex* alter_search_index,
+                               std::vector<std::string>* errors) {
+  CheckNode(node, JJTALTER_SEARCH_INDEX_STATEMENT);
+  alter_search_index->set_index_name(
+      GetQualifiedIdentifier(GetFirstChildNode(node, JJTNAME)));
+  const SimpleNode* child = GetChildNode(node, 1);
+  switch (child->getId()) {
+    case JJTADD_COLUMN_NAME:
+      alter_search_index->set_add_column(child->image());
+      break;
+    case JJTDROP_COLUMN_NAME:
+      alter_search_index->set_drop_column(child->image());
+      break;
+    case JJTADD_STORED_COLUMN_NAME:
+      alter_search_index->set_add_stored_column(child->image());
+      break;
+    case JJTDROP_STORED_COLUMN_NAME:
+      alter_search_index->set_drop_stored_column(child->image());
+      break;
+    default:
+      errors->push_back(LogicalError(
+          child, absl::StrCat("Unexpected value for alter search index type: ",
+                              child->image())));
+      break;
+  }
+}
+
 void VisitPrivilegeNode(const SimpleNode* node, Privilege* privilege,
                         std::vector<std::string>* errors) {
   CheckNode(node, JJTPRIVILEGE);
@@ -2902,10 +2930,11 @@ void VisitPrivilegeNode(const SimpleNode* node, Privilege* privilege,
     return;
   }
 
-  // TODO: Add support for column-level FGAC
   if (node->jjtGetNumChildren() != 0) {
-    errors->push_back(
-        "Emulator does not yet support column level access controls");
+    SimpleNode* columns = GetChildNode(node, 0, JJTIDENTIFIER_LIST);
+    for (int i = 0; i < columns->jjtGetNumChildren(); ++i) {
+      privilege->add_column(GetChildNode(columns, i, JJTIDENTIFIER)->image());
+    }
   }
 }
 
@@ -2918,10 +2947,59 @@ void VisitPrivilegesNode(const SimpleNode* node, Privileges* privileges,
   }
 }
 
+// Adds the names of a schema_names node to `names`. The default schema has
+// the empty name.
+void VisitSchemaNamesNode(const SimpleNode* node,
+                          google::protobuf::RepeatedPtrField<std::string>* names) {
+  CheckNode(node, JJTSCHEMA_NAMES);
+  for (int i = 0; i < node->jjtGetNumChildren(); ++i) {
+    SimpleNode* name = GetChildNode(node, i);
+    *names->Add() = name->getId() == JJTDEFAULT_SCHEMA ? "" : name->image();
+  }
+}
+
+void VisitAllInSchemaTargetNode(const SimpleNode* node,
+                                PrivilegeTarget* target,
+                                std::vector<std::string>* errors) {
+  CheckNode(node, JJTALL_IN_SCHEMA_TARGET);
+  SimpleNode* kind = GetChildNode(node, 0);
+  const std::string& kind_name = kind->image();
+  if (kind->getId() == JJTCHANGE_STREAMS) {
+    if (!absl::EqualsIgnoreCase(kind_name, "STREAMS")) {
+      errors->push_back(absl::StrCat(
+          "Expected STREAMS after ALL CHANGE but found: ", kind_name));
+      return;
+    }
+    target->set_type(PrivilegeTarget::CHANGE_STREAM);
+  } else if (absl::EqualsIgnoreCase(kind_name, "TABLES")) {
+    target->set_type(PrivilegeTarget::TABLE);
+  } else if (absl::EqualsIgnoreCase(kind_name, "VIEWS")) {
+    target->set_type(PrivilegeTarget::VIEW);
+  } else if (absl::EqualsIgnoreCase(kind_name, "SEQUENCES")) {
+    target->set_type(PrivilegeTarget::SEQUENCE);
+  } else {
+    errors->push_back(absl::StrCat(
+        "Expected TABLES, VIEWS, SEQUENCES or CHANGE STREAMS after ALL but "
+        "found: ",
+        kind_name));
+    return;
+  }
+  VisitSchemaNamesNode(GetChildNode(node, 1), target->mutable_all_in_schema());
+}
+
 void VisitPrivilegeTargetsNode(const SimpleNode* node, PrivilegeTarget* target,
                                std::vector<std::string>* errors) {
   CheckNode(node, JJTPRIVILEGE_TARGET);
   SimpleNode* child = GetChildNode(node, 0);
+  if (child->getId() == JJTALL_IN_SCHEMA_TARGET) {
+    VisitAllInSchemaTargetNode(child, target, errors);
+    return;
+  }
+  if (child->getId() == JJTSCHEMA_TARGET) {
+    target->set_type(PrivilegeTarget::SCHEMA);
+    VisitSchemaNamesNode(GetChildNode(child, 0), target->mutable_name());
+    return;
+  }
   CheckNode(child, JJTTARGET_TYPE);
   child = GetChildNode(child, 0);
   switch (child->getId()) {
@@ -2947,6 +3025,10 @@ void VisitPrivilegeTargetsNode(const SimpleNode* node, PrivilegeTarget* target,
     }
     case JJTSEQUENCE: {
       target->set_type(PrivilegeTarget::SEQUENCE);
+      break;
+    }
+    case JJTMODEL: {
+      target->set_type(PrivilegeTarget::MODEL);
       break;
     }
     default: {
@@ -3499,6 +3581,11 @@ void BuildCloudDDLStatement(const SimpleNode* root, absl::string_view ddl_text,
       break;
     case JJTALTER_INDEX_STATEMENT: {
       VisitAlterIndexNode(stmt, statement->mutable_alter_index(), errors);
+      break;
+    }
+    case JJTALTER_SEARCH_INDEX_STATEMENT: {
+      VisitAlterSearchIndexNode(stmt, statement->mutable_alter_search_index(),
+                                errors);
       break;
     }
     case JJTALTER_VECTOR_INDEX_STATEMENT: {

@@ -16,6 +16,7 @@
 
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "google/longrunning/operations.pb.h"
 #include "google/protobuf/empty.pb.h"
@@ -237,7 +238,7 @@ TEST_F(InstanceApiTest, ListsPaginatedInstances) {
 
   // List instances from test-instance with page_size being 5, i.e., only 5
   // instances test-instance0, test-instance1,..., test-instance4 should be
-  // returned with next_page_token pointing to test-instance5.
+  // returned with a next_page_token that resumes at test-instance5.
   instance_api::ListInstancesResponse response;
   GOOGLESQL_EXPECT_OK(ListInstances(test_project_uri_, page_size, "" /*page_token*/,
                           &response));
@@ -246,10 +247,9 @@ TEST_F(InstanceApiTest, ListsPaginatedInstances) {
     EXPECT_EQ(response.instances(i).name(),
               absl::StrCat(test_instance_uri_, i));
   }
-  EXPECT_EQ(response.next_page_token(),
-            absl::StrCat(test_instance_uri_, page_size));
+  EXPECT_FALSE(response.next_page_token().empty());
 
-  // Using the next_page_token pointing to test-instance5, list next at most 5
+  // Using the next_page_token resuming at test-instance5, list next at most 5
   // instances test-instance5, test-instance6 and test-instance7.
   instance_api::ListInstancesResponse response2;
   GOOGLESQL_EXPECT_OK(ListInstances(test_project_uri_, page_size,
@@ -261,6 +261,93 @@ TEST_F(InstanceApiTest, ListsPaginatedInstances) {
   }
   // No more instances left to be returned and thus next_page_token is not set.
   EXPECT_EQ(response2.next_page_token(), "");
+}
+
+TEST_F(InstanceApiTest, ListInstancesFilters) {
+  const auto create = [this](const std::string& instance_id,
+                             const std::string& display_name,
+                             const std::string& env) -> absl::Status {
+    instance_api::CreateInstanceRequest request;
+    request.set_parent(test_project_uri_);
+    request.set_instance_id(instance_id);
+    request.mutable_instance()->set_config(
+        MakeInstanceConfigUri(test_project_name_, kTestConfigId));
+    request.mutable_instance()->set_display_name(display_name);
+    request.mutable_instance()->set_node_count(1);
+    if (!env.empty()) {
+      (*request.mutable_instance()->mutable_labels())["env"] = env;
+    }
+    grpc::ClientContext context;
+    longrunning::Operation operation;
+    GOOGLESQL_RETURN_IF_ERROR(test_env()->instance_admin_client()->CreateInstance(
+        &context, request, &operation));
+    return WaitForOperation(operation.name(), &operation);
+  };
+  GOOGLESQL_ASSERT_OK(create("howl-dev", "Howl Dev", "dev"));
+  GOOGLESQL_ASSERT_OK(create("howl-prod", "Howl Prod", "prod"));
+  GOOGLESQL_ASSERT_OK(create("other", "Other", "dev2"));
+  GOOGLESQL_ASSERT_OK(create("unlabeled", "Unlabeled", ""));
+
+  const auto list = [this](const std::string& filter, int32_t page_size,
+                           const std::string& page_token,
+                           std::vector<std::string>* names,
+                           std::string* next_page_token) -> absl::Status {
+    instance_api::ListInstancesRequest request;
+    request.set_parent(test_project_uri_);
+    request.set_filter(filter);
+    request.set_page_size(page_size);
+    request.set_page_token(page_token);
+    instance_api::ListInstancesResponse response;
+    grpc::ClientContext context;
+    GOOGLESQL_RETURN_IF_ERROR(test_env()->instance_admin_client()->ListInstances(
+        &context, request, &response));
+    names->clear();
+    for (const auto& instance : response.instances()) {
+      names->push_back(instance.name().substr(test_project_uri_.size() +
+                                              std::string("/instances/").size()));
+    }
+    *next_page_token = response.next_page_token();
+    return absl::OkStatus();
+  };
+  std::vector<std::string> names;
+  std::string next_page_token;
+  // Examples from the ListInstancesRequest.filter documentation.
+  GOOGLESQL_ASSERT_OK(list("name:*", 0, "", &names, &next_page_token));
+  EXPECT_EQ(names.size(), 4);
+  GOOGLESQL_ASSERT_OK(list("NAME:HOWL", 0, "", &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("howl-dev", "howl-prod"));
+  GOOGLESQL_ASSERT_OK(list("labels.env:*", 0, "", &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("howl-dev", "howl-prod", "other"));
+  GOOGLESQL_ASSERT_OK(list("labels.env:dev", 0, "", &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("howl-dev", "other"));
+  GOOGLESQL_ASSERT_OK(
+      list("name:howl labels.env:dev", 0, "", &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("howl-dev"));
+  GOOGLESQL_ASSERT_OK(list("display_name = \"howl prod\" OR labels.env = dev2",
+                           0, "", &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("howl-prod", "other"));
+  GOOGLESQL_ASSERT_OK(
+      list("NOT labels.env:*", 0, "", &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("unlabeled"));
+
+  // Filtering happens before pagination, and the token keeps the filter.
+  GOOGLESQL_ASSERT_OK(list("labels.env:dev", 1, "", &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("howl-dev"));
+  ASSERT_FALSE(next_page_token.empty());
+  const std::string token = next_page_token;
+  GOOGLESQL_ASSERT_OK(
+      list("labels.env:dev", 1, token, &names, &next_page_token));
+  EXPECT_THAT(names, testing::ElementsAre("other"));
+  EXPECT_TRUE(next_page_token.empty());
+  EXPECT_THAT(list("labels.env:prod", 1, token, &names, &next_page_token),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(list("", 1, test_instance_uri_, &names, &next_page_token),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  EXPECT_THAT(list("config:x", 0, "", &names, &next_page_token),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  EXPECT_THAT(list("labels.env", 0, "", &names, &next_page_token),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 TEST_F(InstanceApiTest, UpdateValidatesEveryFieldBeforeMutation) {
@@ -301,6 +388,44 @@ TEST_F(InstanceApiTest, UpdateValidatesEveryFieldBeforeMutation) {
   GOOGLESQL_EXPECT_OK(GetInstance(test_instance_name_, &instance));
   EXPECT_EQ(instance.node_count(), 5);
   EXPECT_EQ(instance.processing_units(), 5000);
+}
+
+TEST_F(InstanceApiTest, UpdateReturnsStateAndOperationMetadata) {
+  GOOGLESQL_EXPECT_OK(CreateInstance(test_instance_name_));
+
+  instance_api::UpdateInstanceRequest request;
+  request.mutable_instance()->set_name(test_instance_uri_);
+  request.mutable_instance()->set_display_name("updated-display");
+  request.mutable_instance()->set_processing_units(500);
+  (*request.mutable_instance()->mutable_labels())["environment"] = "local";
+  request.mutable_field_mask()->add_paths("displayName");
+  request.mutable_field_mask()->add_paths("processing_units");
+  request.mutable_field_mask()->add_paths("labels");
+  longrunning::Operation operation;
+  grpc::ClientContext context;
+  GOOGLESQL_EXPECT_OK(test_env()->instance_admin_client()->UpdateInstance(
+      &context, request, &operation));
+  EXPECT_TRUE(operation.done());
+
+  instance_api::Instance result;
+  ASSERT_TRUE(operation.response().UnpackTo(&result));
+  EXPECT_EQ(result.display_name(), "updated-display");
+  EXPECT_EQ(result.node_count(), 0);
+  EXPECT_EQ(result.processing_units(), 500);
+  EXPECT_EQ(result.labels().at("environment"), "local");
+  EXPECT_EQ(result.config(),
+            MakeInstanceConfigUri(test_project_name_, kTestConfigId));
+
+  instance_api::UpdateInstanceMetadata operation_metadata;
+  ASSERT_TRUE(operation.metadata().UnpackTo(&operation_metadata));
+  EXPECT_EQ(operation_metadata.instance().SerializeAsString(),
+            result.SerializeAsString());
+  EXPECT_TRUE(operation_metadata.has_start_time());
+  EXPECT_TRUE(operation_metadata.has_end_time());
+
+  instance_api::Instance readback;
+  GOOGLESQL_EXPECT_OK(GetInstance(test_instance_name_, &readback));
+  EXPECT_EQ(readback.SerializeAsString(), result.SerializeAsString());
 }
 
 TEST_F(InstanceApiTest, DeleteInstance) {

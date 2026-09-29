@@ -23,11 +23,13 @@
 #include <queue>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "googlesql/public/value.h"
 #include "absl/algorithm/container.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/random/random.h"
@@ -169,6 +171,35 @@ absl::StatusOr<std::vector<WriteOp>> FlattenNonDeleteOpRow(
   return std::move(write_ops);
 }
 
+// Counts mutations the way Spanner's CommitStats does, over the net row
+// changes of the transaction: an insert or update counts each affected column
+// plus every primary key column, a deleted row counts once, each secondary
+// index row change counts once, and change stream records count nothing.
+int64_t CountCommitMutations(const std::vector<WriteOp>& write_ops) {
+  int64_t count = 0;
+  for (const WriteOp& op : write_ops) {
+    const Table* table = TableOf(op);
+    if (table->owner_change_stream() != nullptr ||
+        IsChangeStreamPartitionTable(table->Name())) {
+      continue;
+    }
+    if (table->owner_index() != nullptr ||
+        std::holds_alternative<DeleteOp>(op)) {
+      ++count;
+      continue;
+    }
+    const std::vector<const Column*>& columns =
+        std::holds_alternative<InsertOp>(op) ? std::get<InsertOp>(op).columns
+                                             : std::get<UpdateOp>(op).columns;
+    absl::flat_hash_set<const Column*> affected(columns.begin(), columns.end());
+    for (const KeyColumn* key_column : table->primary_key()) {
+      affected.insert(key_column->column());
+    }
+    count += affected.size();
+  }
+  return count;
+}
+
 bool ShouldAbortOnFirstCommit() {
   absl::BitGen gen;
   return config::fault_injection_enabled() &&
@@ -219,6 +250,9 @@ absl::StatusOr<bool> IsMutationInvolvingForeignKeyAction(
   if (IsChangeStreamPartitionTable(mutation_op.table)) {
     GOOGLESQL_ASSIGN_OR_RETURN(table,
                      FindChangeStreamPartitionTable(schema, mutation_op.table));
+  } else if (IsChangeStreamDataTable(mutation_op.table)) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        table, FindChangeStreamDataTable(schema, mutation_op.table));
   }
   if (table == nullptr) {
     return error::TableNotFound(mutation_op.table);
@@ -256,7 +290,20 @@ ReadWriteTransaction::ReadWriteTransaction(
           std::make_unique<TransactionReadOnlyStore>(transaction_store_.get()),
           std::make_unique<TransactionEffectsBuffer>(&write_ops_queue_),
           clock)),
-      schema_(versioned_catalog_->GetLatestSchema()) {}
+      schema_(versioned_catalog_->GetLatestSchema()),
+      transaction_tag_(options_.transaction_tag) {}
+
+void ReadWriteTransaction::SetTransactionTag(absl::string_view tag) {
+  absl::MutexLock lock(&mu_);
+  if (transaction_tag_.empty() && !tag.empty()) {
+    transaction_tag_ = std::string(tag);
+  }
+}
+
+std::string ReadWriteTransaction::transaction_tag() const {
+  absl::MutexLock lock(&mu_);
+  return transaction_tag_;
+}
 
 absl::StatusOr<absl::Time> ReadWriteTransaction::GetCommitTimestamp() {
   absl::MutexLock lock(mu_);
@@ -269,6 +316,17 @@ absl::StatusOr<absl::Time> ReadWriteTransaction::GetCommitTimestamp() {
   return commit_timestamp_;
 }
 
+absl::StatusOr<int64_t> ReadWriteTransaction::GetMutationCount() {
+  absl::MutexLock lock(mu_);
+  if (state_ != State::kCommitted) {
+    return error::Internal(
+        absl::StrCat("Mutation count is only available after call to "
+                     "Transaction Commit. Transaction: ",
+                     id(), " is in state: ", state_));
+  }
+  return mutation_count_;
+}
+
 absl::Status ReadWriteTransaction::Read(const ReadArg& read_arg,
                                         std::unique_ptr<RowCursor>* cursor) {
   return GuardedCall(OpType::kRead, [&]() -> absl::Status {
@@ -277,12 +335,23 @@ absl::Status ReadWriteTransaction::Read(const ReadArg& read_arg,
     GOOGLESQL_ASSIGN_OR_RETURN(const ResolvedReadArg& resolved_read_arg,
                      ResolveReadArg(read_arg, schema_));
 
+    if (options_.repeatable_read && !snapshot_timestamp_.has_value()) {
+      snapshot_timestamp_ = lock_handle_->AcquireSnapshot();
+      lock_handle_->WaitForSafeRead(*snapshot_timestamp_);
+    }
+
     std::vector<std::unique_ptr<StorageIterator>> iterators;
     for (const auto& key_range : resolved_read_arg.key_ranges) {
       std::unique_ptr<StorageIterator> itr;
       GOOGLESQL_RETURN_IF_ERROR(transaction_store_->Read(
           resolved_read_arg.table, key_range, resolved_read_arg.columns, &itr,
-          read_arg.allow_pending_commit_timestamps));
+          read_arg.allow_pending_commit_timestamps,
+          read_arg.lock_scanned_ranges_exclusive, snapshot_timestamp_));
+      if (snapshot_timestamp_.has_value() &&
+          read_arg.lock_scanned_ranges_exclusive) {
+        locked_read_ranges_.emplace_back(resolved_read_arg.table->id(),
+                                         key_range);
+      }
       iterators.push_back(std::move(itr));
     }
     *cursor = std::make_unique<StorageIteratorRowCursor>(
@@ -336,6 +405,8 @@ void ReadWriteTransaction::Reset() {
   mu_.AssertHeld();
 
   lock_handle_->UnlockAll();
+  snapshot_timestamp_.reset();
+  locked_read_ranges_.clear();
   transaction_store_->Clear();
   std::queue<WriteOp> empty;
   write_ops_queue_.swap(empty);
@@ -398,6 +469,12 @@ absl::Status ReadWriteTransaction::GuardedCall(
 
   absl::Status status = fn();
 
+  // An upgrader may abort this handle while fn holds mu_. Surface that abort
+  // before returning a successful read or write to the caller.
+  if (status.ok()) {
+    status = lock_handle_->Wait();
+  }
+
   if (!status.ok()) {
     if (status.code() == absl::StatusCode::kAborted) {
       // Reset the transaction and release the lock handle. Always reset the
@@ -442,9 +519,11 @@ absl::Status ReadWriteTransaction::ProcessChangeStreamWriteOps() {
   mu_.AssertHeld();
   GOOGLESQL_ASSIGN_OR_RETURN(
       auto write_ops,
-      BuildChangeStreamWriteOps(schema_, transaction_store_->GetBufferedOps(),
+      BuildChangeStreamWriteOps(schema_, transaction_store_->GetChangeStreamOps(),
                                 action_context_->store(), id_,
-                                options_.exclude_txn_from_change_streams));
+                                options_.exclude_txn_from_change_streams,
+                                options_.row_deletion_policy_txn,
+                                transaction_tag_));
   for (const WriteOp& writeop : write_ops) {
     GOOGLESQL_RETURN_IF_ERROR(transaction_store_->BufferWriteOp(writeop));
   }
@@ -657,9 +736,31 @@ absl::Status ReadWriteTransaction::Commit() {
     // Pick a commit timestamp.
     GOOGLESQL_ASSIGN_OR_RETURN(commit_timestamp_, lock_handle_->ReserveCommitTimestamp());
 
+    const std::vector<WriteOp> buffered_ops =
+        transaction_store_->GetBufferedOps();
+    std::vector<CommittedRow> written_rows;
+    written_rows.reserve(buffered_ops.size());
+    for (const WriteOp& op : buffered_ops) {
+      written_rows.emplace_back(
+          TableOf(op)->id(),
+          std::visit([](const auto& row_op) { return row_op.key; }, op));
+    }
+    // Commits are serialized once a timestamp is reserved, so every write that
+    // could conflict with the snapshot has been recorded by now.
+    if (snapshot_timestamp_.has_value() &&
+        lock_handle_->HasCommittedWriteAfter(*snapshot_timestamp_,
+                                             written_rows,
+                                             locked_read_ranges_)) {
+      return error::AbortRepeatableReadWriteConflict(id_);
+    }
+    mutation_count_ = CountCommitMutations(buffered_ops);
+
     // Write the mutations to the base storage.
-    absl::Status flush_status = FlushWriteOpsToStorage(
-        transaction_store_->GetBufferedOps(), base_storage_, commit_timestamp_);
+    absl::Status flush_status =
+        FlushWriteOpsToStorage(buffered_ops, base_storage_, commit_timestamp_);
+    if (flush_status.ok()) {
+      lock_handle_->RecordCommittedWrites(written_rows);
+    }
     GOOGLESQL_RETURN_IF_ERROR(lock_handle_->MarkCommitted());
     if (!flush_status.ok()) {
       return flush_status;

@@ -48,7 +48,12 @@ absl::StatusOr<TokenMap> SearchHelper::BuildTokenMap(
     bool& source_is_null) {
   GOOGLESQL_ASSIGN_OR_RETURN(auto tokens, StringsFromTokenList(token_list));
 
-  GOOGLESQL_RET_CHECK(!tokens.empty() && !tokens[0].empty());
+  // TOKENLIST_CONCAT treats NULL elements as empty TOKENLISTs, so a
+  // concatenation of only NULL elements has no tokens and matches nothing.
+  if (tokens.empty()) {
+    return TokenMap();
+  }
+  GOOGLESQL_RET_CHECK(!tokens[0].empty());
 
   TokenMap token_map;
   int num_of_signatures = 0;
@@ -62,7 +67,9 @@ absl::StatusOr<TokenMap> SearchHelper::BuildTokenMap(
       if (signature[0] != kFullTextTokenizer) {
         return error::TokenListNotMatchSearch(func_name, "TOKENIZE_FULLTEXT");
       }
-      GOOGLESQL_RET_CHECK(signature.size() == kTokenizerSignatureArgumentSize);
+      GOOGLESQL_RET_CHECK(signature.size() == kTokenizerSignatureArgumentSize ||
+                          (signature.size() == kTokenizerSignatureArgumentSize + 1 &&
+                           signature.back() == "d"));
       if (pos == 0) {
         source_is_null = signature[1] != "0";
       } else {

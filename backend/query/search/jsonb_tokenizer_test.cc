@@ -57,6 +57,15 @@ TEST(JsonTokenizerTest, TestTokenizeNull) {
   googlesql::Value pg_jsonb_value = googlesql::Value::Null(GetPgJsonbType());
   absl::StatusOr<googlesql::Value> result =
       JsonbTokenizer::Tokenize({pg_jsonb_value});
+  GOOGLESQL_EXPECT_OK(result.status());
+  EXPECT_TRUE(result->type()->IsTokenList());
+  EXPECT_TRUE(result->is_null());
+}
+
+TEST(JsonTokenizerTest, JsonbNullIsNotSqlNull) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto jsonb_null, CreatePgJsonbValue("null"));
+  EXPECT_FALSE(jsonb_null.is_null());
+  auto result = JsonbTokenizer::Tokenize({jsonb_null});
   CheckResult(result);
 }
 

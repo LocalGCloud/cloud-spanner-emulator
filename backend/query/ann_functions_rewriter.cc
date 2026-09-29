@@ -26,7 +26,10 @@
 #include "googlesql/public/value.h"
 #include "googlesql/resolved_ast/resolved_ast.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/cord.h"
 #include "common/errors.h"
+#include "third_party/spanner_pg/datatypes/extended/pg_jsonb_type.h"
 #include "googlesql/base/ret_check.h"
 #include "googlesql/base/status_macros.h"
 
@@ -34,6 +37,19 @@ namespace google {
 namespace spanner {
 namespace emulator {
 namespace backend {
+
+namespace {
+
+absl::Status ValidateOptions(googlesql::JSONValueConstRef options,
+                             const std::string& function_name) {
+  if (!options.IsObject() || !options.HasMember("num_leaves_to_search") ||
+      !options.GetMember("num_leaves_to_search").IsUInt64()) {
+    return error::ApproxDistanceFunctionInvalidJsonOption(function_name);
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
 
 bool IsANNFunction(std::string function_name) {
   if (function_name == "approx_cosine_distance" ||
@@ -65,17 +81,23 @@ absl::Status ANNFunctionsRewriter::VisitResolvedFunctionCall(
   GOOGLESQL_RET_CHECK(placeholder_value.has_content());
 
   if (placeholder_value.type_kind() == googlesql::TYPE_JSON) {
-    googlesql::JSONValueConstRef json_value = placeholder_value.json_value();
-    if (!json_value.HasMember("num_leaves_to_search")) {
+    GOOGLESQL_RETURN_IF_ERROR(ValidateOptions(placeholder_value.json_value(),
+                                    node->function()->Name()));
+  } else if (placeholder_value.type() ==
+             postgres_translator::spangres::datatypes::GetPgJsonbType()) {
+    // PostgreSQL passes the options as JSONB.
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        absl::Cord jsonb,
+        postgres_translator::spangres::datatypes::GetPgJsonbNormalizedValue(
+            placeholder_value));
+    absl::StatusOr<googlesql::JSONValue> options =
+        googlesql::JSONValue::ParseJSONString(std::string(jsonb));
+    if (!options.ok()) {
       return error::ApproxDistanceFunctionInvalidJsonOption(
           node->function()->Name());
     }
-    googlesql::JSONValueConstRef leaves_json =
-        json_value.GetMember("num_leaves_to_search");
-    if (!leaves_json.IsUInt64()) {
-      return error::ApproxDistanceFunctionInvalidJsonOption(
-          node->function()->Name());
-    }
+    GOOGLESQL_RETURN_IF_ERROR(
+        ValidateOptions(options->GetConstRef(), node->function()->Name()));
   }
   std::vector<std::unique_ptr<googlesql::ResolvedExpr>> argument_list;
   googlesql::FunctionArgumentTypeList argument_types;

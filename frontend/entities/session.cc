@@ -104,6 +104,7 @@ absl::Status Session::ToProto(spanner_api::Session* session,
   GOOGLESQL_ASSIGN_OR_RETURN(*session->mutable_approximate_last_use_time(),
                    TimestampToProto(approximate_last_use_time_));
   session->set_multiplexed(multiplexed_);
+  session->set_creator_role(creator_role_);
   return absl::OkStatus();
 }
 
@@ -217,9 +218,9 @@ absl::StatusOr<std::unique_ptr<Transaction>> Session::CreateReadOnly(
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::unique_ptr<backend::ReadOnlyTransaction> read_only_transaction,
       database_->backend()->CreateReadOnlyTransaction(read_only_options));
-  return std::make_unique<Transaction>(std::move(read_only_transaction),
+  return std::make_unique<Transaction>(database_, std::move(read_only_transaction),
                                        database_->backend()->query_engine(),
-                                       options, usage);
+                                       options, usage, creator_role_);
 }
 
 absl::StatusOr<std::unique_ptr<Transaction>> Session::CreateReadWrite(
@@ -229,6 +230,10 @@ absl::StatusOr<std::unique_ptr<Transaction>> Session::CreateReadWrite(
   backend::ReadWriteOptions read_write_options;
   read_write_options.exclude_txn_from_change_streams =
       options.exclude_txn_from_change_streams();
+  read_write_options.repeatable_read =
+      options.mode_case() == v1::TransactionOptions::kReadWrite &&
+      options.isolation_level() ==
+          spanner_api::TransactionOptions::REPEATABLE_READ;
 
   // Create a new backend read write transaction.
   GOOGLESQL_ASSIGN_OR_RETURN(
@@ -236,9 +241,9 @@ absl::StatusOr<std::unique_ptr<Transaction>> Session::CreateReadWrite(
       database_->backend()->CreateReadWriteTransaction(read_write_options,
                                                        retry_state));
 
-  return std::make_unique<Transaction>(std::move(read_write_transaction),
+  return std::make_unique<Transaction>(database_, std::move(read_write_transaction),
                                        database_->backend()->query_engine(),
-                                       options, usage);
+                                       options, usage, creator_role_);
 }
 
 absl::StatusOr<std::shared_ptr<Transaction>> Session::FindAndUseTransaction(

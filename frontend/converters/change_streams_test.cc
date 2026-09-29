@@ -59,7 +59,6 @@ using googlesql::values::Timestamp;
 using testing::ElementsAre;
 using test::EqualsProto;
 using test::proto::Partially;
-using ::googlesql_base::testing::StatusIs;
 
 class ChangeStreamResultConverterTest : public testing::Test {
  protected:
@@ -422,9 +421,8 @@ TEST_F(ChangeStreamResultConverterTest,
                 }
               }
             }
-            resume_token: "$1"
           )pb",
-          now_str_, kChangeStreamDummyResumeToken))));
+          now_str_))));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_recods,
@@ -488,9 +486,8 @@ TEST_F(ChangeStreamResultConverterTest,
                 }
               }
             }
-            resume_token: "$1"
           )pb",
-          now_str_, kChangeStreamDummyResumeToken))));
+          now_str_))));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_recods,
@@ -563,9 +560,8 @@ TEST_F(ChangeStreamResultConverterTest,
                 }
               }
             }
-            resume_token: "$1"
           )pb",
-          now_str_, kChangeStreamDummyResumeToken))));
+          now_str_))));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_recods,
@@ -605,9 +601,8 @@ TEST_F(ChangeStreamResultConverterTest,
                    }
                  }
                }
-               resume_token: "$1"
           )pb",
-          now_str_, kChangeStreamDummyResumeToken))));
+          now_str_))));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_recods,
@@ -776,9 +771,8 @@ TEST_F(ChangeStreamResultConverterTest,
                    }
                  }
                }
-               resume_token: "$1"
           )pb",
-          now_str_, kChangeStreamDummyResumeToken))));
+          now_str_))));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_recods,
@@ -808,7 +802,6 @@ TEST_F(ChangeStreamResultConverterTest,
                            /*partition_token=*/"",
                            /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
@@ -848,11 +841,55 @@ TEST_F(ChangeStreamResultConverterTest,
       {"start_time", "partition_token", "parents"},
       {TimestampType(), StringType(), StringArrayType()},
       {{Timestamp(now_), String("token1"), parents_array_val}});
-  EXPECT_THAT(ConvertPartitionTableRowCursorToProto(
-                  &cursor, /*initial_start_time=*/std::nullopt,
-                  /*partition_token=*/"move_token1",
-                  /*expect_metadata=*/true),
-              StatusIs(absl::StatusCode::kInternal));
+  std::vector<PartialResultSet> results;
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(results,
+                       ConvertPartitionTableRowCursorToProto(
+                           &cursor, /*initial_start_time=*/std::nullopt,
+                           /*partition_token=*/"move_token1",
+                           /*expect_metadata=*/true));
+  EXPECT_FALSE(results.empty());
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
+                                            results, /*columns_per_row=*/1));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
+                       test::GetChangeStreamRecordsFromResultSet(result_set));
+
+  // A move hands the whole key range to a single child: the parent starts the
+  // child, moves its key range out to it and ends.
+  int64_t s = absl::ToUnixSeconds(now_);
+  int64_t ns = absl::ToInt64Nanoseconds(now_ - absl::FromUnixSeconds(s));
+  ASSERT_EQ(change_records.partition_start_records.size(), 1);
+  EXPECT_THAT(
+      change_records.partition_start_records[0],
+      EqualsProto(absl::Substitute(R"pb(
+                                     start_timestamp { seconds: $0 nanos: $1 }
+                                     record_sequence: "00000000"
+                                     partition_tokens: "token1"
+                                   )pb",
+                                   s, ns)));
+
+  ASSERT_EQ(change_records.partition_event_records.size(), 1);
+  EXPECT_THAT(change_records.partition_event_records[0],
+              EqualsProto(absl::Substitute(
+                  R"pb(
+                    commit_timestamp { seconds: $0 nanos: $1 }
+                    record_sequence: "00000001"
+                    partition_token: "move_token1"
+                    move_out_events { destination_partition_token: "token1" }
+                  )pb",
+                  s, ns)));
+
+  ASSERT_EQ(change_records.partition_end_records.size(), 1);
+  EXPECT_THAT(
+      change_records.partition_end_records[0],
+      EqualsProto(absl::Substitute(R"pb(
+                                     end_timestamp { seconds: $0 nanos: $1 }
+                                     record_sequence: "00000002"
+                                     partition_token: "move_token1"
+                                   )pb",
+                                   s, ns)));
+
+  ASSERT_EQ(change_records.data_change_records.size(), 0);
+  ASSERT_EQ(change_records.heartbeat_records.size(), 0);
 }
 
 TEST_F(ChangeStreamResultConverterTest,
@@ -872,7 +909,6 @@ TEST_F(ChangeStreamResultConverterTest,
                            /*partition_token=*/"merge_token1",
                            /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
@@ -932,7 +968,6 @@ TEST_F(ChangeStreamResultConverterTest,
                            /*partition_token=*/"merge_token2",
                            /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
@@ -984,7 +1019,6 @@ TEST_F(ChangeStreamResultConverterTest,
                            /*partition_token=*/"parent_token",
                            /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
@@ -1052,7 +1086,6 @@ TEST_F(
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(results, ConvertQueryStartPartitionTableRowCursorToProto(
                                     &cursor, now_, /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
@@ -1103,7 +1136,6 @@ TEST_F(ChangeStreamResultConverterTest,
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(results, ConvertHeartbeatTimestampToProto(
                                     now_, /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
@@ -1175,7 +1207,6 @@ TEST_F(ChangeStreamResultConverterTest,
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(results, ConvertDataTableRowCursorToProto(
                                     &cursor, /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,
@@ -1255,7 +1286,6 @@ TEST_F(ChangeStreamResultConverterTest,
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(results, ConvertDataTableRowCursorToProto(
                                     &cursor, /*expect_metadata=*/true));
   EXPECT_FALSE(results.empty());
-  EXPECT_EQ(results[0].resume_token(), kChangeStreamDummyResumeToken);
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto result_set, backend::test::MergePartialResultSets(
                                             results, /*columns_per_row=*/1));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords change_records,

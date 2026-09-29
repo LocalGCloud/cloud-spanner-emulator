@@ -18,6 +18,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
@@ -33,6 +34,7 @@
 #include "backend/database/database.h"
 #include "common/errors.h"
 #include "frontend/collections/operation_manager.h"
+#include "frontend/common/list_filter.h"
 #include "frontend/common/uris.h"
 #include "frontend/converters/time.h"
 #include "frontend/entities/instance_partition.h"
@@ -408,6 +410,11 @@ absl::Status UpdateInstancePartition(
   }
   instance_api::InstancePartition partition_proto;
   partition->ToProto(&partition_proto);
+  instance_api::UpdateInstancePartitionMetadata operation_metadata;
+  *operation_metadata.mutable_instance_partition() = partition_proto;
+  *operation_metadata.mutable_start_time() = partition_proto.update_time();
+  *operation_metadata.mutable_end_time() = partition_proto.update_time();
+  operation->SetMetadata(operation_metadata);
   operation->SetResponse(partition_proto);
   operation->ToProto(response);
 
@@ -515,12 +522,43 @@ absl::Status ListInstancePartitionOperations(
   GOOGLESQL_RETURN_IF_ERROR(
       ctx->env()->instance_manager()->GetInstance(request->parent()).status());
 
+  GOOGLESQL_ASSIGN_OR_RETURN(const ListFilter filter,
+                             ListFilter::Parse(request->filter()));
+  GOOGLESQL_RETURN_IF_ERROR(
+      FilterMatchesOperation(filter, operations_api::Operation()).status());
+
   std::string prefix = absl::StrCat(request->parent(), "/instancePartitions/");
   GOOGLESQL_ASSIGN_OR_RETURN(
       std::vector<std::shared_ptr<Operation>> operations,
       ctx->env()->operation_manager()->ListOperations(prefix));
+  std::string page_start;
+  if (!request->page_token().empty()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        page_start,
+        ParseListPageToken(request->page_token(), request->filter()));
+    if (!absl::StartsWith(page_start, prefix)) {
+      return absl::InvalidArgumentError(
+          "Page token must be an operation in the parent instance");
+    }
+  }
+  int32_t page_size = request->page_size();
+  static const int32_t kMaxPageSize = 1000;
+  if (page_size <= 0 || page_size > kMaxPageSize) {
+    page_size = kMaxPageSize;
+  }
   for (const auto& op : operations) {
-    op->ToProto(response->add_operations());
+    operations_api::Operation proto;
+    op->ToProto(&proto);
+    if (proto.name() < page_start) continue;
+    GOOGLESQL_ASSIGN_OR_RETURN(const bool matches,
+                               FilterMatchesOperation(filter, proto));
+    if (!matches) continue;
+    if (response->operations_size() >= page_size) {
+      response->set_next_page_token(
+          MakeListPageToken(request->filter(), proto.name()));
+      break;
+    }
+    *response->add_operations() = std::move(proto);
   }
   return absl::OkStatus();
 }

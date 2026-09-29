@@ -18,7 +18,8 @@
 TOKEN:
 {
     <#DIGIT:    ["0"-"9"]>
-  | <#LETTER:   ["a"-"z","A"-"Z"]>
+  // "\u0001" starts an encoded non-ASCII character; see query_parser.cc.
+  | <#LETTER:   ["a"-"z","A"-"Z","\u0001"]>
 }
 
 // Punctuations

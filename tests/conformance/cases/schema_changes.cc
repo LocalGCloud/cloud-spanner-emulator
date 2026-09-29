@@ -86,6 +86,7 @@ const absl::string_view kSchemaChangeTestFiles[] = {
 
 const absl::string_view kPgDdlTestFiles[] = {
     "ddl.create_index.test",
+    "ddl.create_search_index.test",
     "ddl.create_table.test",
     "ddl.create_table_checkconstraint.test",
     "ddl.create_table_generatedcolumn_default.test",

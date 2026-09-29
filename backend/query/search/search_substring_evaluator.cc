@@ -52,11 +52,15 @@ namespace search {
 // Out relative_search_types: enum flags indicating supported relative search
 // types.
 // Out ngram_min_size: the minimum ngram size used to tokenize the source.
+// Out min_non_anchor_size: the size below which query terms only match through
+// the prefix and suffix anchors, when short_tokens_only_for_anchors is set, 0
+// otherwise.
 // Out token_list: the list of tokens to search from.
 absl::Status SearchSubstringEvaluator::BuildTokenList(
     const googlesql::Value& tokenlist, bool& source_is_null,
-    int& relative_search_types, int& ngram_min_size,
+    int& relative_search_types, int& ngram_min_size, int& min_non_anchor_size,
     std::vector<std::string>& token_list) {
+  constexpr int kNgramMaxSizeIndex = 1;
   constexpr int kNgramMinSizeIndex = 2;
   constexpr int kIsNullIndex = 3;
   constexpr int kRelativeSearchTypeIndex = 4;
@@ -76,10 +80,21 @@ absl::Status SearchSubstringEvaluator::BuildTokenList(
       //  -ngram_size_min
       //  -is_source_null
       //  -relative_search_types
+      //  [-d]: remove_diacritics
+      //  [-a]: short_tokens_only_for_anchors
       std::vector<std::string> signature =
           absl::StrSplit(tokens[i], absl::ByChar('-'), absl::SkipEmpty());
       int current_ngram_size_min = 0;
-      GOOGLESQL_RET_CHECK(signature.size() == kSubstringTokenizerSignatureArgumentSize &&
+      int ngram_size_max = 0;
+      GOOGLESQL_RET_CHECK(signature.size() >= kSubstringTokenizerSignatureArgumentSize &&
+                std::all_of(signature.begin() +
+                                kSubstringTokenizerSignatureArgumentSize,
+                            signature.end(),
+                            [](const std::string& flag) {
+                              return flag == "d" || flag == "a";
+                            }) &&
+                absl::SimpleAtoi(signature[kNgramMaxSizeIndex],
+                                 &ngram_size_max) &&
                 absl::SimpleAtoi(signature[kNgramMinSizeIndex],
                                  &current_ngram_size_min) &&
                 current_ngram_size_min > 0 &&
@@ -87,6 +102,9 @@ absl::Status SearchSubstringEvaluator::BuildTokenList(
                                  &relative_search_types));
       source_is_null = signature[kIsNullIndex] != "0";
       ngram_min_size = std::min(ngram_min_size, current_ngram_size_min);
+      if (SignatureHasFlag(tokens[i], "a")) {
+        min_non_anchor_size = std::max(min_non_anchor_size, ngram_size_max);
+      }
     } else if (i == 0) {
       return error::TokenListNotMatchSearch("SEARCH_SUBSTRING",
                                             "TOKENIZE_SUBSTRING");
@@ -213,10 +231,12 @@ absl::StatusOr<googlesql::Value> SearchSubstringEvaluator::Evaluate(
   std::vector<std::string> token_list;
   bool source_is_null;
   int tokenizer_relative_search_types = 0;
+  int min_non_anchor_size = 0;
 
   GOOGLESQL_RETURN_IF_ERROR(BuildTokenList(tokenlist, source_is_null,
                                  tokenizer_relative_search_types,
-                                 ngram_min_size, token_list));
+                                 ngram_min_size, min_non_anchor_size,
+                                 token_list));
 
   // If relative_search_type is not specified, using None as default.
   RelativeSearchType requested_search_type = RelativeSearchType::None;
@@ -236,10 +256,11 @@ absl::StatusOr<googlesql::Value> SearchSubstringEvaluator::Evaluate(
     return googlesql::Value::NullBool();
   }
 
-  std::string lower_str;
-  absl::Status status;
-  googlesql::functions::LowerUtf8(query.string_value(), &lower_str, &status);
-  GOOGLESQL_RETURN_IF_ERROR(status);
+  GOOGLESQL_ASSIGN_OR_RETURN(bool remove_diacritics,
+                            TokenListRemovesDiacritics(tokenlist));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string lower_str,
+      NormalizeSearchText(query.string_value(), remove_diacritics));
 
   std::vector<std::string> substrings = absl::StrSplit(
       lower_str, absl::ByAnyChar(kDelimiter), absl::SkipWhitespace());
@@ -254,6 +275,19 @@ absl::StatusOr<googlesql::Value> SearchSubstringEvaluator::Evaluate(
       requested_search_type != RelativeSearchType::None) {
     // It is not possible for any word to have multiple prefixes/suffixes.
     return googlesql::Value::NullBool();
+  }
+
+  // With short_tokens_only_for_anchors, the tokenlist has no short n-grams
+  // other than the prefix and suffix anchors.
+  const bool uses_anchors = requested_search_type != RelativeSearchType::None &&
+                            requested_search_type != RelativeSearchType::Phrase;
+  if (!uses_anchors &&
+      std::any_of(substrings.begin(), substrings.end(),
+                  [&](const std::string& substring) {
+                    return substring.length() <
+                           static_cast<size_t>(min_non_anchor_size);
+                  })) {
+    return googlesql::Value::Bool(false);
   }
 
   if (requested_search_type != RelativeSearchType::Phrase) {

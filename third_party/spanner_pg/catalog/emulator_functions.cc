@@ -202,6 +202,7 @@ using ::postgres_translator::function_evaluators::Subtract;
 using ::postgres_translator::function_evaluators::Texticlike;
 using ::postgres_translator::function_evaluators::Texticnlike;
 using ::postgres_translator::function_evaluators::Textregexne;
+using ::postgres_translator::function_evaluators::Textregexreplace;
 
 using ::postgres_translator::function_evaluators::Textregexsubstr;
 using ::postgres_translator::function_evaluators::ToTimestamp;
@@ -320,6 +321,65 @@ std::unique_ptr<googlesql::Function> TextregexneFunction(
       std::vector<googlesql::FunctionSignature>{googlesql::FunctionSignature{
           gsql_bool, {gsql_string, gsql_string}, /*context_ptr=*/nullptr}},
       function_options);
+}
+
+absl::StatusOr<googlesql::Value> EvalTextregexreplace(
+    absl::Span<const googlesql::Value> args) {
+  GOOGLESQL_RET_CHECK(args.size() == 3);
+  if (HasNullValue(args)) {
+    return googlesql::Value::NullString();
+  }
+
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string result,
+      Textregexreplace(args[0].string_value(), args[1].string_value(),
+                       args[2].string_value()));
+  return googlesql::Value::String(result);
+}
+
+// Uses PostgreSQL regular expressions, which replace only the first match.
+std::unique_ptr<googlesql::Function> TextregexreplaceFunction(
+    absl::string_view catalog_name) {
+  googlesql::FunctionOptions function_options;
+  function_options.set_supports_safe_error_mode(false);
+  function_options.set_arguments_are_coercible(false);
+  function_options.set_evaluator(PGFunctionEvaluator(
+      EvalTextregexreplace, InitializePGTimezoneToDefault, CleanupRegexCache));
+  return std::make_unique<googlesql::Function>(
+      kPGTextregexreplaceFunctionName, catalog_name,
+      googlesql::Function::SCALAR,
+      std::vector<googlesql::FunctionSignature>{googlesql::FunctionSignature{
+          gsql_string,
+          {gsql_string, gsql_string, gsql_string},
+          /*context_ptr=*/nullptr}},
+      function_options);
+}
+
+// PostgreSQL passes the options of the approximate distance functions as
+// JSONB. These signatures extend the GoogleSQL functions of the same name,
+// whose evaluators run after the query engine drops the options argument.
+void AddApproxDistanceFunctions(absl::string_view catalog_name,
+                                SpannerPGFunctions& functions) {
+  const googlesql::Type* gsql_pg_jsonb =
+      postgres_translator::spangres::datatypes::GetPgJsonbType();
+  for (absl::string_view name :
+       {kGoogleSQLApproxCosineDistanceFunctionName,
+        kGoogleSQLApproxDotProductFunctionName,
+        kGoogleSQLApproxEuclideanDistanceFunctionName}) {
+    functions.push_back(std::make_unique<googlesql::Function>(
+        name, catalog_name, googlesql::Function::SCALAR,
+        std::vector<googlesql::FunctionSignature>{
+            googlesql::FunctionSignature{
+                gsql_double,
+                {googlesql::types::DoubleArrayType(),
+                 googlesql::types::DoubleArrayType(), gsql_pg_jsonb},
+                /*context_ptr=*/nullptr},
+            googlesql::FunctionSignature{
+                gsql_double,
+                {googlesql::types::FloatArrayType(),
+                 googlesql::types::FloatArrayType(), gsql_pg_jsonb},
+                /*context_ptr=*/nullptr}}));
+  }
 }
 
 absl::StatusOr<googlesql::Value> EvalPgILike(
@@ -2114,6 +2174,10 @@ absl::StatusOr<googlesql::Value> EvalJsonbSubscriptText(
   }
   const std::string jsonb(GetStringRepresentation(args[0]).value());
   if (args[1].type_kind() == googlesql::TYPE_INT64) {
+    // Spanner does not support negative array indexes and returns NULL.
+    if (args[1].int64_value() < 0) {
+      return googlesql::Value::NullString();
+    }
     const int32_t element = static_cast<int32_t>(args[1].int64_value());
     return EmulatorJsonbArrayElementText(jsonb, element);
   } else {
@@ -2159,6 +2223,11 @@ absl::StatusOr<googlesql::Value> EvalSubscript(
 
   GOOGLESQL_ASSIGN_OR_RETURN(absl::Cord jsonb, GetPgJsonbNormalizedValue(args[0]));
   if (args[1].type_kind() == googlesql::TYPE_INT64) {
+    // Spanner does not support negative array indexes and returns NULL.
+    if (args[1].int64_value() < 0) {
+      return googlesql::Value::Null(
+          postgres_translator::spangres::datatypes::GetPgJsonbType());
+    }
     return JsonbArrayElement(std::string(jsonb), args[1].int64_value());
   } else {
   return JsonbObjectField(std::string(jsonb), args[1].string_value());
@@ -2705,7 +2774,8 @@ absl::StatusOr<googlesql::Value> EvalJsonbConcat(
   if (right_jsonb.IsArray()) {
     for (int i = 0; i < right_jsonb.GetArraySize(); ++i) {
       GOOGLESQL_RETURN_IF_ERROR(result.InsertArrayElement(
-          right_jsonb.GetArrayElementIfExists(i).value(), i));
+          right_jsonb.GetArrayElementIfExists(i).value(),
+          result.GetArraySize()));
     }
   } else {
     GOOGLESQL_RETURN_IF_ERROR(
@@ -4888,6 +4958,8 @@ SpannerPGFunctions GetSpannerPGFunctions(const std::string& catalog_name) {
   auto pg_ilike_func = PgILikeFunction(catalog_name);
   functions.push_back(std::move(pg_ilike_func));
 
+  AddApproxDistanceFunctions(catalog_name, functions);
+
   auto pg_not_ilike_func = PgNotILikeFunction(catalog_name);
   functions.push_back(std::move(pg_not_ilike_func));
 
@@ -4912,6 +4984,9 @@ SpannerPGFunctions GetSpannerPGFunctions(const std::string& catalog_name) {
 
   auto textregexne_func = TextregexneFunction(catalog_name);
   functions.push_back(std::move(textregexne_func));
+
+  auto textregexreplace_func = TextregexreplaceFunction(catalog_name);
+  functions.push_back(std::move(textregexreplace_func));
 
   auto date_mi_func = DateMiFunction(catalog_name);
   functions.push_back(std::move(date_mi_func));

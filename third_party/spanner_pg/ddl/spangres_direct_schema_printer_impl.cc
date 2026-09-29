@@ -114,6 +114,7 @@ static auto kSupportedStatements =
     google::spanner::emulator::backend::ddl::DDLStatement::kDropTable,
     google::spanner::emulator::backend::ddl::DDLStatement::kDropIndex,
     google::spanner::emulator::backend::ddl::DDLStatement::kCreateIndex,
+    google::spanner::emulator::backend::ddl::DDLStatement::kCreateVectorIndex,
     google::spanner::emulator::backend::ddl::DDLStatement::kAlterIndex,
     google::spanner::emulator::backend::ddl::DDLStatement::kCreateSchema,
     google::spanner::emulator::backend::ddl::DDLStatement::kDropSchema,
@@ -127,7 +128,7 @@ static auto kSupportedStatements =
     google::spanner::emulator::backend::ddl::DDLStatement::kDropChangeStream,
 
     google::spanner::emulator::backend::ddl::DDLStatement::kCreateSearchIndex,
-
+    google::spanner::emulator::backend::ddl::DDLStatement::kAlterSearchIndex,
     google::spanner::emulator::backend::ddl::DDLStatement::kDropSearchIndex,
 
     google::spanner::emulator::backend::ddl::DDLStatement::kCreateSequence,
@@ -206,6 +207,10 @@ class SpangresSchemaPrinterImpl : public SpangresSchemaPrinter {
       const google::spanner::emulator::backend::ddl::DropSequence& statement) const;
   absl::StatusOr<std::string> PrintCreateIndex(
       const google::spanner::emulator::backend::ddl::CreateIndex& statement) const;
+  // Prints a vector index as <CREATE INDEX ... USING scann>.
+  absl::StatusOr<std::string> PrintCreateVectorIndex(
+      const google::spanner::emulator::backend::ddl::CreateVectorIndex& statement)
+      const;
   absl::StatusOr<std::string> PrintAlterIndex(
       const google::spanner::emulator::backend::ddl::AlterIndex& statement) const;
   absl::StatusOr<std::string> PrintCreateSchema(
@@ -262,6 +267,8 @@ class SpangresSchemaPrinterImpl : public SpangresSchemaPrinter {
       const google::spanner::emulator::backend::ddl::CreateSearchIndex& statement) const;
   std::string FormatOptionAsNameValuePair(
       const google::spanner::emulator::backend::ddl::SetOption& option) const;
+  absl::StatusOr<std::string> PrintAlterSearchIndex(
+      const google::spanner::emulator::backend::ddl::AlterSearchIndex& statement) const;
   std::string PrintDropSearchIndex(
       const google::spanner::emulator::backend::ddl::DropSearchIndex& statement) const;
 
@@ -346,6 +353,9 @@ SpangresSchemaPrinterImpl::PrintDDLStatement(
       return WrapOutput(PrintDropIndex(statement.drop_index()));
     case google::spanner::emulator::backend::ddl::DDLStatement::kCreateIndex:
       return WrapOutput(PrintCreateIndex(statement.create_index()));
+    case google::spanner::emulator::backend::ddl::DDLStatement::kCreateVectorIndex:
+      return WrapOutput(
+          PrintCreateVectorIndex(statement.create_vector_index()));
     case google::spanner::emulator::backend::ddl::DDLStatement::kAlterIndex:
       return WrapOutput(PrintAlterIndex(statement.alter_index()));
     case google::spanner::emulator::backend::ddl::DDLStatement::kCreateSchema:
@@ -372,6 +382,8 @@ SpangresSchemaPrinterImpl::PrintDDLStatement(
     case google::spanner::emulator::backend::ddl::DDLStatement::kCreateSearchIndex:
       return WrapOutput(
           PrintCreateSearchIndex(statement.create_search_index()));
+    case google::spanner::emulator::backend::ddl::DDLStatement::kAlterSearchIndex:
+      return WrapOutput(PrintAlterSearchIndex(statement.alter_search_index()));
     case google::spanner::emulator::backend::ddl::DDLStatement::kDropSearchIndex:
       return WrapOutput(PrintDropSearchIndex(statement.drop_search_index()));
     case google::spanner::emulator::backend::ddl::DDLStatement::kCreateSequence:
@@ -964,7 +976,7 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintCreateSearchIndex(
   std::vector<std::string> storing_columns;
   for (const google::spanner::emulator::backend::ddl::StoredColumnDefinition& stored_column :
        statement.stored_column_definition()) {
-    storing_columns.push_back(stored_column.name());
+    storing_columns.push_back(QuoteIdentifier(stored_column.name()));
   }
   statements.emplace_back(PrintSearchIndexClause(storing_columns, "INCLUDE"));
 
@@ -1044,6 +1056,37 @@ std::string SpangresSchemaPrinterImpl::FormatOptionAsNameValuePair(
     StrAppend(&output, QuoteStringLiteral(option.string_value()));
   }
   return output;
+}
+
+absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintAlterSearchIndex(
+    const google::spanner::emulator::backend::ddl::AlterSearchIndex& statement) const {
+  std::string alter_type;
+  std::string column_name;
+  switch (statement.alter_type_case()) {
+    case google::spanner::emulator::backend::ddl::AlterSearchIndex::kAddColumn:
+      alter_type = " ADD COLUMN ";
+      column_name = statement.add_column();
+      break;
+    case google::spanner::emulator::backend::ddl::AlterSearchIndex::kDropColumn:
+      alter_type = " DROP COLUMN ";
+      column_name = statement.drop_column();
+      break;
+    case google::spanner::emulator::backend::ddl::AlterSearchIndex::kAddStoredColumn:
+      alter_type = " ADD INCLUDE COLUMN ";
+      column_name = statement.add_stored_column();
+      break;
+    case google::spanner::emulator::backend::ddl::AlterSearchIndex::kDropStoredColumn:
+      alter_type = " DROP INCLUDE COLUMN ";
+      column_name = statement.drop_stored_column();
+      break;
+    default:
+      return absl::UnimplementedError(
+          StrCat("ALTER SEARCH INDEX does not support alter type:",
+                 statement.alter_type_case()));
+  }
+  return StrCat("ALTER SEARCH INDEX ",
+                QuoteQualifiedIdentifier(statement.index_name()), alter_type,
+                QuoteIdentifier(column_name));
 }
 
 std::string SpangresSchemaPrinterImpl::PrintDropSearchIndex(
@@ -1298,6 +1341,52 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintAlterIndex(
                 column_name);
 }
 
+absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintCreateVectorIndex(
+    const google::spanner::emulator::backend::ddl::CreateVectorIndex& statement)
+    const {
+  std::string if_not_exists = "";
+  if (statement.existence_modifier() ==
+      google::spanner::emulator::backend::ddl::IF_NOT_EXISTS) {
+    if_not_exists = "IF NOT EXISTS ";
+  }
+
+  std::string include = "";
+  if (!statement.stored_column_definition().empty()) {
+    std::vector<std::string> include_columns;
+    for (const google::spanner::emulator::backend::ddl::StoredColumnDefinition&
+             column : statement.stored_column_definition()) {
+      include_columns.push_back(QuoteIdentifier(column.name()));
+    }
+    include = StrCat(" INCLUDE (", absl::StrJoin(include_columns, ", "), ")");
+  }
+
+  std::string with = "";
+  if (!statement.set_options().empty()) {
+    std::vector<std::string> options;
+    for (const google::spanner::emulator::backend::ddl::SetOption& option :
+         statement.set_options()) {
+      options.push_back(FormatOptionAsNameValuePair(option));
+    }
+    with = StrCat(" WITH (", absl::StrJoin(options, ", "), ")");
+  }
+
+  std::vector<std::string> conditions;
+  for (const std::string& column : statement.null_filtered_column()) {
+    conditions.push_back(CreateNotNullCondition(column));
+  }
+  std::string where = "";
+  if (!conditions.empty()) {
+    where = Substitute(" WHERE ($0)", absl::StrJoin(conditions, " AND "));
+  }
+
+  return StrCat(
+      "CREATE INDEX ", if_not_exists,
+      QuoteIdentifier(GetSchemaLocalName(statement.index_name())), " ON ",
+      QuoteQualifiedIdentifier(statement.index_base_name()), " USING ",
+      internal::PostgreSQLConstants::kVectorIndexAccessMethod, " (",
+      QuoteIdentifier(statement.key().key_name()), ")", include, with, where);
+}
+
 absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintCreateIndex(
     const google::spanner::emulator::backend::ddl::CreateIndex& statement) const {
   std::string modifier = "";
@@ -1534,12 +1623,17 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintCreateFunction(
     const google::spanner::emulator::backend::ddl::CreateFunction& statement) const {
   switch (statement.function_kind()) {
     case google::spanner::emulator::backend::ddl::Function_Kind::Function_Kind_VIEW: {
-      GOOGLESQL_ASSIGN_OR_RETURN(std::string security_type,
-                       PrintSQLSecurityTypeForView(statement.sql_security()));
-
       std::string with_clause = "";
-      if (!security_type.empty()) {
-        with_clause = absl::Substitute("WITH ($0)", security_type);
+      if (statement.sql_security() ==
+          google::spanner::emulator::backend::ddl::Function::DEFINER) {
+        with_clause = "SQL SECURITY DEFINER";
+      } else {
+        GOOGLESQL_ASSIGN_OR_RETURN(
+            std::string security_type,
+            PrintSQLSecurityTypeForView(statement.sql_security()));
+        if (!security_type.empty()) {
+          with_clause = absl::Substitute("WITH ($0)", security_type);
+        }
       }
       std::string view_template = statement.is_or_replace()
                                       ? "CREATE OR REPLACE VIEW $0 $1 AS $2"

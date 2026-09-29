@@ -14,12 +14,20 @@
 // limitations under the License.
 //
 
+#include <pthread.h>
+
 #include <algorithm>
+#include <csignal>
 #include <cstddef>
+#include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -34,13 +42,17 @@
 #include "absl/time/time.h"
 #include "backend/database/database.h"
 #include "backend/schema/updater/schema_updater.h"
+#include "backend/stats/system_stats_collector.h"
 #include "common/clock.h"
 #include "common/config.h"
 #include "frontend/collections/database_manager.h"
 #include "frontend/common/uris.h"
 #include "frontend/converters/time.h"
+#include "frontend/entities/database.h"
+#include "frontend/persistence/data_dir_lock.h"
 #include "frontend/persistence/metadata_store.h"
 #include "frontend/entities/operation.h"
+#include "frontend/handlers/backups.h"
 #include "frontend/server/server.h"
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "google/longrunning/operations.pb.h"
@@ -49,6 +61,7 @@
 #include "googlesql/base/status_macros.h"
 
 using Server = ::google::spanner::emulator::frontend::Server;
+using DataDirLock = ::google::spanner::emulator::frontend::DataDirLock;
 using OperationManager =
     ::google::spanner::emulator::frontend::OperationManager;
 using DatabaseManager =
@@ -56,6 +69,44 @@ using DatabaseManager =
 namespace config = ::google::spanner::emulator::config;
 namespace instance_api = ::google::spanner::admin::instance::v1;
 namespace database_api = ::google::spanner::admin::database::v1;
+
+class BackupSchedulePoller {
+ public:
+  explicit BackupSchedulePoller(Server* server)
+      : server_(server), worker_([this] { Run(); }) {}
+
+  ~BackupSchedulePoller() {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      stop_ = true;
+    }
+    wake_.notify_one();
+    worker_.join();
+  }
+
+ private:
+  void Run() {
+    for (;;) {
+      absl::Status status =
+          ::google::spanner::emulator::frontend::RunDueBackupSchedules(
+              server_->env(), server_->env()->clock()->Now());
+      if (!status.ok()) {
+        ABSL_LOG(WARNING) << "Backup schedule poll failed: " << status;
+      }
+      std::unique_lock<std::mutex> lock(mu_);
+      if (wake_.wait_for(lock, std::chrono::minutes(1),
+                         [this] { return stop_; })) {
+        return;
+      }
+    }
+  }
+
+  Server* server_;
+  std::mutex mu_;
+  std::condition_variable wake_;
+  bool stop_ = false;
+  std::thread worker_;
+};
 
 absl::StatusOr<absl::Time> ParsePersistedTime(
     absl::string_view value, absl::Time fallback,
@@ -643,9 +694,62 @@ static absl::Status RestoreFromMetadata(Server* server) {
   return absl::OkStatus();
 }
 
+// Blocks SIGINT and SIGTERM in the calling thread, and so in every thread that
+// it starts afterwards, and returns them.
+static sigset_t BlockTerminationSignals() {
+  sigset_t signals;
+  sigemptyset(&signals);
+  sigaddset(&signals, SIGINT);
+  sigaddset(&signals, SIGTERM);
+  pthread_sigmask(SIG_BLOCK, &signals, nullptr);
+  return signals;
+}
+
+// Waits on a background thread for one of the blocked termination `signals`,
+// saves the SPANNER_SYS statistics of every database, and then terminates the
+// process as the signal would have.
+static void SaveStatisticsOnTermination(sigset_t signals, Server* server) {
+  std::thread([signals, server] {
+    int signal = 0;
+    if (sigwait(&signals, &signal) != 0) {
+      return;
+    }
+    for (const auto& database :
+         server->env()->database_manager()->ListAllDatabases()) {
+      database->backend()->stats_collector()->Persist();
+    }
+    std::signal(signal, SIG_DFL);
+    pthread_sigmask(SIG_UNBLOCK, &signals, nullptr);
+    std::raise(signal);
+  }).detach();
+}
+
 int main(int argc, char** argv) {
   absl::ParseCommandLine(argc, argv);
+
+  // Hold the --data_dir exclusively before anything reads or writes it.
+  std::unique_ptr<DataDirLock> data_dir_lock;
+  if (!config::data_dir().empty()) {
+    absl::StatusOr<std::unique_ptr<DataDirLock>> lock =
+        DataDirLock::Acquire(config::data_dir());
+    if (!lock.ok()) {
+      ABSL_LOG(ERROR) << lock.status().message();
+      return EXIT_FAILURE;
+    }
+    data_dir_lock = *std::move(lock);
+  }
+
+  // Persistent databases save their statistics when the emulator is asked to
+  // stop. Block the signals before any thread starts, so that only the thread
+  // that saves the statistics receives them.
+  std::optional<sigset_t> termination_signals;
+  if (!config::data_dir().empty()) {
+    termination_signals = BlockTerminationSignals();
+  }
   std::unique_ptr<Server> server = Server::CreateUnstarted();
+  if (termination_signals.has_value()) {
+    SaveStatisticsOnTermination(*termination_signals, server.get());
+  }
 
   // Complete all durable-state hydration before the listener can accept RPCs.
   if (!config::data_dir().empty()) {
@@ -662,6 +766,10 @@ int main(int argc, char** argv) {
   if (!server->Start(options)) {
     ABSL_LOG(ERROR) << "Failed to start gRPC server.";
     return EXIT_FAILURE;
+  }
+  std::unique_ptr<BackupSchedulePoller> backup_schedule_poller;
+  if (!config::data_dir().empty()) {
+    backup_schedule_poller = std::make_unique<BackupSchedulePoller>(server.get());
   }
 
   ABSL_LOG(INFO) << "Cloud Spanner Emulator running.";

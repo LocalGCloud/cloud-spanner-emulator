@@ -219,6 +219,10 @@ class DatabaseTest : public ::testing::Test {
   // Returns the client used to communicate with the emulator.
   Client& client() { return *client_; }
 
+  // Returns a client for the test database whose sessions use the
+  // fine-grained access control database role `role`.
+  std::unique_ptr<Client> MakeClientWithRole(const std::string& role);
+
   // Returns a raw stub for calling low-level APIs that are not exposed
   // by the cloud::spanner::Client API.
   SpannerStub* raw_client() { return spanner_stub_.get(); }

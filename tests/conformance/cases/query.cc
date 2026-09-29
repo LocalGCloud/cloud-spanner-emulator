@@ -639,6 +639,55 @@ TEST_P(QueryTest, CharLengthFunctionAliasesAreAvailable) {
   }
 }
 
+// These Spanner-documented functions have no usable implementation in the
+// open-source GoogleSQL reference evaluator; the emulator supplies its own.
+// Expected values are the examples from the Spanner GoogleSQL reference.
+TEST_P(QueryTest, SpannerStringCompatibilityFunctions) {
+  if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {
+    GTEST_SKIP() << "GoogleSQL-only functions.";
+  }
+  EXPECT_THAT(Query("SELECT TO_BASE32(b'abcde\\xFF')"),
+              IsOkAndHoldsRow({"MFRGGZDF74======"}));
+  EXPECT_THAT(Query("SELECT FROM_BASE32('MFRGGZDF74======')"),
+              IsOkAndHoldsRow({Value(Bytes(std::string("abcde\xff")))}));
+  EXPECT_THAT(Query("SELECT FROM_BASE32(TO_BASE32(b'spanner'))"),
+              IsOkAndHoldsRow({Value(Bytes(std::string("spanner")))}));
+  EXPECT_THAT(Query("SELECT FROM_BASE32('MFRG!===')"),
+              StatusIs(absl::StatusCode::kOutOfRange));
+  EXPECT_THAT(Query("SELECT TO_BASE32(NULL)"),
+              IsOkAndHoldsRow({Null<std::string>()}));
+
+  EXPECT_THAT(Query(R"(SELECT SPLIT_SUBSTR("www.abc.xyz.com", ".", 1, 2))"),
+              IsOkAndHoldsRow({"www.abc"}));
+  EXPECT_THAT(Query(R"(SELECT SPLIT_SUBSTR("www.abc.xyz.com", ".", -1, 1))"),
+              IsOkAndHoldsRow({"com"}));
+
+  EXPECT_THAT(Query("SELECT LCASE('FOO'), UCASE('foo')"),
+              IsOkAndHoldsRow({"foo", "FOO"}));
+  EXPECT_THAT(Query("SELECT ADDDATE(DATE '2008-12-25', INTERVAL 5 DAY), "
+                    "SUBDATE(DATE '2008-12-25', INTERVAL 5 DAY)"),
+              IsOkAndHoldsRow({Date(2008, 12, 30), Date(2008, 12, 20)}));
+
+  EXPECT_THAT(Query("SELECT ZSTD_COMPRESS('string_value')"),
+              IsOkAndHoldsRow({Value(Bytes(std::string(
+                  "\x28\xb5\x2f\xfd\x20\x0c\x61\x00\x00string_value", 21)))}));
+  EXPECT_THAT(Query("SELECT ZSTD_DECOMPRESS_TO_STRING(ZSTD_COMPRESS('zstd'))"),
+              IsOkAndHoldsRow({"zstd"}));
+  EXPECT_THAT(
+      Query("SELECT ZSTD_DECOMPRESS_TO_BYTES(ZSTD_COMPRESS(b'bytes', level => "
+            "1))"),
+      IsOkAndHoldsRow({Value(Bytes(std::string("bytes")))}));
+  EXPECT_THAT(Query("SELECT ZSTD_DECOMPRESS_TO_BYTES(ZSTD_COMPRESS(b'bytes'), "
+                    "size_limit => 1)"),
+              StatusIs(absl::StatusCode::kOutOfRange,
+                       testing::HasSubstr("ZSTD output is too large: (5 bytes) "
+                                          "> limit (1 bytes)")));
+  EXPECT_THAT(Query("SELECT ZSTD_DECOMPRESS_TO_BYTES(b'not zstd')"),
+              StatusIs(absl::StatusCode::kOutOfRange));
+  EXPECT_THAT(Query("SELECT ZSTD_COMPRESS(NULL)"),
+              IsOkAndHoldsRow({Null<Bytes>()}));
+}
+
 TEST_P(QueryTest, PowerFunctionAliasesAreAvailable) {
   auto query = Query("SELECT POWER(2,2)");
   if (GetParam() == database_api::DatabaseDialect::POSTGRESQL) {

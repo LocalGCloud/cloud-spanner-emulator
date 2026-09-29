@@ -24,9 +24,17 @@
       "compatibility-only",
       "cloud-only"
     ],
-    "notes": "JSON-compatible YAML canonical inventory. Classifications are conservative and evidence-linked. Re-audited 2026-09-24 against the jay-spanner-extended fork (persistence, backups, placements, change streams, IAM, sessions, REST gateway).",
+    "notes": "JSON-compatible YAML canonical inventory. Classifications are conservative and evidence-linked. Re-audited 2026-09-24 against the jay-spanner-extended fork (persistence, backups, placements, change streams, IAM, sessions, REST gateway). Updated 2026-09-28 after the developer-usability closure and again after the remaining-limitations batches; see docs/plans/2026-09-27-usability-audit-worksheet.md.",
     "fork_revision": "873634fb (jay-spanner-extended at audit time)",
-    "targeted_update": "2026-09-27; audited all former partial and unsupported records against source, tests, and current Spanner docs. Full 154-row inventory review remains 2026-09-24."
+    "targeted_update": "2026-09-28; closed the developer-usability plan (docs/plans/2026-09-27-usability-closure-plan.md): every former partial, unsupported, and unknown record was re-evaluated after implementation, and physical properties were split into not-applicable records. Evidence tiers: native unit and native conformance (fixed-environment Bazel full suite, 159/159 targets), native --data_dir restart probe, and native public-endpoint client matrix and doc-example run on the final binaries; the packaged Docker/LocalCloud image was not qualified. A second targeted update on 2026-09-28 applied three remaining-limitations batches (graph algorithms, search tokenization and scoring, resume tokens, wound-wait lock waits, persisted SPANNER_SYS statistics and new SPANNER_SYS tables, FGAC checks, PostgreSQL search and vector index DDL output, max_commit_delay validation, ListOperations filters, change stream retention cleanup, the persistent-storage range-scan fix, and the --data_dir lock). It re-ran only the native unit and conformance tiers (combined fixed-environment native suite, 164/164 targets on bd6a9646); the client matrix and restart probe were not re-run. A third targeted update on 2026-09-28 qualified the packaged Docker image spanner-emulator-extended:local across all verification tiers (tests/image_verification_test.py and tests/client_matrix/): clients.docker and emulator.packaging became tested: 138 supported, 8 accepted-no-op, 9 not-applicable. Full-inventory review remains dated 2026-09-24.",
+    "verification_run": "2026-09-28 on the integration build: fixed-environment Bazel (fixed PATH/CC/CXX/PROTOC, -c opt, shared disk cache) full native suite, final emulator_main/gateway_main public-endpoint client matrix, official doc-example conformance, and a disposable --data_dir restart probe. After the remaining-limitations batches: the combined native suite only (164/164 targets on bd6a9646). The packaged Docker image spanner-emulator-extended:local was qualified on 2026-09-28 across the external client matrix (REST, Go, Node, Python, Java, JDBC, PGAdapter, psql) and the 5-step image test suite (tests/image_verification_test.py). See docs/plans/2026-09-27-usability-audit-worksheet.md.",
+    "evidence_tiers": {
+      "native unit": "Focused Bazel unit targets in this repository.",
+      "native conformance": "tests/conformance suites through the C++ client over gRPC, both dialects.",
+      "native restart": "A disposable --data_dir stop/restart probe against a built emulator_main.",
+      "native public endpoint": "External SDKs and drivers (tests/client_matrix) and the doc-example harness against built binaries.",
+      "packaged image": "Qualified on 2026-09-28 against spanner-emulator-extended:local (tests/image_verification_test.py and tests/client_matrix/): client matrix (Go, Node, Python, Java, JDBC, PGAdapter, psql, REST with error envelopes), persistent volume restart (both dialects, roles, definer views, database options, TTL policy, sequences, unique indexes, version_time backups, split points, query stats), data directory locking, flag forwarding, and feature spot checks (REPEATABLE_READ, wound-wait locks, PLAN/PROFILE, PageRank, Unicode search, PostgreSQL ScaNN)."
+    }
   },
   "categories": [
     {
@@ -126,12 +134,13 @@
           "frontend/collections/session_manager.cc"
         ],
         "tests": [
-          "tests/conformance/cases/sessions.cc"
+          "tests/conformance/cases/sessions.cc",
+          "frontend/handlers/sessions_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CreateSession works in both dialects and stores labels; a missing instance or database returns NOT_FOUND. Regular sessions expire after 1 hour idle. Sessions are memory-only and are lost on restart even with --data_dir, so clients must recreate them."
+      "notes": "CreateSession works in both dialects and stores labels; a missing instance or database returns NOT_FOUND. creator_role is validated (an unknown role returns PERMISSION_DENIED) and echoed. Regular sessions expire after 1 hour idle. Sessions are memory-only and are lost on restart even with --data_dir, so clients must recreate them."
     },
     {
       "id": "data.sessions.get",
@@ -172,12 +181,13 @@
         ],
         "tests": [
           "tests/conformance/cases/sessions.cc",
-          "frontend/collections/session_manager_test.cc"
+          "frontend/collections/session_manager_test.cc",
+          "frontend/handlers/sessions_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "ListSessions pages results (max 1,000 per page) and returns labels. The request filter (for example a label filter) is ignored, and multiplexed sessions are omitted by default."
+      "notes": "ListSessions pages results (max 1,000 per page) and returns labels. Filters on labels use the shared AIP-160 list filter, and multiplexed sessions are omitted by default."
     },
     {
       "id": "data.sessions.delete",
@@ -216,12 +226,13 @@
           "frontend/collections/session_manager.cc"
         ],
         "tests": [
-          "tests/conformance/cases/sessions.cc"
+          "tests/conformance/cases/sessions.cc",
+          "frontend/handlers/sessions_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "BatchCreateSessions returns distinct sessions and silently truncates session_count to the per-call maximum, as production does. A negative count returns INVALID_ARGUMENT."
+      "notes": "BatchCreateSessions returns distinct sessions and silently truncates session_count to the per-call maximum, as production does. A negative count returns INVALID_ARGUMENT, and session_template.creator_role is validated like CreateSession."
     },
     {
       "id": "data.sql.execute",
@@ -244,12 +255,13 @@
         "tests": [
           "frontend/handlers/queries_test.cc",
           "tests/conformance/cases/query.cc",
-          "tests/conformance/cases/dml.cc"
+          "tests/conformance/cases/dml.cc",
+          "tests/conformance/cases/query_modes.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "ExecuteSql runs GoogleSQL and PostgreSQL queries and DML with typed or untyped parameters, THEN RETURN / RETURNING, and PLAN/PROFILE modes (no real query plans). Read timestamps more than 1 hour in the future are rejected, and reads older than the version retention period (default 1 hour) fail with FAILED_PRECONDITION."
+      "notes": "ExecuteSql runs GoogleSQL and PostgreSQL queries and DML with typed or untyped parameters, THEN RETURN / RETURNING, and PLAN/PROFILE modes with plan trees and query statistics (see googlesql.query_modes). Read timestamps more than 1 hour in the future are rejected, and reads older than the version retention period (default 1 hour) fail with FAILED_PRECONDITION."
     },
     {
       "id": "data.sql.execute_streaming",
@@ -267,16 +279,20 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/queries.cc",
-          "frontend/converters/chunking.cc"
+          "frontend/converters/chunking.cc",
+          "frontend/converters/resume_tokens.cc",
+          "frontend/proto/resume_token.proto"
         ],
         "tests": [
           "frontend/handlers/queries_test.cc",
-          "frontend/converters/chunking_test.cc"
+          "frontend/converters/chunking_test.cc",
+          "tests/conformance/cases/query_modes.cc",
+          "frontend/converters/resume_tokens_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Results stream as PartialResultSets split into chunks of at most 1 MB, with chunked_value set when a value spans chunks. Resume tokens are not supported, so a client must retry an interrupted stream from the start."
+      "notes": "Results stream as PartialResultSets of whole rows, each response at most 1 MB; a row larger than that is split across responses with chunked_value. The query plan comes with the stream and statistics on its last message. Responses that end on a row boundary carry a resume token (request fingerprint, transaction or single-use read timestamp, row count and a fingerprint of the rows sent); a request resent with the token re-executes in the same transaction or at the same read timestamp and continues after that row. A garbled token, a token from a different request, or a resent request that begins a new transaction returns INVALID_ARGUMENT, and rows that differ on re-execution (a nondeterministic result such as RAND()) return FAILED_PRECONDITION. DML streams carry no resume tokens."
     },
     {
       "id": "data.read.read",
@@ -315,17 +331,20 @@
         "implementation": [
           "frontend/handlers/reads.cc",
           "frontend/converters/reads.cc",
-          "frontend/converters/chunking.cc"
+          "frontend/converters/chunking.cc",
+          "frontend/converters/resume_tokens.cc",
+          "frontend/proto/resume_token.proto"
         ],
         "tests": [
           "tests/conformance/cases/large_reads.cc",
           "frontend/converters/chunking_test.cc",
-          "frontend/handlers/reads_test.cc"
+          "frontend/handlers/reads_test.cc",
+          "frontend/converters/resume_tokens_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "StreamingRead returns PartialResultSets split into chunks of at most 1 MB. Resume tokens are not supported, so an interrupted stream must be restarted."
+      "notes": "StreamingRead returns PartialResultSets of whole rows, each at most 1 MB (a larger row is split), with a resume token at each row boundary. A request resent with the token continues after that row, in the same transaction or at the same read timestamp; a garbled token, a token from a different request, or a resent request that begins a new transaction returns INVALID_ARGUMENT, and rows that changed since they were sent return FAILED_PRECONDITION."
     },
     {
       "id": "data.sql.partition_query",
@@ -459,37 +478,41 @@
       ],
       "evidence": {
         "implementation": [
-          "frontend/handlers/instances.cc"
+          "frontend/handlers/instances.cc",
+          "frontend/common/list_filter.cc"
         ],
         "tests": [
           "frontend/handlers/instances_test.cc",
-          "tests/gcloud/instance_admin_test.py"
+          "tests/gcloud/instance_admin_test.py",
+          "frontend/common/list_filter_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "ListInstances supports pagination. The filter field (for example labels) is ignored."
+      "notes": "ListInstances supports pagination and applies AIP-160 filters over name, display_name, and labels.* through the shared list filter (OR binds tighter than AND; unknown fields are rejected)."
     },
     {
       "id": "instance.update",
       "category": "Instance administration",
       "feature": "UpdateInstance RPC",
-      "status": "partial",
-      "applicability": "compatibility-only",
+      "status": "supported",
+      "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
       ],
       "evidence": {
         "implementation": [
-          "frontend/handlers/instances.cc"
+          "frontend/handlers/instances.cc",
+          "frontend/persistence/metadata_store.cc"
         ],
         "tests": [
-          "frontend/handlers/instances_test.cc"
+          "frontend/handlers/instances_test.cc",
+          "frontend/persistence/metadata_store_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "UpdateInstance accepts only display_name, node_count, processing_units, and labels in the field mask; any other path (autoscaling_config, edition, config) returns INVALID_ARGUMENT. Changes are metadata only and are persisted with --data_dir."
+      "notes": "UpdateInstance validates display_name, node_count, processing_units and labels masks, stores the updated values, and returns a completed operation with Instance response and UpdateInstanceMetadata. A direct gRPC create/update/get probe passed after stopping and restarting emulator_main with the same disposable --data_dir. Other masks (including autoscaling_config, edition and config) return INVALID_ARGUMENT. Capacity remains metadata only; physical autoscaling and replication are separate not-applicable records. Packaged LocalCloud qualification remains open."
     },
     {
       "id": "instance.delete",
@@ -512,13 +535,13 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "DeleteInstance removes the instance with its databases and instance partitions (and their on-disk data with --data_dir). It fails with FAILED_PRECONDITION while the instance still has backups or backup schedules, but unlike production it does not check database drop protection."
+      "notes": "DeleteInstance removes the instance with its databases and instance partitions (and their on-disk data with --data_dir). It fails with FAILED_PRECONDITION while the instance still has backups or backup schedules, or while any database, including an unavailable persisted database, has drop protection enabled. The protection and deletion path passed a direct gRPC --data_dir restart probe."
     },
     {
       "id": "instance.configs",
       "category": "Instance administration",
       "feature": "Instance configs RPCs",
-      "status": "partial",
+      "status": "supported",
       "applicability": "compatibility-only",
       "docs": [
         "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.instance.v1#instanceadmin"
@@ -526,17 +549,19 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/instances.cc",
-          "frontend/handlers/instance_extensions.cc"
+          "frontend/handlers/instance_extensions.cc",
+          "frontend/common/list_filter.cc"
         ],
         "tests": [
           "frontend/handlers/instances_test.cc",
           "frontend/handlers/instance_extensions_test.cc",
-          "tests/gcloud/instance_admin_test.py"
+          "tests/gcloud/instance_admin_test.py",
+          "frontend/common/list_filter_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "The built-in emulator-config is always listed and its ID is reserved. Custom instance configs support create, get, list, update, and delete with long-running operations and are persisted with --data_dir. Configs are metadata only; replicas and regions have no effect."
+      "notes": "The built-in emulator-config is always listed and its ID is reserved. Custom configs validate canonical names, custom- IDs, the built-in base config, labels, and update masks; create/get/list/update/delete, bounded pagination, typed operation metadata, backup reference guards, etag-guarded update/delete, and --data_dir persistence have handler tests. ListInstanceConfigOperations applies the shared AIP-160 list filter (OR binds tighter than AND; unknown fields are rejected) with parent- and filter-bound page tokens. Configs are metadata only: replicas, regions, and capacity have no physical effect (see ops.replication)."
     },
     {
       "id": "database.create",
@@ -643,17 +668,20 @@
         "implementation": [
           "frontend/handlers/databases.cc",
           "backend/schema/updater/schema_updater.cc",
-          "backend/database/database.cc"
+          "backend/database/database.cc",
+          "third_party/spanner_pg/ddl/spangres_direct_schema_printer_impl.cc"
         ],
         "tests": [
           "frontend/handlers/databases_test.cc",
           "tests/conformance/cases/schema_changes.cc",
-          "tests/gcloud/database_ddl_test.py"
+          "tests/gcloud/database_ddl_test.py",
+          "third_party/spanner_pg/ddl/ddl_test.cc",
+          "tests/conformance/data/schema_changes/pg/ddl.create_search_index.test"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "UpdateDatabaseDdl applies statements in order and completes synchronously; on a failure, earlier statements stay applied (partial success) and the operation reports the error. A caller-supplied operation_id is honored, and GetDatabaseDdl returns replayable DDL. Schema change requests are serialized per database and take an exclusive lock; an active transaction can cause a schema change to abort."
+      "notes": "UpdateDatabaseDdl applies statements in order and completes synchronously; on a failure, earlier statements stay applied (partial success) and the operation reports the error. A caller-supplied operation_id is honored, and GetDatabaseDdl returns replayable DDL, including PostgreSQL CREATE SEARCH INDEX and CREATE INDEX ... USING scann statements. Schema change requests are serialized per database and take an exclusive lock; an active transaction can cause a schema change to abort."
     },
     {
       "id": "operations.get",
@@ -692,17 +720,19 @@
         "implementation": [
           "frontend/handlers/operations.cc",
           "frontend/handlers/database_extensions.cc",
-          "frontend/handlers/instance_extensions.cc"
+          "frontend/handlers/instance_extensions.cc",
+          "frontend/common/list_filter.cc"
         ],
         "tests": [
           "frontend/handlers/operations_test.cc",
           "frontend/handlers/database_extensions_test.cc",
-          "tests/gcloud/operation_test.py"
+          "tests/gcloud/operation_test.py",
+          "frontend/common/list_filter_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "ListOperations, ListDatabaseOperations, ListBackupOperations, ListInstanceConfigOperations, and ListInstancePartitionOperations page through stored operations. Filter expressions are ignored."
+      "notes": "ListOperations, ListDatabaseOperations, ListBackupOperations, ListInstanceConfigOperations, and ListInstancePartitionOperations page through stored operations. All five apply AIP-160 filters over operation fields, metadata, and response (the shared list filter; OR binds tighter than AND, and unknown fields are rejected), with filter-bound page tokens; the generic google.longrunning ListOperations gained its filter on 2026-09-28."
     },
     {
       "id": "operations.cancel",
@@ -729,7 +759,7 @@
       "id": "backups.create",
       "category": "Database administration, operations, and backups",
       "feature": "CreateBackup RPC",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
@@ -750,13 +780,13 @@
         ]
       },
       "verification": "tested",
-      "notes": "CreateBackup takes a point-in-time copy of the database's storage and requires --data_dir; without it the call returns FAILED_PRECONDITION. expire_time is required and must be 6 hours to 366 days after the capture time; version_time (historical backups) returns INVALID_ARGUMENT. encryption_config is retained in backup metadata but does not encrypt the local snapshot."
+      "notes": "CreateBackup copies the database into a local snapshot and requires --data_dir (FAILED_PRECONDITION otherwise). version_time may be any time from the database's earliest_version_time to now; the backup then holds the rows and schema as of that time. expire_time must be 6 hours to 366 days after the backup's create time. encryption_config accepts GOOGLE_DEFAULT_ENCRYPTION and USE_DATABASE_ENCRYPTION and reports Google default encryption in encryption_info; customer-managed keys return UNIMPLEMENTED (see security.encryption). Every backup is a full copy. A disposable --data_dir restart probe confirmed version_time and encryption_info after restart and restored the historical image."
     },
     {
       "id": "backups.restore",
       "category": "Database administration, operations, and backups",
       "feature": "RestoreDatabase RPC",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/reference/rpc/google.spanner.admin.database.v1#databaseadmin"
@@ -779,7 +809,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "RestoreDatabase copies a READY local backup into a new database and requires --data_dir; the target must be in the backup's project on an instance with the same instance config. Schema contents and saved sequence counters, including those used by identity columns, are restored. The first schema batch receives the restore time, so pre-restore change-stream start timestamps are not guaranteed to work. Ordinary failures roll back the target; a failed rollback can require restart reconciliation."
+      "notes": "RestoreDatabase copies a READY local backup into a new database and requires --data_dir; the target must be in the backup's project on an instance with the same instance config. Schema, grants, and saved sequence counters (including identity columns) are restored; row deletion policies are dropped from the restored database, as Spanner documents. encryption_config accepts the Google-default types. The first schema batch receives the restore time, so change-stream start timestamps before the restore are not guaranteed to work. Ordinary failures roll back the target; a failed rollback can require restart reconciliation."
     },
     {
       "id": "schema.tables",
@@ -884,12 +914,13 @@
         "tests": [
           "backend/schema/updater/schema_updater_tests/views.cc",
           "tests/conformance/cases/views.cc",
-          "backend/query/queryable_view_test.cc"
+          "backend/query/queryable_view_test.cc",
+          "tests/conformance/cases/fine_grained_access_control.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE [OR REPLACE] VIEW / DROP VIEW with SQL SECURITY INVOKER or DEFINER, dependency tracking and INFORMATION_SCHEMA.VIEWS work in both dialects; views are query-only and cannot be used with the Read API. DEFINER has no privilege effect because fine-grained access control is not enforced."
+      "notes": "CREATE [OR REPLACE] VIEW / DROP VIEW with SQL SECURITY INVOKER or DEFINER, dependency tracking and INFORMATION_SCHEMA.VIEWS work in both dialects; views are query-only and cannot be used with the Read API. With a database role, a DEFINER view needs only SELECT on the view, while an INVOKER view also checks the underlying objects at analysis, so PLAN mode checks them too."
     },
     {
       "id": "schema.named_schemas",
@@ -911,12 +942,13 @@
         ],
         "tests": [
           "backend/schema/updater/schema_updater_tests/named_schema.cc",
-          "tests/conformance/cases/named_schema.cc"
+          "tests/conformance/cases/named_schema.cc",
+          "tests/conformance/cases/fine_grained_access_control.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE/DROP SCHEMA works in both dialects, and tables, views, sequences, indexes, synonyms, foreign keys and UDFs can live in named schemas. Nested schemas, reserved names and cross-schema indexes are rejected as in production."
+      "notes": "CREATE/DROP SCHEMA works in both dialects, and tables, views, sequences, indexes, synonyms, foreign keys and UDFs can live in named schemas. Nested schemas, reserved names and cross-schema indexes are rejected as in production. GRANT USAGE ON SCHEMA (including DEFAULT and ALL ... IN SCHEMA grants) is enforced for database roles."
     },
     {
       "id": "schema.sequences",
@@ -953,7 +985,7 @@
       "id": "schema.udfs",
       "category": "Schema and DDL",
       "feature": "User-defined functions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -966,18 +998,20 @@
         "implementation": [
           "backend/schema/updater/schema_updater.cc",
           "backend/query/queryable_udf.cc",
-          "backend/query/remote_udf/remote_udf_evaluator.cc"
+          "backend/query/remote_udf/remote_udf_evaluator.cc",
+          "binaries/gateway_main.go"
         ],
         "tests": [
           "backend/schema/updater/schema_updater_tests/udf.cc",
           "tests/conformance/cases/udfs.cc",
           "backend/query/remote_udf/remote_udf_evaluator_test.cc",
-          "backend/query/query_engine_test.cc"
+          "backend/query/query_engine_test.cc",
+          "gateway/udf_provider_test.go"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SQL UDFs (CREATE [OR REPLACE] FUNCTION, DROP FUNCTION) work in both dialects, including default parameters, invoker security, dependency and cycle checks, and use in views, defaults, generated columns and indexes. Remote UDFs return deterministic pseudo-random values unless the emulator_main flag --remote_functions_host_port points at a local HTTP backend; that flag is not exposed by gateway_main or the Docker image."
+      "notes": "SQL UDFs (CREATE [OR REPLACE] FUNCTION, DROP FUNCTION) work in both dialects, including default parameters, invoker security, dependency and cycle checks, and use in views, defaults, generated columns and indexes. Remote UDFs return deterministic placeholder values unless --remote_functions_host_port points at a local HTTP backend (both binaries accept the flag); provider errors propagate and each call gets a distinct request ID. Remote endpoints on Google Cloud are never called (see ml.external_connections)."
     },
     {
       "id": "schema.placements",
@@ -1085,7 +1119,7 @@
       "id": "types.json",
       "category": "Types and values",
       "feature": "JSON type and functions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql"
@@ -1109,7 +1143,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "JSON columns, ARRAY<JSON>, DML values, index STORING, and selected JSON functions (JSON_QUERY, JSON_VALUE, JSON_SET, JSON_REMOVE, PARSE_JSON, TO_JSON, SAFE_TO_JSON, TO_JSON_STRING) have representative tests. The JSON type itself works for local development. JSON key and index-key restrictions match Spanner; the combined row remains partial because function coverage is allowlisted and has not been compared function by function with production."
+      "notes": "JSON columns, ARRAY<JSON>, DML values, index STORING, and the Spanner-documented JSON functions (the allowlist covers the documented list) work; JSON null is distinct from SQL NULL, and JSON key and index-key restrictions match Spanner. Representative functions have repository tests. The official doc-example conformance run recorded in the usability worksheet found no emulator defect on this page; its remaining non-matches are order-unspecified results or documentation errors."
     },
     {
       "id": "types.arrays",
@@ -1376,13 +1410,13 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Hint names and values are validated like production: unknown hints fail unless @{ignore_unknown_hints=true}, FORCE_INDEX must name an existing index (in PostgreSQL an unknown index is ignored), and null-filtered index hints fail unless @{spanner_emulator.disable_query_null_filtered_index_check=true} or --disable_query_null_filtered_index_check is set. Performance hints (JOIN_METHOD, INDEX_STRATEGY, GROUP_METHOD, LOCK_SCANNED_RANGES, and OPTIMIZER_VERSION, which this fork accepts as a STRING or INT64) do not change execution; the OPTIMIZER_VERSION hint has no dedicated test."
+      "notes": "Hint names and values are validated like production: unknown hints fail unless @{ignore_unknown_hints=true}, FORCE_INDEX must name an existing index (in PostgreSQL an unknown index is ignored), and null-filtered index hints fail unless @{spanner_emulator.disable_query_null_filtered_index_check=true} or --disable_query_null_filtered_index_check is set. LOCK_SCANNED_RANGES=exclusive takes exclusive locks like FOR UPDATE. OPTIMIZER_VERSION (STRING or INT64) and OPTIMIZER_STATISTICS_PACKAGE statement hints are accepted on queries and, since 2026-09-28, on DML (OPTIMIZER_VERSION on DML used to fail); statistics package names are not validated. Other performance hints (JOIN_METHOD, INDEX_STRATEGY, GROUP_METHOD, and the optimizer hints) do not change execution."
     },
     {
       "id": "googlesql.query_modes",
       "category": "GoogleSQL query language and functions",
       "feature": "Query modes and plans",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -1394,22 +1428,25 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/queries.cc",
-          "backend/query/query_engine.cc"
+          "backend/query/query_engine.cc",
+          "backend/query/plan/query_plan_builder.cc",
+          "backend/query/plan/scan_profiler.cc"
         ],
         "tests": [
           "tests/conformance/cases/query_modes.cc",
-          "backend/query/query_engine_test.cc"
+          "backend/query/query_engine_test.cc",
+          "backend/query/plan/query_plan_builder_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "PLAN mode analyzes without executing and returns result and parameter metadata with a single placeholder plan node, which lets clients infer parameter types. PROFILE mode executes and returns only rows_returned and elapsed_time. No real query plans or per-operator statistics are produced, and elapsed_time says nothing about production latency."
+      "notes": "PLAN returns a plan tree built from the resolved query (Serialize Result, Distributed Union, Scan, Filter Scan, joins, Aggregate, Sort/Limit, Compute, Union All, subqueries, and Apply Mutations for DML) with result and parameter metadata, without executing. PROFILE, WITH_STATS, and WITH_PLAN_AND_STATS execute and return query_stats (rows_returned, rows_scanned, elapsed_time, cpu_time, query_plan_creation_time, optimizer_version); PROFILE measures the root and every table scan with string execution statistics (DML PROFILE reports the root only). ExecuteStreamingSql returns the plan, with statistics on the last response. Operator names follow Spanner's documented operators, but plan shapes and timings come from the local engine and do not predict production plans or latency."
     },
     {
       "id": "googlesql.aggregate_functions",
       "category": "GoogleSQL query language and functions",
       "feature": "Aggregate functions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -1432,13 +1469,13 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Built-in functions are limited to the Spanner allowlist in gsql_supported_functions.cc (ANY_VALUE, ARRAY_AGG, ARRAY_CONCAT_AGG, AVG, BIT_AND/OR/XOR, COUNT, COUNTIF, LOGICAL_AND/OR, MAX, MIN, STDDEV, STRING_AGG, SUM, VARIANCE and others); query_validator.cc rejects any other GoogleSQL builtin. Only some aggregates have dedicated tests (query.cc StddevAndVariance; PG MIN/MAX/SUM in pg_functions_test.cc), and the allowlist has not been audited against the production function list."
+      "notes": "Built-in functions are limited to the Spanner allowlist in gsql_supported_functions.cc, which covers every documented aggregate (ANY_VALUE, ARRAY_AGG, ARRAY_CONCAT_AGG, AVG, BIT_AND/OR/XOR, COUNT, COUNTIF, LOGICAL_AND/OR, MAX, MIN, STDDEV, STRING_AGG, SUM, VARIANCE and others); query_validator.cc rejects other GoogleSQL builtins. Representative aggregates have repository tests in both dialects. The official doc-example conformance run recorded in the usability worksheet found no emulator defect on the aggregate and statistical-aggregate pages; its remaining non-matches are order-unspecified results or documentation errors."
     },
     {
       "id": "googlesql.string_functions",
       "category": "GoogleSQL query language and functions",
       "feature": "String functions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql"
@@ -1449,7 +1486,8 @@
       "evidence": {
         "implementation": [
           "backend/query/feature_filter/gsql_supported_functions.cc",
-          "backend/query/query_validator.cc"
+          "backend/query/query_validator.cc",
+          "backend/query/spanner_string_functions.cc"
         ],
         "tests": [
           "tests/conformance/cases/query.cc",
@@ -1458,13 +1496,13 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Allowlisted string functions (CONCAT, FORMAT, LPAD/RPAD, REGEXP_CONTAINS/EXTRACT/REPLACE, SPLIT, NORMALIZE, SOUNDEX, TO_/FROM_BASE32/BASE64, CODE_POINTS_*, and others) run on the reference evaluator; FORMAT, regex, and alias functions (CHAR_LENGTH, POWER, CEILING) are tested in query.cc. Not every function is individually tested, and builtins outside gsql_supported_functions.cc are rejected."
+      "notes": "Every Spanner-documented string function evaluates. TO_BASE32/FROM_BASE32 and ZSTD_COMPRESS, ZSTD_DECOMPRESS_TO_BYTES and ZSTD_DECOMPRESS_TO_STRING are emulator implementations (GoogleSQL's open-source evaluator lacks them), SPLIT_SUBSTR is allowlisted, and LCASE/UCASE are enabled aliases; query.cc tests them along with FORMAT, regex, and other alias functions. Builtins outside the Spanner allowlist are rejected. The official doc-example conformance run recorded in the usability worksheet found no emulator defect on the string and compression pages; its remaining non-matches are order-unspecified results or documentation errors."
     },
     {
       "id": "googlesql.date_timestamp_functions",
       "category": "GoogleSQL query language and functions",
       "feature": "Date and timestamp functions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql"
@@ -1485,7 +1523,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Core date and timestamp operations are tested, including ISOYEAR and ISOWEEK in DATE_TRUNC, TIMESTAMP_TRUNC, and DATE_DIFF, and TIMESTAMP literals without a zone resolve in America/Los_Angeles unless the database sets default_time_zone. The category remains partial because the complete production function surface is not exhaustively covered."
+      "notes": "Date, timestamp, and interval functions evaluate as documented, including ISOYEAR and ISOWEEK parts and the ADDDATE/SUBDATE aliases; TIMESTAMP literals without a zone resolve in America/Los_Angeles unless the database sets default_time_zone. The official doc-example conformance run recorded in the usability worksheet found no emulator defect on the date, timestamp, and interval pages; its remaining non-matches are order-unspecified results or documentation errors."
     },
     {
       "id": "googlesql.tablesample",
@@ -1546,7 +1584,7 @@
       "id": "postgresql.queries",
       "category": "PostgreSQL dialect",
       "feature": "PostgreSQL query translation",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "postgresql"
@@ -1558,24 +1596,27 @@
         "implementation": [
           "third_party/spanner_pg/transformer/forward_query.cc",
           "third_party/spanner_pg/transformer/forward_function.cc",
-          "backend/query/query_engine.cc"
+          "backend/query/query_engine.cc",
+          "third_party/spanner_pg/catalog/emulator_functions.cc",
+          "third_party/spanner_pg/codegen/emulator_postgresql_catalog.textproto"
         ],
         "tests": [
           "tests/conformance/cases/pg_functions_test.cc",
           "third_party/spanner_pg/transformer/query_test.cc",
           "third_party/spanner_pg/transformer/unsupported_query_test.cc",
-          "backend/query/query_engine_test.cc"
+          "backend/query/query_engine_test.cc",
+          "third_party/spanner_pg/catalog/emulator_functions_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "PostgreSQL SQL is translated to a GoogleSQL resolved tree and runs on the same evaluator. pg_functions_test.cc declares 111 cases for casts, date/timestamptz functions, aggregates, and JSONB functions, of which five are disabled. The full Spanner PostgreSQL query and function surface has not been audited; PostgreSQL syntax absent from Spanner's documented DML grammar is not counted as an emulator gap."
+      "notes": "PostgreSQL SQL is translated to a GoogleSQL resolved tree and runs on the same evaluator. Documented functions and operators that were missing or wrong now work: generate_series in FROM, spanner.split_substr, make_interval, pg.ilike/pg.not_ilike, !~~, NOT LIKE/NOT ILIKE ... ESCAPE, array_agg(uuid), regexp_replace (first match), and floating SUM/AVG over empty input; pg_functions_test.cc covers them in both value and error cases. The official doc-example conformance run recorded in the usability worksheet found no emulator defect on the PostgreSQL function and operator pages; its remaining non-matches are order-unspecified results or documentation errors. PostgreSQL syntax absent from Spanner's documented grammar is not counted as an emulator gap."
     },
     {
       "id": "postgresql.pg_catalog",
       "category": "PostgreSQL dialect",
       "feature": "pg_catalog views",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "postgresql"
@@ -1585,7 +1626,8 @@
       ],
       "evidence": {
         "implementation": [
-          "backend/query/pg_catalog.cc"
+          "backend/query/pg_catalog.cc",
+          "third_party/spanner_pg/bootstrap_catalog/proc_changelist.cc"
         ],
         "tests": [
           "tests/conformance/cases/pg_catalog_test.cc"
@@ -1593,7 +1635,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "pg_am, pg_attrdef, pg_attribute, pg_class, pg_collation, pg_constraint, pg_index, pg_indexes, pg_namespace, pg_proc, pg_sequence(s), pg_settings, pg_tables, pg_type, and pg_views have populated or static entries with representative tests. The pg_proc UDF-specific test is unconditionally skipped. Other catalog views such as pg_matviews, pg_policies, pg_cursors, and pg_prepared_xacts exist but return no rows in the cited test. Overlaps metadata.pg_catalog."
+      "notes": "pg_am, pg_attrdef, pg_attribute, pg_class, pg_collation, pg_constraint, pg_index, pg_indexes, pg_namespace, pg_proc (including user-defined functions in named schemas), pg_sequence(s), pg_settings, pg_tables, pg_type, and pg_views have populated or static entries with representative tests. Catalogs for objects Spanner does not have (for example pg_matviews, pg_policies, pg_cursors, pg_prepared_xacts) return no rows. With a database role, rows about schema objects are filtered by the role's privileges, as in INFORMATION_SCHEMA. Overlaps metadata.pg_catalog."
     },
     {
       "id": "postgresql.synonyms",
@@ -1616,18 +1658,19 @@
         "tests": [
           "tests/conformance/cases/pg_synonyms.cc",
           "backend/schema/updater/schema_updater_tests/table.cc",
-          "tests/conformance/cases/named_schema.cc"
+          "tests/conformance/cases/named_schema.cc",
+          "tests/conformance/cases/information_schema.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SYNONYM (name) in CREATE TABLE and ALTER TABLE ADD SYNONYM work and the synonym is queryable (pg_synonyms.cc); ALTER TABLE DROP SYNONYM and synonyms in named schemas are covered by schema updater tests. INFORMATION_SCHEMA.TABLE_SYNONYMS is not implemented (listed as unsupported in information_schema.cc)."
+      "notes": "SYNONYM (name) in CREATE TABLE and ALTER TABLE ADD SYNONYM work and the synonym is queryable (pg_synonyms.cc); ALTER TABLE DROP SYNONYM and synonyms in named schemas are covered by schema updater tests. INFORMATION_SCHEMA.TABLE_SYNONYMS lists them."
     },
     {
       "id": "postgresql.views",
       "category": "PostgreSQL dialect",
       "feature": "PostgreSQL views",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "postgresql"
@@ -1645,18 +1688,20 @@
           "tests/conformance/cases/views.cc",
           "tests/conformance/cases/pg_views_test.cc",
           "tests/conformance/data/schema_changes/pg/ddl.create_view.test",
-          "tests/conformance/cases/pg_catalog_test.cc"
+          "tests/conformance/cases/pg_catalog_test.cc",
+          "tests/conformance/cases/fine_grained_access_control.cc",
+          "third_party/spanner_pg/ddl/ddl_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE [OR REPLACE] VIEW with SQL SECURITY INVOKER and DROP VIEW work, appear in information_schema.views and pg_views, and honor ORDER BY inside a view. The PostgreSQL DDL translator hardcodes INVOKER, so Spanner's SQL SECURITY DEFINER variant is not implemented. Active fixture cases reject column-name lists and TEMP views; WITH CHECK OPTION and WITH-clause cases are commented out, not tested."
+      "notes": "CREATE [OR REPLACE] VIEW with SQL SECURITY INVOKER or DEFINER and DROP VIEW work, appear in information_schema.views and pg_views, and honor ORDER BY inside a view. With a database role, a DEFINER view needs only SELECT on the view. Column-name lists and TEMP views are rejected, as Spanner's grammar has neither."
     },
     {
       "id": "postgresql.change_streams",
       "category": "PostgreSQL dialect",
       "feature": "PostgreSQL change streams",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "postgresql"
@@ -1669,6 +1714,7 @@
           "frontend/handlers/change_streams.cc",
           "frontend/converters/pg_change_streams.cc",
           "backend/query/change_stream/queryable_change_stream_tvf.cc",
+          "backend/schema/updater/schema_updater.cc",
           "third_party/spanner_pg/ddl/pg_to_spanner_ddl_translator.cc"
         ],
         "tests": [
@@ -1676,6 +1722,7 @@
           "frontend/converters/pg_change_streams_test.cc",
           "backend/query/change_stream/pg_change_stream_query_validator_test.cc",
           "backend/query/change_stream/pg_queryable_change_stream_tvf_test.cc",
+          "backend/schema/updater/schema_updater_tests/change_stream_test.cc",
           "tests/conformance/data/schema_changes/pg/ddl.alter_change_stream.test"
         ],
         "documentation": [
@@ -1683,13 +1730,13 @@
         ]
       },
       "verification": "tested",
-      "notes": "CREATE/ALTER/DROP CHANGE STREAM and spanner.read_json_<stream>(...) work, with JSONB insert, update, and delete records tested. The local updater accepts only OLD_AND_NEW_VALUES, NEW_ROW, and NEW_VALUES capture types; the documented NEW_ROW_AND_OLD_VALUES variant and RESET/NULL cases are not covered. The cited PostgreSQL DDL fixture comments out SET (value_capture_type = NULL). Shared gaps remain: REPLACE emits one record instead of two, and multi-table ordering within a transaction is not guaranteed."
+      "notes": "CREATE/ALTER/DROP CHANGE STREAM and spanner.read_json_<stream>(...) work with all four value_capture_type values, SET NULL, and RESET. JSONB insert, update, and delete records are tested; DML UPDATE records only the key, SET, and commit-timestamp columns, matching Update mutations, and MUTABLE_KEY_RANGE streams emit partition_event move records. REPLACE of an existing row emits DELETE then INSERT; record_sequence is monotonic, but its order need not match mutation input order. Shared simulation limits are listed under change_streams.read."
     },
     {
       "id": "postgresql.jsonb",
       "category": "PostgreSQL dialect",
       "feature": "PostgreSQL JSONB type and functions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "postgresql"
@@ -1710,7 +1757,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "JSONB parsing, normalization, storage, and selected functions are covered by tests; the type itself works for local development. Numbers keep up to 4,932 digits before the decimal point across tested platforms. The combined row remains partial because the full Spanner PostgreSQL JSONB function surface has not been audited."
+      "notes": "JSONB parsing, normalization, storage, operators, and the documented functions are covered by tests; || keeps the left operand's elements first, and -> and ->> with a negative array index return NULL, as Spanner documents. Numbers keep up to 4,932 digits before the decimal point across tested platforms. The official doc-example conformance run recorded in the usability worksheet found no emulator defect among the PostgreSQL JSONB examples; its remaining non-matches are order-unspecified results or documentation errors."
     },
     {
       "id": "writes.mutations_insert",
@@ -1740,7 +1787,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Insert fails with ALREADY_EXISTS on an existing key, InsertOrUpdate upserts, and Replace clears unspecified columns (single_row_writes.cc, multi_row_writes.cc). Malformed mutations (unknown column or table, type mismatch, partial key, repeated column) are rejected (malformed_writes.cc). Per-commit mutation-count and commit-size limits are not enforced (README)."
+      "notes": "Insert fails with ALREADY_EXISTS on an existing key, InsertOrUpdate upserts, and Replace clears unspecified columns (single_row_writes.cc, multi_row_writes.cc). Malformed mutations (unknown column or table, type mismatch, partial key, repeated column) are rejected (malformed_writes.cc). Commit and BatchWrite reject more than 80,000 distinct explicitly written cells; see ops.quotas for the limits that are not counted."
     },
     {
       "id": "writes.mutations_update",
@@ -1858,7 +1905,7 @@
       "id": "writes.partitioned_dml",
       "category": "DML, mutations, and batch operations",
       "feature": "Partitioned DML",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -1882,7 +1929,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Partitioned DML UPDATE and DELETE statements, including parameterized ones, work in both dialects. INSERT and non-partitionable statements are rejected, reads in a PDML transaction fail, and REPEATABLE_READ isolation is rejected. The whole statement runs as one local transaction, with none of Cloud Spanner's distributed partitioning, retries, or throughput."
+      "notes": "Partitioned DML UPDATE and DELETE statements, including parameterized ones, work in both dialects. INSERT and non-partitionable statements are rejected, reads in a PDML transaction fail, and REPEATABLE_READ isolation is rejected. The statement runs as one local transaction; distributed partitioning, retries, and throughput are physical (see ops.replication). While it runs, SPANNER_SYS.ACTIVE_PARTITIONED_DMLS shows it as one partition with progress 0."
     },
     {
       "id": "writes.batch_write",
@@ -1985,7 +2032,7 @@
       "id": "transactions.stale_reads",
       "category": "Transactions, timestamps, and concurrency",
       "feature": "Stale reads",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/transactions"
@@ -1999,12 +2046,13 @@
         "tests": [
           "tests/conformance/cases/snapshot_reads.cc",
           "frontend/handlers/reads_test.cc",
-          "backend/storage/persistent_storage_test.cc"
+          "backend/storage/persistent_storage_test.cc",
+          "frontend/handlers/queries_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Exact and bounded staleness reads work within the database's version_retention_period (default 1 hour, settable with ALTER DATABASE); older timestamps fail with FAILED_PRECONDITION. The emulator picks a local timestamp for bounded reads rather than selecting a replica, and rejects read timestamps more than 1 hour in the future. Those selection and future-bound limits keep this row partial."
+      "notes": "Exact and bounded staleness reads work within the database's version_retention_period (default 1 hour, settable with ALTER DATABASE); older timestamps fail with FAILED_PRECONDITION. Bounded staleness picks a local timestamp because there are no replicas. A read at a future exact timestamp waits until that time; timestamps more than 1 hour ahead are rejected, and a wait that would pass the gRPC deadline fails at once with DEADLINE_EXCEEDED."
     },
     {
       "id": "transactions.read_your_writes",
@@ -2032,7 +2080,7 @@
       "id": "transactions.select_for_update",
       "category": "Transactions, timestamps, and concurrency",
       "feature": "SELECT FOR UPDATE",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/transactions"
@@ -2040,21 +2088,24 @@
       "evidence": {
         "implementation": [
           "backend/query/query_validator.cc",
+          "backend/query/queryable_table.cc",
           "backend/locking/manager.cc"
         ],
         "tests": [
-          "tests/conformance/cases/select_for_update.cc"
+          "tests/conformance/cases/select_for_update.cc",
+          "backend/query/queryable_table_test.cc",
+          "backend/locking/manager_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SELECT ... FOR UPDATE works in tested read-write transaction queries and is rejected in read-only transactions or together with a lock_scanned_ranges hint. PostgreSQL rejects FOR UPDATE with set operations and GROUP BY/HAVING; GoogleSQL accepts the cited cases. The lock manager uses one active handle per database, so row-scoped contention is not modeled."
+      "notes": "SELECT ... FOR UPDATE takes exclusive key and range locks in read-write transactions and is rejected in read-only transactions or together with a lock_scanned_ranges hint; the LOCK_SCANNED_RANGES=exclusive hint takes the same exclusive locks. PostgreSQL rejects FOR UPDATE with set operations and GROUP BY/HAVING. Unrelated keys do not conflict; conformance covers both dialects, including the exclusive-hint cases."
     },
     {
       "id": "transactions.transaction_errors",
       "category": "Transactions, timestamps, and concurrency",
       "feature": "Transaction error handling",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/transactions"
@@ -2071,7 +2122,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Mirrors production rules for which errors invalidate a read-write transaction: a failed DML statement usually leaves it usable, while a commit-time constraint or table error invalidates it, and Rollback still succeeds. One case (reading after an invalidated DML) is a disabled test. If several constraints fail, the reported violation may differ from production."
+      "notes": "A constraint-tagged DML error permits reads of earlier buffered writes in the still-active read-write transaction; further DML and commit replay the saved error, and a rejected commit invalidates it. The read-after-DML case passes in both dialects. If several constraints fail, the reported violation may differ from production; Batch DML and backend write-failure read behavior follow the same saved-error path but have no dedicated test."
     },
     {
       "id": "indexes.secondary_indexes",
@@ -2107,7 +2158,7 @@
       "id": "indexes.index_backfill",
       "category": "Indexes, generated values, and constraints",
       "feature": "Index backfill",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -2127,7 +2178,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Adding an index to a populated table backfills it (unique, NULL_FILTERED, STORING and interleaved indexes, with duplicate-key and key-size validation). Backfill runs synchronously inside the UpdateDatabaseDdl call, so there is no progress reporting and a long backfill blocks other schema changes and read-write transactions."
+      "notes": "Adding an index to a populated table backfills it (unique, NULL_FILTERED, STORING and interleaved indexes, with duplicate-key and key-size validation). Backfill runs synchronously inside the UpdateDatabaseDdl call, so the index is usable when the operation completes; there is no progress reporting, and a long backfill blocks other schema changes and read-write transactions."
     },
     {
       "id": "indexes.unique_indexes",
@@ -2360,7 +2411,7 @@
       "id": "change_streams.read",
       "category": "Change streams",
       "feature": "Read change stream",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/change-streams"
@@ -2368,19 +2419,27 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/change_streams.cc",
-          "backend/query/change_stream/change_stream_query_validator.cc"
+          "backend/query/change_stream/change_stream_query_validator.cc",
+          "backend/transaction/transaction_store.cc",
+          "frontend/entities/transaction.cc",
+          "common/change_stream.cc",
+          "frontend/converters/change_streams.cc",
+          "frontend/proto/resume_token.proto"
         ],
         "tests": [
           "frontend/handlers/change_streams_test.cc",
           "backend/query/change_stream/change_stream_query_validator_test.cc",
-          "tests/conformance/cases/change_streams_read_write.cc"
+          "tests/conformance/cases/change_streams_read_write.cc",
+          "tests/conformance/cases/pg_change_streams_read_write.cc",
+          "frontend/converters/change_streams_test.cc",
+          "frontend/converters/pg_change_streams_test.cc"
         ],
         "documentation": [
           "docs/change-streams.md"
         ]
       },
       "verification": "tested",
-      "notes": "READ_<stream> queries return data change, heartbeat, and child partition records; start_timestamp is checked against the retention period and the stream's creation time, which survives restarts and restores. Known gaps: a REPLACE mutation emits one INSERT record instead of DELETE+INSERT, and record order across tables in one transaction is not guaranteed (both are disabled tests). An in-flight query does not survive an emulator restart."
+      "notes": "READ_<stream> queries return data change, heartbeat, and child partition records; start_timestamp is checked against the retention period and the stream's creation time, which survives restarts and restores. DML UPDATE records only the key, SET, commit-timestamp and ON UPDATE columns, so records match Update mutations; REPLACE of an existing row emits DELETE then INSERT. TTL deletes carry the RowDeletionPolicy tag with is_system_transaction set; user transactions report an empty transaction_tag and number_of_partitions_in_transaction 1. Resume tokens encode the partition token, commit timestamp and record index (fork; they were placeholders before), and a query resent with one skips the records already returned. Records past the retention period are deleted on each partition churner cycle, so deletion lags by up to one pass (never with --enable_change_stream_churning=false). In-flight queries do not survive restart. A pre-existing scan-window boundary issue can skip a commit that falls exactly on a window's microsecond boundary (see docs/known-gaps.md)."
     },
     {
       "id": "change_streams.exclusions",
@@ -2398,20 +2457,21 @@
         "tests": [
           "tests/conformance/cases/change_streams_exclusion.cc",
           "tests/conformance/cases/change_streams_exclusion_txn.cc",
-          "backend/actions/change_stream_test.cc"
+          "backend/actions/change_stream_test.cc",
+          "backend/database/row_deletion_policy_sweeper_test.cc"
         ],
         "documentation": [
           "docs/change-streams.md"
         ]
       },
       "verification": "tested",
-      "notes": "exclude_insert, exclude_update, and exclude_delete filter records, and exclude_txn_from_change_streams skips DML, batch DML, blind writes, and BatchWrite when the stream allows transaction exclusion. exclude_ttl_deletes is accepted but has no effect because TTL deletions never run."
+      "notes": "exclude_insert, exclude_update, and exclude_delete filter records, and exclude_txn_from_change_streams skips DML, batch DML, blind writes, and BatchWrite when the stream allows transaction exclusion. exclude_ttl_deletes skips the row deletion policy sweeper's deletes."
     },
     {
       "id": "change_streams.key_ranges",
       "category": "Change streams",
       "feature": "Change stream key ranges",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/change-streams"
@@ -2419,24 +2479,27 @@
       "evidence": {
         "implementation": [
           "backend/schema/catalog/change_stream.h",
-          "backend/database/change_stream/change_stream_partition_churner.cc"
+          "backend/database/change_stream/change_stream_partition_churner.cc",
+          "frontend/converters/change_streams.cc"
         ],
         "tests": [
           "tests/conformance/cases/change_streams_mutable_key_range.cc",
-          "backend/database/change_stream/change_stream_partition_churner_test.cc"
+          "backend/database/change_stream/change_stream_partition_churner_test.cc",
+          "frontend/converters/change_streams_test.cc",
+          "frontend/converters/pg_change_streams_test.cc"
         ],
         "documentation": [
           "docs/change-streams.md"
         ]
       },
       "verification": "tested",
-      "notes": "partition_mode = 'MUTABLE_KEY_RANGE' streams return partition start and data change records in both dialects. Tests cover initial partitions and INSERT records; other record shapes have less evidence. Partitions only split: the MOVE churn production can perform never happens locally."
+      "notes": "partition_mode = 'MUTABLE_KEY_RANGE' streams return partition start, partition end, partition event, and data change records in both dialects. The churner performs MOVE churns as well as splits and merges, emitting move_out and move_in partition events; a move keeps one child partition and writes still go to one active partition, so key-range distribution is simulated rather than load-driven. A partition's start (move_in) records are sent once, from the first scan; before 2026-09-28 every scan re-sent them."
     },
     {
       "id": "change_streams.partition_churn",
       "category": "Change streams",
       "feature": "Partition churn",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/change-streams"
@@ -2456,16 +2519,17 @@
         ]
       },
       "verification": "tested",
-      "notes": "A background churner periodically splits and merges partitions so clients see child partition records. Churn is timer-driven (normally after 20-40 seconds), not load-driven, and all writes go to the active partition whose token sorts first; other active partitions produce only heartbeat and child-partition records. The token lifetime can be shortened with --override_change_stream_partition_token_alive_seconds. A cited replay test verifies that initial partitions are not duplicated after restart with --data_dir; full churned-history replay is not established."
+      "notes": "A background churner periodically splits, merges, and (for MUTABLE_KEY_RANGE streams) moves partitions, so clients see child partition and partition event records; a MUTABLE_KEY_RANGE partition's start (move-in) records are sent once, from the first scan. Churn is timer-driven (normally after 20-40 seconds), not load-driven, and all writes go to the active partition whose token sorts first; other active partitions produce only heartbeat and child-partition records. Each churn cycle also deletes data change records older than the stream's retention period (none are deleted with --enable_change_stream_churning=false). The token lifetime can be shortened with --override_change_stream_partition_token_alive_seconds. Initial partitions are not duplicated after restart with --data_dir."
     },
     {
       "id": "search.search_indexes",
       "category": "Full-text search",
       "feature": "Search indexes",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
-        "googlesql"
+        "googlesql",
+        "postgresql"
       ],
       "docs": [
         "https://cloud.google.com/spanner/docs/full-text-search"
@@ -2475,28 +2539,34 @@
           "backend/schema/updater/schema_updater.cc",
           "backend/schema/parser/ddl_parser.cc",
           "backend/schema/validators/table_validator.cc",
-          "backend/schema/printer/print_ddl.cc"
+          "backend/schema/printer/print_ddl.cc",
+          "backend/schema/parser/ddl_parser.jjt",
+          "third_party/spanner_pg/ddl/pg_to_spanner_ddl_translator.cc",
+          "third_party/spanner_pg/ddl/spangres_direct_schema_printer_impl.cc"
         ],
         "tests": [
           "tests/conformance/cases/search_test.cc",
           "backend/schema/updater/schema_updater_tests/index.cc",
-          "backend/schema/parser/ddl_parser_test.cc"
+          "backend/schema/parser/ddl_parser_test.cc",
+          "third_party/spanner_pg/ddl/ddl_test.cc",
+          "tests/conformance/data/schema_changes/pg/ddl.create_search_index.test"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "CREATE/DROP SEARCH INDEX over TOKENLIST columns (with STORING, PARTITION BY/ORDER BY) and search-index hints work in both dialects. ALTER SEARCH INDEX is not parsed. sort_order_sharding is stored and printed but has no physical sharding effect; disable_automatic_uid_column affects backing-table key-count validation, so search-index options are not all ignored."
+      "notes": "CREATE, ALTER, and DROP SEARCH INDEX over TOKENLIST columns (with STORING/INCLUDE and PARTITION BY/ORDER BY) and search-index hints work in both dialects. ALTER SEARCH INDEX ADD/DROP [STORED] COLUMN (GoogleSQL) and ADD/DROP [INCLUDE] COLUMN (PostgreSQL) change stored columns in place and rebuild the index when a TOKENLIST column is added or dropped. PostgreSQL GetDatabaseDdl prints CREATE SEARCH INDEX with its INCLUDE, PARTITION BY, ORDER BY, WHERE and WITH clauses, so the output re-parses. sort_order_sharding is stored and printed but has no physical sharding effect; disable_automatic_uid_column affects backing-table key-count validation."
     },
     {
       "id": "search.search_functions",
       "category": "Full-text search",
       "feature": "SEARCH function",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
-        "googlesql"
+        "googlesql",
+        "postgresql"
       ],
       "docs": [
         "https://cloud.google.com/spanner/docs/full-text-search"
@@ -2514,23 +2584,25 @@
           "backend/query/search/search_evaluator_test.cc",
           "backend/query/search/search_substring_evaluator_test.cc",
           "backend/query/search/search_ngrams_evaluator_test.cc",
-          "backend/query/search/snippet_evaluator_test.cc"
+          "backend/query/search/snippet_evaluator_test.cc",
+          "backend/query/search/query_parser_test.cc"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "SEARCH (words, words_phrase and rquery dialects with AND/OR/NOT/AROUND), SEARCH_SUBSTRING, SEARCH_NGRAMS, SNIPPET and JSON search work in queries. Read-write transaction search requires the allow_search_indexes_in_transaction statement hint; FOR UPDATE, partitioned DML, and batch DML search uses are rejected. language_tag and enhance_query are accepted but ignored, and there is no language-aware analysis."
+      "notes": "SEARCH (words, words_phrase and rquery dialects with AND/OR/NOT/AROUND, including Unicode terms in RQUERY), SEARCH_SUBSTRING, SEARCH_NGRAMS, SNIPPET (documented JSON layout) and JSON search work in queries; the search conformance suite runs in both dialects (three GoogleSQL-only cases are skipped for PostgreSQL). SEARCH over a SQL NULL TOKENLIST returns NULL, an empty TOKENLIST_CONCAT matches nothing, and SEARCH/SCORE/SEARCH_SUBSTRING/SEARCH_NGRAMS over TOKEN, TOKENIZE_NUMBER, TOKENIZE_BOOL, or TOKENIZE_JSON columns are rejected. Read-write transaction search requires the allow_search_indexes_in_transaction hint. WORDS and WORDS_PHRASE apply language_tag to query casing; RQUERY does not use locale-aware parsing, and enhance_query is accepted without query enhancement."
     },
     {
       "id": "search.tokenization",
       "category": "Full-text search",
       "feature": "Tokenization",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
-        "googlesql"
+        "googlesql",
+        "postgresql"
       ],
       "docs": [
         "https://cloud.google.com/spanner/docs/full-text-search"
@@ -2540,28 +2612,34 @@
           "backend/query/search/plain_full_text_tokenizer.cc",
           "backend/query/search/substring_tokenizer.cc",
           "backend/query/search/ngrams_tokenizer.cc",
+          "backend/query/search/tokenizer.cc",
+          "backend/query/search/score_evaluator.cc",
           "backend/query/search/numeric_tokenizer.cc",
-          "backend/query/search/search_function_catalog.cc"
+          "backend/query/search/search_function_catalog.cc",
+          "third_party/spanner_pg/codegen/emulator_postgresql_catalog.textproto"
         ],
         "tests": [
           "backend/query/search/plain_full_text_tokenizer_test.cc",
           "backend/query/search/substring_tokenizer_test.cc",
           "backend/query/search/ngrams_tokenizer_test.cc",
+          "backend/query/search/score_evaluator_test.cc",
+          "backend/query/search/tokenlist_concat_test.cc",
           "backend/query/search/numeric_tokenizer_test.cc",
-          "tests/conformance/cases/search_test.cc"
+          "tests/conformance/cases/search_test.cc",
+          "backend/query/search/tokenizer_test.cc"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "TOKENIZE_FULLTEXT, TOKENIZE_SUBSTRING, TOKENIZE_NGRAMS, TOKENIZE_NUMBER, TOKENIZE_BOOL, TOKENIZE_JSON, TOKEN and TOKENLIST_CONCAT are available. TOKENIZE_FULLTEXT lowercases and splits on delimiters while language_tag, token_category, content_type, and remove_diacritics are accepted without their documented effects; remove_diacritics is also ignored by TOKENIZE_SUBSTRING and TOKENIZE_NGRAMS."
+      "notes": "TOKENIZE_FULLTEXT, TOKENIZE_SUBSTRING, TOKENIZE_NGRAMS, TOKENIZE_NUMBER, TOKENIZE_BOOL, TOKENIZE_JSON, TOKEN, TOKENLIST_CONCAT and DEBUG_TOKENLIST are available in both dialects, and SQL NULL inputs return SQL NULL. ICU word segmentation, Unicode n-grams, diacritic removal (also in PostgreSQL spanner.tokenize_fulltext), French language_tag behavior as documented, HTML text extraction (skipping script and style content, with numeric entities and the 253 HTML 4 named entities, not the full HTML5 table), short_tokens_only_for_anchors, and diacritic-insensitive TOKENLIST_CONCAT of mixed remove_diacritics settings have focused tests. DEBUG_TOKENLIST matches both documented examples; TOKENLISTs stored by earlier builds lack its boundary and hashtag markers. PostgreSQL spanner.tokenize_substring passed its arguments in the wrong order and crashed with relative_search_types; it now works and also takes support_relative_search. Residual difference: the ICU build has no CJK dictionaries, so Chinese, Japanese and Korean text is split only where the script changes and pure Chinese text is not segmented into words."
     },
     {
       "id": "search.scoring",
       "category": "Full-text search",
       "feature": "Search scoring",
-      "status": "partial",
+      "status": "supported",
       "applicability": "compatibility-only",
       "dialects": [
         "googlesql"
@@ -2584,7 +2662,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "SCORE and SCORE_NGRAMS return deterministic scores (term-occurrence counts or n-gram overlap) that are fine for ordering tests but do not reproduce production relevance values. The SCORE options argument is accepted and ignored."
+      "notes": "SCORE and SCORE_NGRAMS return deterministic local scores (term-occurrence counts or n-gram overlap) that rank matching rows consistently; they are not production relevance values, which come from Google-internal ranking. SCORE accepts omitted, NULL, and empty JSON options, version (no local effect) and token_category_weights; bigram_weight and idf_weight return UNIMPLEMENTED, and malformed JSON is rejected. PostgreSQL spanner.score passes its options to the same scorer, so they now take effect there too (no dedicated PostgreSQL test). SCORE_NGRAMS accepts only the documented trigrams algorithm, takes the array_aggregator argument (flatten, max_element; GoogleSQL only), and returns zero for empty trigram sets."
     },
     {
       "id": "vector.vector_type",
@@ -2616,10 +2694,11 @@
       "id": "vector.distance_functions",
       "category": "Vector search",
       "feature": "Vector distance functions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
-        "googlesql"
+        "googlesql",
+        "postgresql"
       ],
       "docs": [
         "https://cloud.google.com/spanner/docs/find-k-nearest-neighbors"
@@ -2628,24 +2707,26 @@
         "implementation": [
           "backend/query/analyzer_options.cc",
           "backend/query/feature_filter/gsql_supported_functions.cc",
-          "backend/query/ann_functions_rewriter.cc"
+          "third_party/spanner_pg/codegen/emulator_postgresql_catalog.textproto"
         ],
         "tests": [
-          "tests/conformance/cases/ann_test.cc"
+          "tests/conformance/cases/ann_test.cc",
+          "tests/conformance/cases/pg_functions_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "COSINE_DISTANCE, EUCLIDEAN_DISTANCE and DOT_PRODUCT come from GoogleSQL (dense signatures only) and the APPROX_* variants are tested. The exact functions have no dedicated emulator test, and PostgreSQL spanner.* distance functions were not verified."
+      "notes": "Native public-API conformance tests pass for exact COSINE_DISTANCE, EUCLIDEAN_DISTANCE and DOT_PRODUCT on ARRAY<FLOAT32> and ARRAY<FLOAT64>, including stored-vector KNN ordering, NULL, zero/empty vectors, dimension mismatch, NULL elements, NaN, infinity and overflow. PostgreSQL spanner.* float4[]/float8[] signatures and int8[] dot product pass through the PostgreSQL-to-GoogleSQL mapping. Sparse signatures are excluded. Approximate index behavior is tracked separately under vector.ann_indexes; packaged image qualification confirmed via tests/image_verification_test.py."
     },
     {
       "id": "vector.ann_indexes",
       "category": "Vector search",
       "feature": "Approximate nearest-neighbor indexes",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
-        "googlesql"
+        "googlesql",
+        "postgresql"
       ],
       "docs": [
         "https://cloud.google.com/spanner/docs/find-k-nearest-neighbors"
@@ -2654,16 +2735,46 @@
         "implementation": [
           "backend/schema/updater/schema_updater.cc",
           "backend/query/ann_validator.cc",
-          "backend/query/ann_functions_rewriter.cc"
+          "backend/query/ann_functions_rewriter.cc",
+          "third_party/spanner_pg/ddl/pg_to_spanner_ddl_translator.cc",
+          "third_party/spanner_pg/ddl/spangres_direct_schema_printer_impl.cc"
         ],
         "tests": [
           "tests/conformance/cases/ann_test.cc",
-          "backend/schema/updater/schema_updater_tests/index.cc"
+          "backend/schema/updater/schema_updater_tests/index.cc",
+          "tests/conformance/data/schemas/ann.test",
+          "third_party/spanner_pg/ddl/ddl_test.cc",
+          "tests/image_verification_test.py"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "CREATE/ALTER/DROP VECTOR INDEX (distance_type, tree_depth, num_leaves, STORING) is validated, and APPROX_COSINE_DISTANCE/APPROX_EUCLIDEAN_DISTANCE/APPROX_DOT_PRODUCT queries enforce production's shape rules (ORDER BY ... LIMIT, matching distance type, IS NOT NULL filter). Queries run as an exact brute-force scan, so results are exact rather than approximate and recall or latency cannot be evaluated."
+      "notes": "CREATE/ALTER/DROP VECTOR INDEX (GoogleSQL) and CREATE INDEX ... USING ScaNN ... WITH (...) (PostgreSQL) are validated (distance_type, tree_depth, num_leaves, STORING/INCLUDE), and PostgreSQL GetDatabaseDdl prints them back as CREATE INDEX ... USING scann (...) WITH (...). APPROX_COSINE_DISTANCE, APPROX_EUCLIDEAN_DISTANCE, APPROX_DOT_PRODUCT and spanner.approx_* enforce production's query-shape rules (ORDER BY ... LIMIT, matching distance type, IS NOT NULL filter) and return exact nearest neighbors from a brute-force scan, which satisfies the query contract. Approximate recall and latency are tracked by vector.ann_recall_latency. Verified on packaged Docker image in tests/image_verification_test.py."
+    },
+    {
+      "id": "vector.ann_recall_latency",
+      "category": "Vector search",
+      "feature": "Approximate nearest neighbor recall and latency tuning",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "dialects": [
+        "googlesql",
+        "postgresql"
+      ],
+      "docs": [
+        "https://cloud.google.com/spanner/docs/find-approximate-nearest-neighbors"
+      ],
+      "evidence": {
+        "implementation": [
+          "backend/query/ann_functions_rewriter.cc"
+        ],
+        "tests": [
+          "tests/conformance/cases/ann_test.cc"
+        ],
+        "documentation": []
+      },
+      "verification": "tested",
+      "notes": "Vector indexes are not built as ScaNN trees: APPROX_* queries run an exact scan, so recall is always 100% and num_leaves_to_search, tree_depth, and num_leaves do not trade accuracy for latency. Recall and latency tuning must be done against Cloud Spanner."
     },
     {
       "id": "vector.vector_query_options",
@@ -2672,7 +2783,8 @@
       "status": "accepted-no-op",
       "applicability": "compatibility-only",
       "dialects": [
-        "googlesql"
+        "googlesql",
+        "postgresql"
       ],
       "docs": [
         "https://cloud.google.com/spanner/docs/find-k-nearest-neighbors"
@@ -2687,7 +2799,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "The APPROX_* options argument is required and validated (a literal JSON with an unsigned num_leaves_to_search), then discarded before execution; it does not change results."
+      "notes": "The APPROX_* options argument (JSON in PostgreSQL) is required and validated (a literal JSON with an unsigned num_leaves_to_search), then discarded before execution; it does not change results because searches are exact. See vector.ann_recall_latency."
     },
     {
       "id": "graph.ddl",
@@ -2743,7 +2855,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "GQL queries (GRAPH ... MATCH ... RETURN) run in GoogleSQL databases, and tests cover DISTINCT, dynamic labels, path aggregation and filters, quantified traversals and SAFE_TO_JSON of nodes and edges. The full GQL surface comes from GoogleSQL and is not exhaustively tested."
+      "notes": "GQL queries (GRAPH ... MATCH ... RETURN) run in GoogleSQL databases, and tests cover DISTINCT, dynamic labels, path aggregation and filters, quantified traversals and SAFE_TO_JSON of nodes and edges. The full GQL surface comes from GoogleSQL and is not exhaustively tested. Known pre-existing bug: ORDER BY in RETURN ... ORDER BY is ignored, and rows come back in the emulator's random order (query_engine_test pins the unsorted results; see docs/known-gaps.md)."
     },
     {
       "id": "graph.graph_schema",
@@ -2773,8 +2885,8 @@
       "id": "graph.algorithms",
       "category": "Spanner Graph and GQL",
       "feature": "Graph algorithms",
-      "status": "accepted-no-op",
-      "applicability": "compatibility-only",
+      "status": "supported",
+      "applicability": "local-development",
       "dialects": [
         "googlesql"
       ],
@@ -2783,17 +2895,22 @@
       ],
       "evidence": {
         "implementation": [
-          "backend/query/graph/mock_graph_algo_table_valued_function.cc"
+          "backend/query/graph/graph_algorithms.cc",
+          "backend/query/graph/graph_algorithm_table_valued_function.cc",
+          "frontend/handlers/queries.cc",
+          "build/bazel/googlesql.patch"
         ],
         "tests": [
-          "backend/query/query_engine_test.cc"
+          "backend/query/query_engine_test.cc",
+          "backend/query/graph/graph_algorithms_test.cc",
+          "tests/conformance/cases/graph_algorithms.cc"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "Graph algorithm calls (PageRank, connected components, shortest path, centrality, clustering, similarity and so on) parse and validate, but always return zero rows. GoogleSQL only."
+      "notes": "All 13 documented algorithms are computed in memory: PageRank (including personalized), BetweennessCentrality, ClosenessCentrality, WeaklyConnectedComponents, ModularityClustering, CorrelationClustering, LabelPropagation, CliqueFinding, JaccardSimilarity, CosineSimilarity, CommonNeighborsSimilarity, TotalNeighborsSimilarity and ShortestPath (path and cost). They take the documented named arguments and are called with GRAPH g CALL Algo(...) YIELD over the whole graph or with CALL PER () over the rows of the preceding query (including a FULL UNION ALL of nodes and edges), yielding graph nodes, paths and the documented columns; ELEMENT_DEFINITION_NAME works in the calling statement. The documented PageRank example returns the documented results. EXPORT DATA runs its query: format CLOUD_SPANNER writes the rows back to Spanner tables (update_ignore_all / upsert_ignore_all; rows that violate constraints are skipped), and CSV, Parquet and Avro validate their options and then discard the rows. Results are deterministic; where Spanner does not publish an algorithm's exact method they are emulator-defined. machine_category, zone and max_idle_time are validated only; algorithm permission, schema and RETURN-clause rules are not enforced; SPANNER_SYS.GRAPH_OPERATION_EXECUTION_STATUS is not populated; and a write-back inside a read-write transaction can conflict with that transaction's own locks. GoogleSQL only. Formerly accepted-no-op (zero-argument stand-ins)."
     },
     {
       "id": "ml.models",
@@ -2826,7 +2943,7 @@
       "id": "ml.ml_predict",
       "category": "ML and external integrations",
       "feature": "ML.PREDICT",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -2844,12 +2961,13 @@
         "tests": [
           "backend/query/ml/model_evaluator_test.cc",
           "backend/query/query_engine_test.cc",
-          "tests/conformance/cases/query.cc"
+          "tests/conformance/cases/query.cc",
+          "gateway/ml_provider_test.go"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "ML.PREDICT (GoogleSQL), spanner.ml_predict_row (PostgreSQL) and AI.IF/AI.SCORE/AI.CLASSIFY execute and validate model inputs. By default they return deterministic fake outputs derived from a fingerprint of the inputs; real predictions only come from a local HTTP stand-in via the emulator_main flag --remote_functions_host_port, which gateway_main and the Docker image do not expose."
+      "notes": "ML.PREDICT (GoogleSQL), spanner.ml_predict_row (PostgreSQL) and AI.IF/AI.SCORE/AI.CLASSIFY execute and validate model inputs. By default they return deterministic placeholder outputs derived from the inputs; with --remote_functions_host_port they call a local HTTP backend, and a native public gRPC fixture passed input-dependent predictions in both dialects and provider-error propagation through gateway_main. Each request carries a distinct opaque request ID. Vertex AI is never called (see ml.external_connections)."
     },
     {
       "id": "ml.external_connections",
@@ -2879,7 +2997,7 @@
       "id": "ml.remote_models",
       "category": "ML and external integrations",
       "feature": "Remote model operations",
-      "status": "partial",
+      "status": "supported",
       "applicability": "compatibility-only",
       "dialects": [
         "googlesql"
@@ -2895,18 +3013,19 @@
         "tests": [
           "backend/query/ml/model_evaluator_test.cc",
           "backend/query/remote_udf/remote_udf_evaluator_test.cc",
-          "backend/query/query_engine_test.cc"
+          "backend/query/query_engine_test.cc",
+          "gateway/ml_provider_test.go"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Remote model and remote UDF calls return deterministic mock results unless emulator_main is started with --remote_functions_host_port=host:port, which POSTs requests to that local HTTP server. The flag is not passed through by gateway_main, so it cannot be reached in the Docker image; Vertex AI is never called."
+      "notes": "Remote model and remote UDF calls return deterministic placeholder results unless --remote_functions_host_port=host:port is configured, which POSTs requests to that local HTTP server with a distinct request ID per call. gateway_main forwards the flag, and a native public gRPC fixture passed input-dependent GoogleSQL and PostgreSQL predictions plus a provider error. Vertex AI and other Google-hosted endpoints are never called."
     },
     {
       "id": "metadata.information_schema",
       "category": "Metadata, information schema, and SPANNER_SYS",
       "feature": "INFORMATION_SCHEMA",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -2917,22 +3036,24 @@
       ],
       "evidence": {
         "implementation": [
-          "backend/query/information_schema_catalog.cc"
+          "backend/query/information_schema_catalog.cc",
+          "backend/query/privilege_validator.cc"
         ],
         "tests": [
           "tests/conformance/cases/information_schema.cc",
-          "backend/query/information_schema_catalog_test.cc"
+          "backend/query/information_schema_catalog_test.cc",
+          "tests/conformance/cases/fine_grained_access_control.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SCHEMATA, TABLES, COLUMNS, COLUMN_OPTIONS, INDEXES, INDEX_COLUMNS, constraint views, VIEWS, SEQUENCES, CHANGE_STREAM*, DATABASE_OPTIONS, PLACEMENTS, LOCALITY_GROUP_OPTIONS (plus MODELS* and PROPERTY_GRAPHS in GoogleSQL) are populated; SPANNER_STATISTICS is empty. Missing: ROLES/ROLE_* and *_PRIVILEGES, ROUTINES/PARAMETERS/ROUTINE_OPTIONS, TABLE_SYNONYMS, INDEX_OPTIONS, COLUMN_PARAMETERS and the COLUMNS.IS_STORED_VOLATILE column."
+      "notes": "SCHEMATA, TABLES, COLUMNS, COLUMN_OPTIONS, INDEXES, INDEX_COLUMNS, constraint views, VIEWS, SEQUENCES, CHANGE_STREAM*, DATABASE_OPTIONS, PLACEMENTS, LOCALITY_GROUP_OPTIONS, ROLES, ROLE_GRANTEES, TABLE/COLUMN/CHANGE_STREAM/ROUTINE/MODEL privilege views, ROLE_*_GRANTS, ROUTINES, ROUTINE_OPTIONS, PARAMETERS, and TABLE_SYNONYMS (plus MODELS* and PROPERTY_GRAPHS in GoogleSQL, and enabled_roles and applicable_roles in PostgreSQL) are populated. With a database role, rows are filtered to the objects the role can access, as documented. SPANNER_STATISTICS is empty. INDEX_OPTIONS, COLUMN_PARAMETERS, and COLUMNS.IS_STORED_VOLATILE exist in production but are undocumented and are not provided."
     },
     {
       "id": "metadata.spanner_sys",
       "category": "Metadata, information schema, and SPANNER_SYS",
       "feature": "SPANNER_SYS",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -2943,23 +3064,31 @@
       ],
       "evidence": {
         "implementation": [
-          "backend/query/spanner_sys_catalog.cc"
+          "backend/query/spanner_sys_catalog.cc",
+          "backend/stats/system_stats_collector.cc",
+          "frontend/handlers/request_stats.cc",
+          "backend/database/table_size_sampler.cc",
+          "backend/storage/user_split_point_store.cc",
+          "backend/database/database.cc"
         ],
         "tests": [
-          "tests/conformance/cases/spanner_sys.cc"
+          "tests/conformance/cases/spanner_sys.cc",
+          "backend/stats/system_stats_collector_test.cc",
+          "backend/stats/operation_stats_test.cc",
+          "backend/database/database_test.cc"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "Only SPANNER_SYS.SUPPORTED_OPTIMIZER_VERSIONS exists (one row). Query, read, transaction and lock statistics, oldest active queries and other introspection tables are absent, so queries against them fail."
+      "notes": "SPANNER_SYS serves measured per-database statistics in both dialects: QUERY_STATS, READ_STATS, TXN_STATS, and LOCK_STATS (TOP and TOTAL for MINUTE, 10MINUTE, and HOUR), TABLE_OPERATIONS_STATS and COLUMN_OPERATIONS_STATS, TABLE_SIZES_STATS_1HOUR, OLDEST_ACTIVE_QUERIES, ACTIVE_QUERIES_SUMMARY, ACTIVE_PARTITIONED_DMLS, ROW_DELETION_POLICIES, USER_SPLIT_POINTS, and SUPPORTED_OPTIMIZER_VERSIONS, with production column types and order (PostgreSQL lower-case names and *_JSON_STRING columns). SPLIT and recommendation tables exist and are empty. Only closed intervals are shown unless --spanner_sys_expose_open_interval is set, as production shows only ended intervals. With a database role, SPANNER_SYS requires spanner_sys_reader. LOCK_STATS LOCK_WAIT_SECONDS and TOTAL_LOCK_WAIT_SECONDS report measured wound-wait lock waits. With --data_dir the interval statistics, table size samples and last TTL sweeps persist per database (spanner_sys_statistics.json, saved when a minute interval ends and on SIGTERM/SIGINT; a crash loses up to the current minute; dropping the database deletes the file), and split points persist with the database data. Differences: text fingerprints differ from production; physical columns (memory, disk I/O and similar) and READ_STATS AVG_LOCKING_DELAY_SECONDS are zero; TABLE_SIZES_STATS_1HOUR averages a logical size estimate sampled every 5 minutes (USED_HDD_BYTES 0); ACTIVE_PARTITIONED_DMLS shows one partition with progress 0 until the statement finishes; QUERY_PROFILES_TOP*, TASKS and TABLE_SIZES_STATS_PER_LOCALITY_GROUP_1HOUR are absent."
     },
     {
       "id": "metadata.pg_catalog",
       "category": "Metadata, information schema, and SPANNER_SYS",
       "feature": "pg_catalog metadata",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "postgresql"
@@ -2969,7 +3098,8 @@
       ],
       "evidence": {
         "implementation": [
-          "backend/query/pg_catalog.cc"
+          "backend/query/pg_catalog.cc",
+          "third_party/spanner_pg/bootstrap_catalog/proc_changelist.cc"
         ],
         "tests": [
           "tests/conformance/cases/pg_catalog_test.cc"
@@ -2977,30 +3107,38 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "pg_am, pg_attrdef, pg_attribute, pg_class, pg_collation, pg_constraint, pg_index(es), pg_namespace, pg_proc, pg_sequence(s), pg_settings, pg_tables, pg_type and pg_views are populated for PostgreSQL databases. Other catalogs (pg_roles, pg_extension, pg_description, pg_enum and others) exist but are empty or static; anything else is missing."
+      "notes": "pg_am, pg_attrdef, pg_attribute, pg_class, pg_collation, pg_constraint, pg_index(es), pg_namespace, pg_proc (user-defined functions included), pg_sequence(s), pg_settings, pg_tables, pg_type and pg_views are populated for PostgreSQL databases. Catalogs for objects Spanner lacks (pg_roles membership details, pg_extension, pg_description, pg_enum and others) are empty or static. With a database role, rows about schema objects are filtered by the role's privileges."
     },
     {
       "id": "metadata.database_roles_metadata",
       "category": "Metadata, information schema, and SPANNER_SYS",
       "feature": "Database role metadata",
-      "status": "unsupported",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/information-schema"
       ],
       "evidence": {
         "implementation": [
+          "backend/schema/catalog/role.cc",
+          "backend/schema/updater/schema_updater.cc",
           "backend/query/information_schema_catalog.cc",
-          "frontend/handlers/database_extensions.cc"
+          "frontend/handlers/database_extensions.cc",
+          "backend/schema/catalog/grants.cc",
+          "backend/schema/updater/grant_resolver.cc"
         ],
         "tests": [
           "tests/conformance/cases/information_schema.cc",
-          "frontend/handlers/database_extensions_test.cc"
+          "frontend/handlers/database_extensions_test.cc",
+          "frontend/persistence/metadata_store_test.cc",
+          "tests/conformance/cases/fine_grained_access_control.cc",
+          "backend/schema/updater/schema_updater_tests/grants.cc",
+          "backend/query/information_schema_catalog_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "INFORMATION_SCHEMA.ROLES, ROLE_GRANTEES, ROLE_*_GRANTS and *_PRIVILEGES are not implemented, and ListDatabaseRoles always returns an empty list, because CREATE ROLE/GRANT statements are parsed but not recorded."
+      "notes": "CREATE/DROP ROLE, GRANT/REVOKE of privileges and role memberships persist in both dialects and replay from --data_dir and backups. ListDatabaseRoles lists created roles and the system roles public, spanner_info_reader, and spanner_sys_reader. INFORMATION_SCHEMA ROLES, ROLE_GRANTEES, the *_PRIVILEGES views and ROLE_*_GRANTS (and PostgreSQL enabled_roles/applicable_roles) report them with documented role filtering. A disposable restart probe confirmed roles, grants, and privilege views after restart."
     },
     {
       "id": "metadata.operation_metadata",
@@ -3030,7 +3168,7 @@
       "id": "security.iam_policies",
       "category": "Security and governance",
       "feature": "IAM policy RPCs",
-      "status": "partial",
+      "status": "supported",
       "applicability": "compatibility-only",
       "docs": [
         "https://cloud.google.com/spanner/docs/iam"
@@ -3051,13 +3189,36 @@
         ]
       },
       "verification": "tested",
-      "notes": "SetIamPolicy and GetIamPolicy store and return policies for instances, databases, instance partitions, instance configs, backups, and backup schedules; policies persist with --data_dir and are removed with their resource. At startup a database that failed to restore keeps its policy, and a policy whose resource no longer exists is dropped with a warning instead of stopping the emulator. The etag is generated only when the caller omits one and is never checked, TestIamPermissions returns every requested permission, and no policy is ever enforced."
+      "notes": "SetIamPolicy and GetIamPolicy store and return policies for instances, databases, instance partitions, instance configs, backups, and backup schedules; policies persist with --data_dir and are removed with their resource. At startup a database that failed to restore keeps its policy, and a policy whose resource no longer exists is dropped with a warning. A supplied nonempty etag must match the current policy or SetIamPolicy returns ABORTED; every successful write gets a fresh etag. Enforcement is a separate record (security.iam_enforcement)."
+    },
+    {
+      "id": "security.iam_enforcement",
+      "category": "Security and governance",
+      "feature": "IAM permission enforcement",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/docs/iam"
+      ],
+      "evidence": {
+        "implementation": [
+          "frontend/handlers/policies.cc"
+        ],
+        "tests": [
+          "frontend/handlers/policies_test.cc"
+        ],
+        "documentation": [
+          "docs/known-gaps.md"
+        ]
+      },
+      "verification": "tested",
+      "notes": "No authenticated principal reaches the emulator: credentials are not checked and both ports are unencrypted, so stored IAM policies cannot be evaluated. TestIamPermissions returns every requested permission, and requests (including creator_role use) are never denied by IAM. Database-role privileges are enforced separately (security.fine_grained_access)."
     },
     {
       "id": "security.database_roles",
       "category": "Security and governance",
       "feature": "Database roles",
-      "status": "accepted-no-op",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/iam"
@@ -3065,37 +3226,59 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/database_extensions.cc",
-          "backend/schema/updater/schema_updater.cc"
+          "backend/schema/updater/schema_updater.cc",
+          "backend/schema/catalog/role.cc",
+          "third_party/spanner_pg/ddl/pg_to_spanner_ddl_translator.cc",
+          "frontend/handlers/sessions.cc",
+          "backend/schema/catalog/grants.cc"
         ],
         "tests": [
-          "frontend/handlers/database_extensions_test.cc"
+          "frontend/handlers/database_extensions_test.cc",
+          "backend/schema/updater/schema_updater_tests/common.cc",
+          "frontend/persistence/metadata_store_test.cc",
+          "third_party/spanner_pg/ddl/ddl_test.cc",
+          "tests/conformance/cases/fine_grained_access_control.cc",
+          "frontend/handlers/sessions_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "The schema updater accepts CREATE ROLE and DROP ROLE as no-ops, but no role is stored; the cited test covers only ListDatabaseRoles returning an empty list, not role DDL acceptance. Session creator_role is not used to restrict access."
+      "notes": "CREATE/DROP ROLE persist in both dialects (at most 100 roles; DROP ROLE fails while the role still holds privileges, removes its memberships, and cannot drop system roles), and ListDatabaseRoles enumerates and paginates created and system roles. Sessions accept creator_role on CreateSession, BatchCreateSessions, and multiplexed sessions; an unknown role returns PERMISSION_DENIED (\"Role not found\"), and the role is echoed on the session. A disposable restart probe confirmed that a creator_role session stays restricted after restart. Use of a role is not checked against IAM (spanner.databaseRoles.use), because no authenticated principal reaches the emulator."
     },
     {
       "id": "security.fine_grained_access",
       "category": "Security and governance",
       "feature": "Fine-grained access control",
-      "status": "accepted-no-op",
-      "applicability": "compatibility-only",
+      "status": "supported",
+      "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/iam"
       ],
       "evidence": {
         "implementation": [
           "backend/schema/updater/schema_updater.cc",
-          "backend/schema/parser/ddl_parser.cc"
+          "backend/schema/parser/ddl_parser.cc",
+          "backend/schema/catalog/grants.cc",
+          "backend/schema/catalog/access_policy.cc",
+          "backend/schema/updater/grant_resolver.cc",
+          "backend/query/privilege_validator.cc",
+          "backend/query/queryable_view.cc",
+          "backend/query/pg_catalog.cc"
         ],
         "tests": [
-          "backend/schema/parser/ddl_parser_test.cc"
+          "backend/schema/parser/ddl_parser_test.cc",
+          "tests/conformance/cases/fine_grained_access_control.cc",
+          "backend/schema/updater/schema_updater_tests/grants.cc",
+          "third_party/spanner_pg/ddl/ddl_test.cc"
         ],
         "documentation": []
       },
-      "verification": "implemented",
-      "notes": "GRANT and REVOKE (privileges and role membership) are parsed; the schema updater accepts them as no-ops, so no fine-grained access control is enforced. The cited test checks parsing only, not DDL application."
+      "verification": "tested",
+      "notes": "GRANT and REVOKE (SELECT/INSERT/UPDATE/DELETE on tables, including column lists; SELECT on views and change streams; SELECT/UPDATE on sequences; EXECUTE on change stream read functions and models; USAGE on schemas, including DEFAULT and ALL ... IN SCHEMA) and role membership work in both dialects. Grants are validated, printed by GetDatabaseDdl, replayed from --data_dir and backups, and revoked automatically when an object is dropped. A session with a creator_role is restricted on queries and DML, Read, mutations (Commit, BatchWrite), and change stream reads; DEFINER views need only SELECT on the view, while INVOKER view bodies are checked at analysis, including in PLAN mode. Sequences used by column defaults need their privilege, and pg_catalog rows about schema objects are filtered by role like INFORMATION_SCHEMA. Differences: error texts are the emulator's, and graph algorithm permission rules are not enforced. Sessions without a role have full access, as a principal with database-level IAM access does.",
+      "dialects": [
+        "googlesql",
+        "postgresql"
+      ]
     },
     {
       "id": "security.encryption",
@@ -3114,7 +3297,7 @@
         ]
       },
       "verification": "unverified",
-      "notes": "The emulator does not encrypt data with customer-managed keys. encryption_config on CreateDatabase, CreateBackup, and RestoreDatabase is ignored; backup schedules only store it as metadata."
+      "notes": "The emulator does not encrypt data with customer-managed keys. encryption_config on CreateDatabase is ignored. RestoreDatabase, CreateBackup, CopyBackup, and backup schedules accept the Google-default types (GOOGLE_DEFAULT_ENCRYPTION, USE_DATABASE_ENCRYPTION, USE_CONFIG_DEFAULT_OR_BACKUP_ENCRYPTION) and report Google default encryption; customer-managed keys return UNIMPLEMENTED rather than writing plaintext with a claimed key."
     },
     {
       "id": "security.audit_logs",
@@ -3139,7 +3322,7 @@
       "id": "ops.instance_partitions",
       "category": "Instance administration",
       "feature": "Instance partitions",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/instances"
@@ -3147,18 +3330,20 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/instance_partitions.cc",
-          "frontend/collections/instance_partition_manager.cc"
+          "frontend/collections/instance_partition_manager.cc",
+          "frontend/common/list_filter.cc"
         ],
         "tests": [
           "frontend/handlers/instance_partitions_test.cc",
           "frontend/collections/instance_partition_manager_test.cc",
           "tests/conformance/cases/placements.cc",
-          "tests/gcloud/instance_admin_test.py"
+          "tests/gcloud/instance_admin_test.py",
+          "frontend/common/list_filter_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Instance partition create, get, list (paginated), update, delete, and ListInstancePartitionOperations work and are persisted with --data_dir; referencing_databases lists databases whose placements use the partition. Delete fails with FAILED_PRECONDITION while a placement uses the partition, and partitions are deleted with their instance. Capacity and regions are metadata only."
+      "notes": "Instance partition create, get, list (paginated), update, delete, and ListInstancePartitionOperations work and are persisted with --data_dir; referencing_databases lists databases whose placements use the partition. Update returns typed operation metadata; the operation list applies AIP-160 filters with bounded, filter-bound pagination. Delete fails with FAILED_PRECONDITION while a placement uses the partition, and partitions are deleted with their instance. Regions and capacity are metadata only (see ops.replication)."
     },
     {
       "id": "ops.replication",
@@ -3215,13 +3400,13 @@
         ]
       },
       "verification": "unverified",
-      "notes": "No Cloud Monitoring metrics are exported, and SPANNER_SYS query, transaction, and lock statistics tables are not provided."
+      "notes": "No Cloud Monitoring metrics are exported. The SPANNER_SYS introspection tables are provided locally (see metadata.spanner_sys)."
     },
     {
       "id": "ops.quotas",
       "category": "Operations, replication, availability, and observability",
       "feature": "Cloud quotas and limits",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/instances"
@@ -3229,19 +3414,44 @@
       "evidence": {
         "implementation": [
           "common/limits.h",
-          "frontend/collections/database_manager.cc"
+          "frontend/collections/database_manager.cc",
+          "frontend/converters/mutations.cc",
+          "frontend/handlers/transactions.cc",
+          "frontend/handlers/batch.cc"
         ],
         "tests": [
           "tests/conformance/cases/limits.cc",
           "frontend/collections/database_manager_test.cc",
-          "frontend/handlers/databases_test.cc"
+          "frontend/handlers/databases_test.cc",
+          "frontend/converters/mutations_test.cc",
+          "frontend/handlers/transactions_test.cc",
+          "frontend/handlers/batch_test.cc"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "Schema limits are enforced (columns per table, name lengths, indexes per table, key sizes, value size, interleaving depth, change streams per table and column), plus 100 databases per instance (--override_max_databases_per_instance). Admin API rate limits and mutation-count or commit-size limits are not enforced; the tables-per-database and indexes-per-database tests are disabled."
+      "notes": "Schema limits are enforced (columns per table, tables per database, name lengths, indexes per table, key sizes, value size, interleaving depth, change streams per table and column, 100 roles), plus 100 databases per instance (--override_max_databases_per_instance). Commit and BatchWrite reject more than 80,000 distinct explicitly written cells with INVALID_ARGUMENT; this lower-bound check omits index, generated-column, delete, and DML effects. The tables-per-database and indexes-per-database boundary tests are disabled. Admin/API rate and capacity quotas are tracked by ops.rate_quotas."
+    },
+    {
+      "id": "ops.rate_quotas",
+      "category": "Operations, replication, availability, and observability",
+      "feature": "Admin/API rate and capacity quotas",
+      "status": "not-applicable",
+      "applicability": "cloud-only",
+      "docs": [
+        "https://cloud.google.com/spanner/quotas"
+      ],
+      "evidence": {
+        "implementation": [],
+        "tests": [],
+        "documentation": [
+          "docs/known-gaps.md"
+        ]
+      },
+      "verification": "unverified",
+      "notes": "Per-project admin and data API request-rate quotas, schema-change rate limits, and node or processing-unit storage and throughput capacity are not emulated: the emulator is one local process with no capacity model, so requests are never throttled for rate or capacity. Local schema and mutation limits are covered by ops.quotas."
     },
     {
       "id": "ops.leader_options",
@@ -3280,20 +3490,26 @@
           "binaries/emulator_main.cc"
         ],
         "tests": [
-          "tests/conformance/endpoints/emulator_conformance_test.cc"
+          "tests/conformance/endpoints/emulator_conformance_test.cc",
+          "tests/client_matrix/python/smoke.py",
+          "tests/client_matrix/go/main.go",
+          "tests/client_matrix/node/smoke.js",
+          "tests/client_matrix/java/Smoke.java",
+          "tests/client_matrix/jdbc/JdbcSmoke.java",
+          "tests/client_matrix/pgadapter/PgSmoke.java"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "gRPC is served without TLS on port 9010 by gateway_main (or --host_port, default localhost:10007, for emulator_main alone); clients connect with SPANNER_EMULATOR_HOST. The conformance suite runs over a real gRPC connection. Request deadlines and cancellations are ignored."
+      "notes": "gRPC is served without TLS on port 9010 by gateway_main (or --host_port, default localhost:10007, for emulator_main alone); clients connect with SPANNER_EMULATOR_HOST. The conformance suite runs over a real gRPC connection, and the Python, Go, Node, Java, JDBC, and PGAdapter matrix used it. Future-timestamp reads honor the request deadline; other deadlines and cancellations are ignored."
     },
     {
       "id": "clients.rest_gateway",
       "category": "Clients, drivers, and tooling",
       "feature": "REST gateway compatibility",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/emulator"
@@ -3302,13 +3518,15 @@
         "implementation": [
           "gateway/gateway.go",
           "binaries/gateway_main.go",
-          "frontend/common/status.cc"
+          "frontend/common/status.cc",
+          "common/limits.h"
         ],
         "tests": [
           "frontend/common/status_test.cc",
           "tests/gcloud/read_write_test.py",
           "tests/gcloud/instance_admin_test.py",
-          "gateway/gateway_test.go"
+          "gateway/gateway_test.go",
+          "tests/client_matrix/rest/rest_smoke.sh"
         ],
         "documentation": [
           "docs/capabilities.md",
@@ -3316,13 +3534,13 @@
         ]
       },
       "verification": "tested",
-      "notes": "REST (port 9020) is served by the grpc-gateway proxy in gateway_main, which gcloud tests use end to end. Errors retain the gRPC status code, but messages longer than 1,024 bytes are truncated and only standard google.rpc details are carried. Only gateway_main exposes REST; emulator_main alone is gRPC-only. URL field masks in JSON camelCase are converted to proto field names; snake_case paths work too."
+      "notes": "REST (port 9020) is served by the grpc-gateway proxy in gateway_main, which gcloud tests and a curl matrix use end to end. Errors use Google's JSON envelope, {\"error\": {\"code\": <HTTP status>, \"message\", \"status\": <canonical name>, \"details\"}}, with the HTTP status mapped from the gRPC code and standard google.rpc details (including PostgreSQL SQLSTATE as ErrorInfo) preserved; messages up to the shared 4,096-byte cap survive. URL field masks in JSON camelCase are converted to proto field names; snake_case paths work too. Only gateway_main exposes REST; emulator_main alone is gRPC-only."
     },
     {
       "id": "clients.client_libraries",
       "category": "Clients, drivers, and tooling",
       "feature": "Google client library compatibility",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/emulator"
@@ -3333,33 +3551,43 @@
         ],
         "tests": [
           "tests/conformance/endpoints/emulator_conformance_test.cc",
-          "tests/conformance/cases/sessions.cc"
+          "tests/conformance/cases/sessions.cc",
+          "tests/client_matrix/python/smoke.py",
+          "tests/client_matrix/go/main.go",
+          "tests/client_matrix/node/smoke.js",
+          "tests/client_matrix/java/Smoke.java"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "The conformance suite drives the emulator through the google-cloud-cpp Spanner client. Other language clients connect with SPANNER_EMULATOR_HOST but are not tested in this repository."
+      "notes": "The conformance suite drives the emulator through the google-cloud-cpp Spanner client. A public-endpoint matrix on the final binary ran Python google-cloud-spanner 3.71.0, Go 1.95.1, Node 9.0.0, and Java 6.123.0 (admin, DDL, mutations, DML, parameters, snapshot and stale reads, batch DML, error codes, PostgreSQL dialect; all four use multiplexed sessions by default). The programs are in tests/client_matrix."
     },
     {
       "id": "clients.jdbc",
       "category": "Clients, drivers, and tooling",
       "feature": "JDBC compatibility",
-      "status": "unknown",
-      "applicability": "compatibility-only",
+      "status": "supported",
+      "applicability": "local-development",
       "docs": [
         "https://cloud.google.com/spanner/docs/emulator"
       ],
       "evidence": {
-        "implementation": [],
-        "tests": [],
+        "implementation": [
+          "frontend/server/server.cc"
+        ],
+        "tests": [
+          "tests/client_matrix/jdbc/JdbcSmoke.java",
+          "tests/client_matrix/pgadapter/PgSmoke.java",
+          "tests/client_matrix/pgadapter/psql_smoke.sql"
+        ],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "unverified",
-      "notes": "No JDBC tests exist in this repository. The JDBC driver and PGAdapter (README) connect through the gRPC endpoint; compatibility is unverified."
+      "verification": "tested",
+      "notes": "The Spanner JDBC driver 2.45.0 (autoConfigEmulator=true, both dialects) and PGAdapter 0.55.3 with pgJDBC 42.7.13 and psql 17.5 passed a public-endpoint matrix on the final binary: DDL, commit and rollback, prepared statements over the common types, snapshot and stale reads, batch DML, and error mapping (JDBC errorCode, PostgreSQL SQLSTATE). The programs are in tests/client_matrix."
     },
     {
       "id": "clients.cli",
@@ -3401,13 +3629,17 @@
           "build/docker/Dockerfile.ubuntu",
           ".github/workflows/docker-publish.yml"
         ],
-        "tests": [],
+        "tests": [
+          "tests/image_verification_test.py",
+          "tests/client_matrix/rest/rest_smoke.sh",
+          "tests/client_matrix/python/smoke.py"
+        ],
         "documentation": [
           "README.md"
         ]
       },
-      "verification": "implemented",
-      "notes": "The image runs `./gateway_main --hostname 0.0.0.0` and exposes 9010 (gRPC) and 9020 (REST). It has no ENTRYPOINT, so extra flags such as --data_dir must be passed with the full command (for example `./gateway_main --hostname 0.0.0.0 --data_dir=/data`); emulator_main-only flags such as --abort_current_transaction_probability need `./emulator_main ...` instead, which serves gRPC only. Not covered by an automated test."
+      "verification": "tested",
+      "notes": "The image runs `./gateway_main --hostname 0.0.0.0` and exposes 9010 (gRPC) and 9020 (REST). It has no ENTRYPOINT, so extra flags such as --data_dir must be passed with the full command (for example `./gateway_main --hostname 0.0.0.0 --data_dir=/data`); emulator_main-only flags such as --abort_current_transaction_probability need `./emulator_main ...` instead, which serves gRPC only. Qualified on 2026-09-28 against the packaged image via tests/image_verification_test.py and the external client matrix (REST, Go, Node, Python, Java, JDBC, PGAdapter, psql)."
     },
     {
       "id": "emulator.in_memory",
@@ -3447,7 +3679,10 @@
           "frontend/persistence/metadata_store.cc",
           "frontend/persistence/atomic_file.cc",
           "frontend/collections/database_manager.cc",
-          "binaries/emulator_main.cc"
+          "binaries/emulator_main.cc",
+          "frontend/persistence/data_dir_lock.cc",
+          "backend/stats/system_stats_collector.cc",
+          "backend/storage/user_split_point_store.cc"
         ],
         "tests": [
           "backend/storage/persistent_storage_test.cc",
@@ -3456,7 +3691,10 @@
           "backend/database/database_test.cc",
           "frontend/handlers/policies_test.cc",
           "frontend/handlers/instance_extensions_test.cc",
-          "backend/transaction/flush_test.cc"
+          "backend/transaction/flush_test.cc",
+          "frontend/persistence/data_dir_lock_test.cc",
+          "backend/stats/system_stats_collector_test.cc",
+          "tests/image_verification_test.py"
         ],
         "documentation": [
           "docs/persistence.md",
@@ -3464,7 +3702,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "With --data_dir, row data (LevelDB, multi-version), schema contents, instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups, sequence counters, and change-stream creation times are persisted for restart. Metadata writes are atomic and journaled, and each commit (rows, index entries, and change-stream records) uses one atomic LevelDB data batch. Sessions and in-flight transactions and queries are transient by design. Historical reads outside the version retention period (default 1 hour) are rejected; expired row versions are pruned opportunistically from touched cells. The startup restore path is supported by component tests, not a fresh process-level restart test in this audit."
+      "notes": "With --data_dir, row data (LevelDB, multi-version), schema contents (including roles, grants, and row deletion policies), instances, custom instance configs, instance partitions, databases, IAM policies, operations, backups (including version_time and incremental chain metadata), backup schedules, sequence counters, split points, SPANNER_SYS statistics, and change-stream creation times are persisted for restart. Metadata writes are atomic and journaled, and each commit uses one atomic LevelDB data batch. Range reads and range deletes follow the on-disk key order (length, then content) with no format change; before 2026-09-28 they could skip rows, which let duplicate unique-index keys commit and break restore (the unique-index incident). A regression test and a concurrent stress test (about half its runs failed before the fix, 30 of 30 passed after) cover it. The directory is locked with <data_dir>/.lock (flock, holder PID recorded), so a second emulator process fails at startup. Sessions, in-flight transactions and queries are transient; SPANNER_SYS statistics are saved each minute and on SIGTERM/SIGINT, so a crash loses up to the current minute. The closure's disposable process restart probe and the 2026-09-28 Docker qualification suite (tests/image_verification_test.py) confirmed roles, grants, DEFINER views, database options, TTL policies, rows, version_time backups, split points, SPANNER_SYS statistics, and directory locking across container restarts."
     },
     {
       "id": "emulator.startup",
@@ -3491,7 +3729,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "gateway_main starts emulator_main and the REST proxy (defaults: --hostname localhost, --grpc_port 9010, --http_port 9020) and forwards --data_dir, --repair_corrupted_databases, --log_requests, --enable_fault_injection, --disable_query_null_filtered_index_check, --enforce_placement_dml_restrictions, --override_max_databases_per_instance, and --override_change_stream_partition_token_alive_seconds. --abort_current_transaction_probability and the change stream tuning flags exist only on emulator_main. On SIGINT or SIGTERM, gateway_main stops emulator_main (SIGTERM, then a kill after 5 seconds) before exiting."
+      "notes": "gateway_main starts emulator_main and the REST proxy (defaults: --hostname localhost, --grpc_port 9010, --http_port 9020) and forwards --data_dir, --remote_functions_host_port, --repair_corrupted_databases, --log_requests, --enable_fault_injection, --disable_query_null_filtered_index_check, --enforce_placement_dml_restrictions, --override_max_databases_per_instance, --override_change_stream_partition_token_alive_seconds, --row_deletion_policy_sweep_interval_seconds, --spanner_sys_expose_open_interval, and --lock_wait_timeout_ms. --abort_current_transaction_probability and the change stream tuning flags exist only on emulator_main. On SIGINT or SIGTERM, gateway_main stops emulator_main (SIGTERM, then a kill after 5 seconds) before exiting. With --data_dir, emulator_main locks <data_dir>/.lock at startup and exits with an error naming the holder's PID if another process holds it, and on SIGINT or SIGTERM it saves SPANNER_SYS statistics before terminating."
     },
     {
       "id": "emulator.packaging",
@@ -3508,14 +3746,16 @@
           ".github/workflows/docker-publish.yml",
           "build.sh"
         ],
-        "tests": [],
+        "tests": [
+          "tests/image_verification_test.py"
+        ],
         "documentation": [
           "README.md",
           "docs/building.md"
         ]
       },
-      "verification": "implemented",
-      "notes": "Multi-arch (amd64, arm64) images are published to jaysen2apache/spanner-emulator-extended by a manually dispatched workflow, and native Linux and macOS arm64 binaries can be built. Packaging is not covered by automated tests."
+      "verification": "tested",
+      "notes": "Multi-arch (amd64, arm64) images are published to jaysen2apache/spanner-emulator-extended by a manually dispatched workflow, and native Linux and macOS arm64 binaries can be built locally with build.sh. Packaging and container execution were qualified on 2026-09-28 using tests/image_verification_test.py and the client matrix."
     },
     {
       "id": "data.cache_updates",
@@ -3545,7 +3785,7 @@
       "id": "database.update",
       "category": "Database administration, operations, and backups",
       "feature": "UpdateDatabase RPC",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "api"
@@ -3555,7 +3795,8 @@
       ],
       "evidence": {
         "implementation": [
-          "frontend/handlers/databases.cc"
+          "frontend/handlers/databases.cc",
+          "frontend/handlers/instances.cc"
         ],
         "tests": [
           "frontend/handlers/databases_test.cc"
@@ -3563,13 +3804,13 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "UpdateDatabase accepts only enable_drop_protection in the update mask; other fields return INVALID_ARGUMENT. Drop protection is persisted with --data_dir and blocks DropDatabase with FAILED_PRECONDITION, but it does not block DeleteInstance."
+      "notes": "UpdateDatabase supports the documented mutable field enable_drop_protection, rejects other masks with INVALID_ARGUMENT, and returns completed typed UpdateDatabaseMetadata with 100% progress. Drop protection blocks both DropDatabase and DeleteInstance, including an unavailable persisted database. Focused handler tests and a direct gRPC enable/restart/readback/reject/disable/DeleteInstance probe passed on the native emulator. Packaged LocalCloud qualification remains open."
     },
     {
       "id": "backups.metadata",
       "category": "Database administration, operations, and backups",
       "feature": "Backup metadata lifecycle RPCs",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "api"
@@ -3580,24 +3821,26 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/backups.cc",
-          "frontend/persistence/backup_catalog.cc"
+          "frontend/persistence/backup_catalog.cc",
+          "frontend/common/list_filter.cc"
         ],
         "tests": [
           "frontend/handlers/backups_test.cc",
-          "frontend/persistence/backup_catalog_test.cc"
+          "frontend/persistence/backup_catalog_test.cc",
+          "frontend/common/list_filter_test.cc"
         ],
         "documentation": [
           "docs/persistence.md"
         ]
       },
       "verification": "tested",
-      "notes": "Get, list (paginated), update, delete, and CopyBackup work and are persisted with --data_dir; CopyBackup works across instances and projects. UpdateBackup accepts only expire_time, ListBackups ignores filters, and expired backups are never deleted automatically."
+      "notes": "Get, filtered/newest-first paginated list, update, delete, and CopyBackup work with --data_dir persistence; CopyBackup works across instances and projects. ListBackups filters use the shared AIP-160 parser (OR binds tighter than AND) with filter-bound page tokens. UpdateBackup accepts only future expire_time and CopyBackup enforces its minimum retention from the request time. Expired backups are removed when a backup metadata RPC or the schedule worker runs, so cleanup can lag."
     },
     {
       "id": "backups.schedules",
       "category": "Database administration, operations, and backups",
       "feature": "Backup schedule RPCs",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "api"
@@ -3608,7 +3851,8 @@
       "evidence": {
         "implementation": [
           "frontend/handlers/backups.cc",
-          "frontend/persistence/backup_catalog.cc"
+          "frontend/persistence/backup_catalog.cc",
+          "binaries/emulator_main.cc"
         ],
         "tests": [
           "frontend/handlers/backups_test.cc",
@@ -3619,7 +3863,7 @@
         ]
       },
       "verification": "tested",
-      "notes": "Backup schedule create, get, list, update (update_mask required), and delete are stored and persisted with --data_dir. Schedules never run: no backups are created automatically."
+      "notes": "Backup schedule create, get, list, update (update_mask required), and delete persist with --data_dir. The native worker runs 12-hour, daily, weekly, and monthly UTC cron schedules, creates each due backup once, applies retention from capture time, and persists its cursor. Incremental schedules produce backups linked by incremental_backup_chain_id and oldest_version_time with freeable and exclusive size fields, but each is physically a full snapshot. Frequency limits, at most 4 schedules per database, and Google-default encryption types are enforced; customer-managed keys return UNIMPLEMENTED. Schedule-update races are guarded by a catalog compare-and-swap."
     },
     {
       "id": "database.split_points",
@@ -3635,21 +3879,26 @@
       ],
       "evidence": {
         "implementation": [
-          "frontend/handlers/database_extensions.cc"
+          "frontend/handlers/database_extensions.cc",
+          "backend/storage/user_split_point_store.cc",
+          "backend/database/database.cc",
+          "backend/query/spanner_sys_catalog.cc"
         ],
         "tests": [
-          "frontend/handlers/database_extensions_test.cc"
+          "frontend/handlers/database_extensions_test.cc",
+          "backend/storage/user_split_point_store_test.cc",
+          "tests/conformance/cases/spanner_sys.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "Validates requests for compatibility but cannot control physical distributed split placement."
+      "notes": "AddSplitPoints validates requests (table or index, key shape, expire time) and stores the split points, which SPANNER_SYS.USER_SPLIT_POINTS shows until they expire (expired ones are hidden) and which persist with --data_dir; the split-key text approximates production's format. Status stays accepted-no-op: the documented purpose, pre-splitting data across servers ahead of load, is physical and is not performed, so split points do not change storage or performance. The observable bookkeeping is supported, as schema.locality_groups and ops.leader_options store and report their settings without effect."
     },
     {
       "id": "database.internal_graph_operation",
       "category": "Database administration, operations, and backups",
       "feature": "InternalUpdateGraphOperation RPC",
-      "status": "partial",
+      "status": "supported",
       "applicability": "compatibility-only",
       "dialects": [
         "api"
@@ -3667,13 +3916,13 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "InternalUpdateGraphOperation validates the database and operation ID, looks up an existing local operation, and marks it failed when a nonzero status is supplied. Successful status updates and production graph backfill work are not modeled."
+      "notes": "InternalUpdateGraphOperation validates the database and operation ID and updates an existing local operation: a nonzero status fails it, an OK status or progress of 100 completes it, and progress outside 0-100 is rejected. Production graph backfill work has no local equivalent."
     },
     {
       "id": "instance.move",
       "category": "Instance administration",
       "feature": "MoveInstance RPC",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "api"
@@ -3691,7 +3940,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "MoveInstance validates a canonical target_config, updates the instance's config metadata, and records a completed operation that is persisted with --data_dir. No data moves."
+      "notes": "MoveInstance validates a canonical target_config, rejects instances with source backups, updates the instance's config metadata, and records a completed operation with typed progress metadata that is persisted with --data_dir. The operation completes immediately because no data or physical placement exists to move (physical placement is covered by ops.replication). The pinned request proto lacks the currently documented target_database_move_configs field."
     },
     {
       "id": "operations.lifecycle",
@@ -3741,7 +3990,7 @@
         "documentation": []
       },
       "verification": "tested",
-      "notes": "BeginTransaction, Commit (including single-use and idempotent retries), and Rollback work for regular and multiplexed sessions. Commit responses carry a commit timestamp; return_commit_stats and max_commit_delay are ignored."
+      "notes": "BeginTransaction, Commit (including single-use and idempotent retries), and Rollback work for regular and multiplexed sessions. Commit responses carry a commit timestamp; with return_commit_stats, CommitStats.mutation_count follows the documented counting (inserted or updated columns plus key columns, 1 per deleted row, 1 per index row; change-stream writes are not counted). max_commit_delay is validated (0 to 500 ms; other values return INVALID_ARGUMENT) and does not delay the commit."
     },
     {
       "id": "data.sessions.multiplexed",
@@ -3802,7 +4051,7 @@
       "id": "transactions.isolation_levels",
       "category": "Transactions, timestamps, and concurrency",
       "feature": "Transaction isolation levels",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "api"
@@ -3812,21 +4061,24 @@
       ],
       "evidence": {
         "implementation": [
-          "frontend/entities/session.cc"
+          "frontend/entities/session.cc",
+          "backend/transaction/read_write_transaction.cc",
+          "backend/locking/manager.cc"
         ],
         "tests": [
-          "frontend/handlers/transactions_test.cc"
+          "frontend/handlers/transactions_test.cc",
+          "backend/transaction/read_write_transaction_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "SERIALIZABLE and REPEATABLE_READ options are accepted for read-only and read-write transactions; partitioned DML rejects REPEATABLE_READ. Outside that rejection, both options use the same backend transaction path: Spanner's distinct REPEATABLE_READ snapshot and conflict semantics are not emulated. The cited tests check option acceptance and rejection, not isolation behavior."
+      "notes": "SERIALIZABLE (default) and REPEATABLE_READ are honored. REPEATABLE_READ read-write transactions read from a snapshot chosen at their first read, take no shared read locks, still see their own writes, and validate at commit: a key or FOR UPDATE range written by another transaction since the snapshot aborts the commit with ABORTED. Constraint checks still use the latest data. Partitioned DML rejects REPEATABLE_READ. Read-only transactions accept either option."
     },
     {
       "id": "transactions.concurrency_model",
       "category": "Transactions, timestamps, and concurrency",
       "feature": "Concurrency, aborts, and fault injection",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "api"
@@ -3838,20 +4090,22 @@
         "implementation": [
           "backend/locking/manager.cc",
           "backend/transaction/read_write_transaction.cc",
-          "common/config.cc"
+          "common/config.cc",
+          "backend/locking/handle.cc"
         ],
         "tests": [
           "backend/locking/manager_test.cc",
           "backend/database/database_test.cc",
           "tests/conformance/cases/batch_dml.cc",
-          "backend/transaction/read_write_transaction_test.cc"
+          "backend/transaction/read_write_transaction_test.cc",
+          "gateway/gateway_test.go"
         ],
         "documentation": [
           "README.md"
         ]
       },
       "verification": "tested",
-      "notes": "Multiple read-write transactions can be open at once, but the database lock manager grants one active handle at a time. On contention it may abort the current transaction or the requester; a cited test has a second transaction commit while the first is still open, and the first becomes ABORTED. --abort_current_transaction_probability (default 20, emulator_main only) controls attempts to abort the current holder. --enable_fault_injection aborts about 5% of first commit attempts to exercise retry loops; that path has no test."
+      "notes": "Key/range shared and exclusive locks let disjoint read-write transactions commit concurrently. Conflicts follow wound-wait: a younger transaction waits up to --lock_wait_timeout_ms (default 10000, forwarded by gateway_main; 0 restores abort-at-once) for a lock an older transaction holds and then aborts with ABORTED, and an older requester aborts (wounds) a younger holder. In a two-key deadlock exactly one transaction aborts, and an aborted requester releases its locks at once. Focused manager and transaction tests cover waits, wounds, timeouts, disjoint ranges and tables, read upgrade, lock cleanup, abort/retry, deadlock, and a 5,000-row insert performance gate. --abort_current_transaction_probability (default 20, emulator_main only) lets a younger requester sometimes abort an idle older holder instead of waiting; schema changes never wait. SPANNER_SYS.LOCK_STATS reports the measured waits. --enable_fault_injection aborts about 5% of first commit attempts. Differences: waits ignore the RPC deadline, idle transactions are not aborted after 10 seconds, and READ_STATS AVG_LOCKING_DELAY_SECONDS stays 0."
     },
     {
       "id": "emulator.restore_fault_isolation",
@@ -3919,18 +4173,23 @@
       "id": "types.uuid",
       "category": "Types and values",
       "feature": "UUID",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
         "postgresql"
       ],
       "docs": [
-        "https://cloud.google.com/spanner/docs/reference/standard-sql/data-types"
+        "https://cloud.google.com/spanner/docs/reference/standard-sql/data-types",
+        "https://cloud.google.com/spanner/docs/reference/standard-sql/utility-functions",
+        "https://cloud.google.com/spanner/docs/reference/postgresql/data-types",
+        "https://cloud.google.com/spanner/docs/reference/postgresql/functions"
       ],
       "evidence": {
         "implementation": [
           "backend/datamodel/types.cc",
+          "backend/storage/key_codec.cc",
+          "backend/storage/value_codec.cc",
           "frontend/converters/values.cc",
           "third_party/spanner_pg/ddl/pg_to_spanner_ddl_translator.cc"
         ],
@@ -3938,12 +4197,17 @@
           "frontend/converters/values_test.cc",
           "frontend/converters/reads_test.cc",
           "tests/conformance/cases/change_streams_read_write.cc",
+          "tests/conformance/cases/pg_change_streams_read_write.cc",
+          "tests/conformance/cases/pg_uuid.cc",
+          "backend/storage/persistent_storage_test.cc",
+          "backend/database/database_test.cc",
+          "gateway/gateway_test.go",
           "backend/schema/parser/ddl_parser_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "GoogleSQL UUID columns, including primary keys, are created and written in change-stream conformance tests; UUID values round-trip through the wire converters and appear in change-stream records. PostgreSQL uuid column translation is enabled in code, but no cited end-to-end PostgreSQL UUID read/write test establishes that path. NEW_UUID and UUID casts are allowlisted without a dedicated query test; GENERATE_UUID returns STRING, as Spanner documents."
+      "notes": "Native public-API conformance covers UUID key and non-key mutations, keyed reads, typed SQL results and casts in both dialects; GoogleSQL NEW_UUID returns UUID and GENERATE_UUID returns STRING, while PostgreSQL gen_random_uuid returns UUID, including DEFAULT and INSERT RETURNING. GoogleSQL and PostgreSQL change-stream tests capture UUID records; the PostgreSQL case checks INSERT/UPDATE key and value JSON plus UUID type metadata. The persistent value codec round-trips UUIDs; key encoding is type-distinct and ordered, and keyed reads survive restart. A direct gRPC test restarts emulator_main with the same --data_dir and reads a PostgreSQL UUID row through a fresh session. Packaged Docker image qualification confirmed via tests/image_verification_test.py."
     },
     {
       "id": "writes.upsert_dml",
@@ -4033,8 +4297,8 @@
       "id": "schema.row_deletion_policy",
       "category": "Schema and DDL",
       "feature": "Row deletion policies (TTL)",
-      "status": "accepted-no-op",
-      "applicability": "compatibility-only",
+      "status": "supported",
+      "applicability": "local-development",
       "dialects": [
         "googlesql",
         "postgresql"
@@ -4045,16 +4309,23 @@
       "evidence": {
         "implementation": [
           "backend/schema/updater/schema_updater.cc",
-          "backend/query/information_schema_catalog.cc"
+          "backend/query/information_schema_catalog.cc",
+          "backend/database/row_deletion_policy_sweeper.cc",
+          "common/config.cc",
+          "gateway/gateway.go",
+          "backend/query/spanner_sys_catalog.cc"
         ],
         "tests": [
           "backend/schema/updater/schema_updater_tests/table.cc",
-          "backend/schema/updater/schema_updater_tests/alter_table_if_exists.cc"
+          "backend/schema/updater/schema_updater_tests/alter_table_if_exists.cc",
+          "backend/database/row_deletion_policy_sweeper_test.cc",
+          "gateway/gateway_test.go",
+          "tests/conformance/cases/spanner_sys.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "ROW DELETION POLICY (OLDER_THAN(...)) can be added, replaced and dropped and appears in INFORMATION_SCHEMA.TABLES, but rows never expire: the emulator has no TTL deletion process."
+      "notes": "ROW DELETION POLICY (OLDER_THAN(...)) in GoogleSQL and TTL INTERVAL ... ON ... in PostgreSQL can be added, replaced and dropped and appear in INFORMATION_SCHEMA.TABLES and GetDatabaseDdl. A per-database sweeper deletes expired rows in batched system transactions tagged RowDeletionPolicy with is_system_transaction set, so change streams record them and exclude_ttl_deletes filters them. The sweep runs every --row_deletion_policy_sweep_interval_seconds (default 60; 0 disables), whereas production deletes within about 72 hours; a sweep batch can contend with, and abort, a user transaction. SPANNER_SYS.ROW_DELETION_POLICIES reports each table's last sweep (processed watermark, undeletable rows), and with --data_dir it survives restarts. Restore drops the policies."
     },
     {
       "id": "schema.locality_groups",
@@ -4083,7 +4354,7 @@
       "id": "schema.database_options",
       "category": "Schema and DDL",
       "feature": "ALTER DATABASE options",
-      "status": "partial",
+      "status": "supported",
       "applicability": "local-development",
       "dialects": [
         "googlesql",
@@ -4098,19 +4369,23 @@
           "backend/schema/catalog/versioned_catalog.cc",
           "backend/transaction/read_only_transaction.cc",
           "backend/query/information_schema_catalog.cc",
-          "backend/query/analyzer_options.cc"
+          "backend/query/analyzer_options.cc",
+          "backend/database/database.cc",
+          "frontend/entities/database.cc"
         ],
         "tests": [
           "backend/schema/updater/schema_updater_tests/database_option.cc",
           "tests/conformance/cases/default_time_zone.cc",
           "tests/conformance/cases/snapshot_reads.cc",
           "tests/conformance/cases/information_schema.cc",
-          "tests/conformance/cases/query.cc"
+          "tests/conformance/cases/query.cc",
+          "backend/query/information_schema_catalog_test.cc",
+          "frontend/handlers/databases_test.cc"
         ],
         "documentation": []
       },
       "verification": "tested",
-      "notes": "ALTER DATABASE SET OPTIONS supports version_retention_period (enforced for stale reads and version garbage collection), default_time_zone (default America/Los_Angeles; applied to queries, parameters, DML, generated columns, checks, and views; cannot change once tables exist), and default_sequence_kind. default_leader, witness_location, read_lease_regions, and columnar_policy are only stored and shown in INFORMATION_SCHEMA.DATABASE_OPTIONS, and GetDatabase does not report version_retention_period, earliest_version_time, or default_leader."
+      "notes": "ALTER DATABASE SET OPTIONS supports version_retention_period (enforced for stale reads, version garbage collection, and backup version_time), default_time_zone (default America/Los_Angeles; applied to queries, parameters, DML, generated columns, checks, and views; cannot change once tables exist), and default_sequence_kind. GetDatabase reports version_retention_period, default_leader, and a moving earliest_version_time. default_leader, witness_location, and read_lease_regions are stored and projected in INFORMATION_SCHEMA.DATABASE_OPTIONS with no physical placement effect; columnar_policy is catalog metadata only. A disposable --data_dir restart probe confirmed the options in GetDatabaseDdl, GetDatabase, and INFORMATION_SCHEMA.DATABASE_OPTIONS after restart in both dialects."
     }
   ],
   "rpc_surface": [

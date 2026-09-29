@@ -17,6 +17,8 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_OPTIONS_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_TRANSACTION_OPTIONS_H_
 
+#include <string>
+
 #include "absl/time/time.h"
 #include "backend/common/ids.h"
 
@@ -75,6 +77,22 @@ struct ReadWriteOptions {
   // `allow_txn_exclusion` set to `true` will still be recorded, regardless of
   // the value of `exclude_txn_from_change_streams`.
   bool exclude_txn_from_change_streams = false;
+
+  // When `repeatable_read` is `true`, reads use a snapshot chosen at the first
+  // read without shared locks, and commit aborts if another transaction
+  // committed a write to a row this transaction writes or reads FOR UPDATE
+  // after that snapshot. Constraint checks still read the latest data.
+  bool repeatable_read = false;
+
+  // When `row_deletion_policy_txn` is `true`, the transaction is the system
+  // transaction that deletes rows expired by a row deletion policy (TTL). Its
+  // change stream records carry the transaction tag "RowDeletionPolicy" and
+  // are marked as system transactions, and change streams that have the
+  // `exclude_ttl_deletes` option set to `true` do not record its changes.
+  bool row_deletion_policy_txn = false;
+
+  // The transaction tag associated with this transaction.
+  std::string transaction_tag;
 };
 
 }  // namespace backend

@@ -123,24 +123,16 @@ INSTANTIATE_TEST_SUITE_P(
          {"a",  "b",   "c",   "ab", "bc", "abc", "\x1", "d",  "e",   "f",  "de",
           "ef", "def", "\x1", "g",  "h",  "i",   "gh",  "hi", "ghi", "\x1"},
          true},
-        // The emulator doesn't account for diacritics taking up more than one
-        // byte  when generating ngrams.
-        {{"Curaçao"}, 7, 7, "ngrams-7-7-0", {"curaça", "uraçao"}, false},
+        // N-gram sizes count Unicode code points, not UTF-8 bytes.
+        {{"Curaçao"}, 7, 7, "ngrams-7-7-0", {"curaçao"}, false},
         {{"Caffè", "Crème"},
-         6,
-         6,
-         "ngrams-6-6-0",
+         5,
+         5,
+         "ngrams-5-5-0",
          {"caffè", "\x1", "crème", "\x1"},
          true},
-        // The emulator doesn't handle converting diacritics to their base
-        // characters when generating ngrams.
-        {{"Curaçao"}, 7, 7, "ngrams-7-7-0", {"curaça", "uraçao"}, false},
-        {{"Caffè", "Crème"},
-         6,
-         6,
-         "ngrams-6-6-0",
-         {"caffè", "\x1", "crème", "\x1"},
-         true},
+        {{"Curaçao"}, 2, 2, "ngrams-2-2-0",
+         {"cu", "ur", "ra", "aç", "ça", "ao"}, false},
     }));
 
 struct NgramsTokenizerArgErrorTestCase {
@@ -178,15 +170,18 @@ TEST(NgramsTokenizerTest, NullInputValue) {
   absl::StatusOr<googlesql::Value> result =
       NgramsTokenizer::Tokenize({googlesql::Value::NullString()});
   GOOGLESQL_EXPECT_OK(result.status());
+  EXPECT_TRUE(result->type()->IsTokenList());
+  EXPECT_TRUE(result->is_null());
+}
 
-  googlesql::Value token_list = result.value();
-  EXPECT_TRUE(token_list.type()->IsTokenList());
-
-  // Always expect the tokenlist has at least one token
-  // which stores tokenizer information.
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto tokens, StringsFromTokenList(token_list));
-  ASSERT_EQ(tokens.size(), 1);
-  EXPECT_EQ("ngrams-4-1-1", tokens[0]);
+TEST(NgramsTokenizerTest, RemoveDiacritics) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto result,
+      NgramsTokenizer::Tokenize(
+          {googlesql::Value::String("Café"), googlesql::Value::Int64(4),
+           googlesql::Value::Int64(4), googlesql::Value::Bool(true)}));
+  EXPECT_EQ(*StringsFromTokenList(result),
+            (std::vector<std::string>{"ngrams-4-4-0-d", "cafe"}));
 }
 
 }  // namespace search

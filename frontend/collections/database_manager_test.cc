@@ -618,6 +618,23 @@ TEST_F(DatabaseManagerTest, ListDatabaseWithSimilarInstanceUri) {
   EXPECT_EQ(databases[0]->database_uri(), database_uri_);
 }
 
+TEST_F(DatabaseManagerTest, ListAllDatabasesSpansInstances) {
+  const std::string other_database_uri =
+      "projects/test-p/instances/other-instance/databases/other-database";
+  GOOGLESQL_ASSERT_OK(
+      database_manager_.CreateDatabase(database_uri_, empty_schema_operation_)
+          .status());
+  GOOGLESQL_ASSERT_OK(
+      database_manager_
+          .CreateDatabase(other_database_uri, empty_schema_operation_)
+          .status());
+  std::vector<std::shared_ptr<Database>> databases =
+      database_manager_.ListAllDatabases();
+  ASSERT_EQ(databases.size(), 2);
+  EXPECT_EQ(databases[0]->database_uri(), other_database_uri);
+  EXPECT_EQ(databases[1]->database_uri(), database_uri_);
+}
+
 // Covers openspec change fix-unique-index-restore-isolation, section 3: a
 // database that failed to restore from persisted metadata must be visible
 // (not silently absent) but must reject data-plane/DDL access.

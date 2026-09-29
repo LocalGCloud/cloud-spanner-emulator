@@ -35,6 +35,8 @@
 #include "absl/time/time.h"
 #include "backend/access/read.h"
 #include "backend/access/write.h"
+#include "backend/datamodel/key.h"
+#include "backend/datamodel/key_range.h"
 #include "backend/datamodel/key_set.h"
 #include "backend/schema/backfills/change_stream_backfill.h"
 #include "backend/schema/catalog/change_stream.h"
@@ -149,7 +151,50 @@ void ChangeStreamPartitionChurner::PeriodicChurnPartitions(
                    << " with status: " << s;
       }
     } while (!s.ok());
+
+    // A failed cleanup is retried in the next cycle.
+    s = DeleteExpiredRecords(change_stream_name);
+    if (!s.ok() && !absl::IsAborted(s)) {
+      ABSL_LOG(ERROR) << "Failed to delete the expired records of change stream "
+                      << change_stream_name << " with status: " << s;
+    }
   }
+}
+
+absl::Status ChangeStreamPartitionChurner::DeleteExpiredRecords(
+    absl::string_view change_stream_name) {
+  GOOGLESQL_ASSIGN_OR_RETURN(auto txn, create_read_write_transaction_fn_(
+                                 ReadWriteOptions(), RetryState()));
+  const ChangeStream* change_stream =
+      txn->schema()->FindChangeStream(std::string(change_stream_name));
+  if (change_stream == nullptr) {
+    return absl::OkStatus();
+  }
+  const absl::Time cutoff =
+      clock_->Now() - absl::Seconds(change_stream->parsed_retention_period());
+
+  // Data change records are keyed by partition token and then commit
+  // timestamp, so the expired records of a partition are one key range.
+  backend::ReadArg read_arg;
+  read_arg.change_stream_for_partition_table = change_stream->Name();
+  read_arg.columns = {"partition_token"};
+  read_arg.key_set = KeySet::All();
+  std::unique_ptr<backend::RowCursor> cursor;
+  GOOGLESQL_RETURN_IF_ERROR(txn->Read(read_arg, &cursor));
+  KeySet expired_records;
+  while (cursor->Next()) {
+    const googlesql::Value& partition_token = cursor->ColumnValue(0);
+    expired_records.AddRange(KeyRange::ClosedOpen(
+        Key({partition_token}),
+        Key({partition_token, googlesql::values::Timestamp(cutoff)})));
+  }
+  GOOGLESQL_RETURN_IF_ERROR(cursor->Status());
+
+  Mutation m;
+  m.AddDeleteOp(MakeChangeStreamDataTableName(change_stream->Name()),
+                expired_records);
+  GOOGLESQL_RETURN_IF_ERROR(txn->Write(m));
+  return txn->Commit();
 }
 
 // TODO: Change stream churn transactions can potentially cause
@@ -208,11 +253,6 @@ absl::Status ChangeStreamPartitionChurner::ChurnPartitions(
   for (const auto& [churn_type, partition_tokens] : churned_partitions) {
     // Churn the tokens retrieved above.
     if (churn_type == "MOVE") {
-      // Skip MOVE churning for mutable key range change streams.
-      if (change_stream->partition_mode() ==
-          kChangeStreamPartitionModeMutableKeyRange) {
-        continue;
-      }
       // Make sure to move each partition.
       for (const auto& partition_token : partition_tokens) {
         GOOGLESQL_RETURN_IF_ERROR(

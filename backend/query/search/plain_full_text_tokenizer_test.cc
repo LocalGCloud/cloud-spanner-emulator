@@ -21,6 +21,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "googlesql/public/simple_token_list.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "absl/status/statusor.h"
 #include "backend/query/search/tokenizer.h"
@@ -160,16 +161,8 @@ TEST(PlainFullTextTokenizerTest, NullInputValue) {
   absl::StatusOr<googlesql::Value> result =
       PlainFullTextTokenizer::Tokenize({googlesql::Value::NullString()});
   GOOGLESQL_EXPECT_OK(result.status());
-
-  googlesql::Value token_list = result.value();
-  EXPECT_TRUE(token_list.type()->IsTokenList());
-
-  // Always expect the tokenlist has at least one token
-  // which stores tokenizer information.
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto tokens, StringsFromTokenList(token_list));
-  ASSERT_EQ(tokens.size(), 1);
-  // The signature uses 1 to indicate that the source is NULL.
-  EXPECT_EQ(tokens[0], "fulltext-1");
+  EXPECT_TRUE(result->type()->IsTokenList());
+  EXPECT_TRUE(result->is_null());
 }
 
 TEST(PlainFullTextTokenizerTest, TokenizeArray) {
@@ -197,6 +190,87 @@ TEST(PlainFullTextTokenizerTest, TokenizeArray) {
   for (auto& tc : test_cases) {
     VerifyTestCase(tc);
   }
+}
+
+TEST(PlainFullTextTokenizerTest, DiacriticsAndTurkishCase) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto folded,
+      PlainFullTextTokenizer::Tokenize(
+          {googlesql::Value::String("Crème BRÛLÉE"),
+           googlesql::Value::NullString(), googlesql::Value::NullString(),
+           googlesql::Value::NullString(), googlesql::Value::Bool(true)}));
+  EXPECT_EQ(*StringsFromTokenList(folded),
+            (std::vector<std::string>{"fulltext-0-d", "creme", "brulee"}));
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto turkish,
+      PlainFullTextTokenizer::Tokenize(
+          {googlesql::Value::String("I İ"), googlesql::Value::String("tr")}));
+  EXPECT_EQ(*StringsFromTokenList(turkish),
+            (std::vector<std::string>{"fulltext-0", "ı", "i"}));
+}
+
+TEST(PlainFullTextTokenizerTest, BoundariesAndHashtags) {
+  // The DEBUG_TOKENLIST example of the documentation.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto result, PlainFullTextTokenizer::Tokenize(
+                       {googlesql::Value::String("Hello DB #World")}));
+  EXPECT_THAT(DebugTokenList(result),
+              googlesql_base::testing::IsOkAndHolds(
+                  "hello(boundary), db, [#world, world](boundary)"));
+  // Searches see the word without '#'.
+  EXPECT_THAT(StringsFromTokenList(result),
+              googlesql_base::testing::IsOkAndHolds(
+                  testing::ElementsAre("fulltext-0", "hello", "db", "world")));
+}
+
+TEST(PlainFullTextTokenizerTest, LanguageTag) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto japanese,
+      PlainFullTextTokenizer::Tokenize({googlesql::Value::String("東京タワー"),
+                                        googlesql::Value::String("ja")}));
+  EXPECT_THAT(StringsFromTokenList(japanese),
+              googlesql_base::testing::IsOkAndHolds(
+                  testing::ElementsAre("fulltext-0", "東京", "タワー")));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto french,
+      PlainFullTextTokenizer::Tokenize(
+          {googlesql::Value::String("L'Été indien"),
+           googlesql::Value::String("fr")}));
+  EXPECT_THAT(StringsFromTokenList(french),
+              googlesql_base::testing::IsOkAndHolds(testing::ElementsAre(
+                  "fulltext-0", "l", "été", "indien")));
+}
+
+TEST(PlainFullTextTokenizerTest, HtmlAndTokenCategory) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto result,
+      PlainFullTextTokenizer::Tokenize(
+          {googlesql::Value::String("<h1>Apple</h1><p>&amp; <b>Crème</b></p>"),
+           googlesql::Value::NullString(), googlesql::Value::String("text/html")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto iter,
+                                result.tokenlist_value().GetIterator());
+  googlesql::tokens::TextToken token;
+  ASSERT_TRUE(iter.Next(token).ok());  // signature
+  ASSERT_TRUE(iter.Next(token).ok());
+  EXPECT_EQ(token.text(), "apple");
+  EXPECT_EQ(token.attribute(), 3);
+  ASSERT_TRUE(iter.Next(token).ok());
+  EXPECT_EQ(token.text(), "crème");
+  EXPECT_EQ(token.attribute(), 1);
+  EXPECT_TRUE(iter.done());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto overridden,
+      PlainFullTextTokenizer::Tokenize(
+          {googlesql::Value::String("<h1>Apple</h1>"),
+           googlesql::Value::NullString(), googlesql::Value::String("text/html"),
+           googlesql::Value::String("medium")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(iter,
+                                overridden.tokenlist_value().GetIterator());
+  ASSERT_TRUE(iter.Next(token).ok());
+  ASSERT_TRUE(iter.Next(token).ok());
+  EXPECT_EQ(token.attribute(), 1);
 }
 
 }  // namespace search

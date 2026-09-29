@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "googlesql/public/value.h"
+#include "googlesql/public/simple_token_list.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_split.h"
 #include "absl/types/span.h"
@@ -30,15 +31,45 @@
 
 namespace google::spanner::emulator::backend::query::search {
 
+namespace {
+
+absl::StatusOr<googlesql::tokens::TextToken> WithoutDiacritics(
+    const googlesql::tokens::TextToken& token) {
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string text,
+                   NormalizeSearchText(token.text(), /*remove_diacritics=*/true,
+                                       /*language_tag=*/"",
+                                       /*lowercase=*/false));
+  std::vector<googlesql::tokens::Token> index_tokens;
+  for (const googlesql::tokens::Token& index_token : token.index_tokens()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        std::string index_text,
+        NormalizeSearchText(index_token.text(), /*remove_diacritics=*/true,
+                            /*language_tag=*/"", /*lowercase=*/false));
+    index_tokens.emplace_back(std::move(index_text), index_token.attribute());
+  }
+  return googlesql::tokens::TextToken::Make(std::move(text), token.attribute(),
+                                            std::move(index_tokens));
+}
+
+}  // namespace
+
 absl::StatusOr<googlesql::Value> TokenlistConcat::Concat(
     absl::Span<const googlesql::Value> args) {
   GOOGLESQL_RET_CHECK(args.size() == 1 && args[0].type()->IsArray());
   const auto& arg = args[0];
   if (arg.is_null()) {
-    // TOKENLIST_CONCAT(NULL) should return NULL.
-    return googlesql::Value::Null(arg.type());
+    return googlesql::Value::NullTokenList();
   }
-  std::vector<std::string> result;
+  // SEARCH removes diacritics from the query when any of the concatenated
+  // tokenlists does. The tokens of the other tokenlists then lose their
+  // diacritics too, so that they can still match.
+  bool removes_diacritics = false;
+  for (const auto& tokenlist : arg.elements()) {
+    if (tokenlist.is_null()) continue;
+    GOOGLESQL_ASSIGN_OR_RETURN(bool removes, TokenListRemovesDiacritics(tokenlist));
+    removes_diacritics |= removes;
+  }
+  googlesql::tokens::TokenListBuilder builder;
   std::vector<std::string> first_signature;
   for (const auto& tokenlist : arg.elements()) {
     if (tokenlist.is_null()) {
@@ -63,10 +94,21 @@ absl::StatusOr<googlesql::Value> TokenlistConcat::Concat(
         }
       }
     }
-    result.insert(result.end(), tokens.begin(), tokens.end());
-    result.push_back(kGapString);
+    GOOGLESQL_ASSIGN_OR_RETURN(bool removes, TokenListRemovesDiacritics(tokenlist));
+    const bool strip_diacritics = removes_diacritics && !removes;
+    GOOGLESQL_ASSIGN_OR_RETURN(auto iter, tokenlist.tokenlist_value().GetIterator());
+    googlesql::tokens::TextToken token;
+    while (!iter.done()) {
+      GOOGLESQL_RETURN_IF_ERROR(iter.Next(token));
+      if (strip_diacritics && !IsTokenizerSignature(token.text()) &&
+          token.text() != kGapString) {
+        GOOGLESQL_ASSIGN_OR_RETURN(token, WithoutDiacritics(token));
+      }
+      builder.Add(token);
+    }
+    builder.Add(googlesql::tokens::TextToken::Make(kGapString));
   }
-  return TokenListFromStrings(result);
+  return googlesql::Value::TokenList(builder.Build());
 }
 
 }  // namespace google::spanner::emulator::backend::query::search

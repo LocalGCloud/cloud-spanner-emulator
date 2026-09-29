@@ -17,6 +17,8 @@
 #include "frontend/converters/mutations.h"
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "google/spanner/v1/mutation.pb.h"
 #include "google/spanner/v1/result_set.pb.h"
@@ -172,6 +174,29 @@ TEST_F(AccessProtosTest, CannotCreateMutationFromInvalidProto) {
 
   EXPECT_THAT(MutationFromProto(*schema_.get(), mutation_pb, &mutation),
               StatusIs(absl::StatusCode::kNotFound));
+}
+
+TEST_F(AccessProtosTest, ExplicitWriteCellLimitAllowsBoundary) {
+  std::vector<backend::ValueList> rows;
+  rows.reserve(40001);
+  for (int row = 0; row < 40000; ++row) {
+    rows.push_back(
+        {googlesql::values::Int64(row), googlesql::values::String("x")});
+  }
+  // Rewriting the same cells must not count twice.
+  rows.push_back(
+      {googlesql::values::Int64(0), googlesql::values::String("again")});
+  backend::Mutation mutation;
+  mutation.AddWriteOp(backend::MutationOpType::kInsertOrUpdate, "test_table",
+                      {"int64_col", "string_col"}, std::move(rows));
+  GOOGLESQL_EXPECT_OK(ValidateExplicitWriteCellLimit(*schema_, mutation));
+
+  mutation.AddWriteOp(backend::MutationOpType::kUpdate, "test_table",
+                      {"int64_col", "string_col"},
+                      {{googlesql::values::Int64(40000),
+                        googlesql::values::String("x")}});
+  EXPECT_THAT(ValidateExplicitWriteCellLimit(*schema_, mutation),
+              StatusIs(absl::StatusCode::kInvalidArgument));
 }
 
 }  // namespace

@@ -27,10 +27,13 @@
 
 #include "google/spanner/admin/database/v1/common.pb.h"
 #include "googlesql/public/catalog.h"
+#include "googlesql/public/function_signature.h"
 #include "googlesql/public/simple_catalog.h"
+#include "googlesql/public/table_valued_function.h"
 #include "googlesql/public/types/type.h"
 #include "googlesql/public/types/type_factory.h"
 #include "googlesql/public/value.h"
+#include "absl/algorithm/container.h"
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -42,19 +45,24 @@
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
+#include "absl/types/span.h"
 #include "backend/query/analyzer_options.h"
+#include "backend/query/change_stream/queryable_change_stream_tvf.h"
 #include "backend/query/info_schema_columns_metadata_values.h"
 #include "backend/query/spanner_sys_catalog.h"
 #include "backend/query/tables_from_metadata.h"
 #include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/column.h"
 #include "backend/schema/catalog/foreign_key.h"
+#include "backend/schema/catalog/grants.h"
 #include "backend/schema/catalog/locality_group.h"
 #include "backend/schema/catalog/model.h"
 #include "backend/schema/catalog/placement.h"
 #include "backend/schema/catalog/property_graph.h"
+#include "backend/schema/catalog/role.h"
 #include "backend/schema/catalog/schema.h"
 #include "backend/schema/catalog/sequence.h"
+#include "backend/schema/catalog/udf.h"
 #include "backend/schema/ddl/operations.pb.h"
 #include "backend/schema/parser/ddl_parser.h"
 #include "backend/schema/printer/print_ddl.h"
@@ -132,7 +140,6 @@ static constexpr char kRowDeletionPolicyExpression[] =
 static constexpr char kTables[] = "TABLES";
 static constexpr char kDatabaseDialect[] = "database_dialect";
 static constexpr char kString[] = "STRING";
-static constexpr char kStringList[] = "STRING_LIST";
 static constexpr char kCharacterVarying[] = "character varying";
 static constexpr char kPublic[] = "public";
 static constexpr char kBaseTable[] = "BASE TABLE";
@@ -231,6 +238,56 @@ static constexpr char kPlacementName[] = "PLACEMENT_NAME";
 static constexpr char kIsDefault[] = "IS_DEFAULT";
 static constexpr char kPlacementKey[] = "PLACEMENT KEY";
 static constexpr char kStringMax[] = "STRING(MAX)";
+static constexpr char kRoles[] = "ROLES";
+static constexpr char kEnabledRoles[] = "ENABLED_ROLES";
+static constexpr char kRoleGrantees[] = "ROLE_GRANTEES";
+static constexpr char kApplicableRoles[] = "APPLICABLE_ROLES";
+static constexpr char kTablePrivileges[] = "TABLE_PRIVILEGES";
+static constexpr char kColumnPrivileges[] = "COLUMN_PRIVILEGES";
+static constexpr char kChangeStreamPrivileges[] = "CHANGE_STREAM_PRIVILEGES";
+static constexpr char kRoutines[] = "ROUTINES";
+static constexpr char kRoutineOptions[] = "ROUTINE_OPTIONS";
+static constexpr char kParameters[] = "PARAMETERS";
+static constexpr char kRoutinePrivileges[] = "ROUTINE_PRIVILEGES";
+static constexpr char kRoleTableGrants[] = "ROLE_TABLE_GRANTS";
+static constexpr char kRoleColumnGrants[] = "ROLE_COLUMN_GRANTS";
+static constexpr char kRoleChangeStreamGrants[] = "ROLE_CHANGE_STREAM_GRANTS";
+static constexpr char kRoleRoutineGrants[] = "ROLE_ROUTINE_GRANTS";
+static constexpr char kRoleModelGrants[] = "ROLE_MODEL_GRANTS";
+static constexpr char kModelPrivileges[] = "MODEL_PRIVILEGES";
+static constexpr char kTableSynonyms[] = "TABLE_SYNONYMS";
+static constexpr char kInformationSchemaCatalogName[] =
+    "INFORMATION_SCHEMA_CATALOG_NAME";
+static constexpr char kRoleName[] = "ROLE_NAME";
+static constexpr char kGrantee[] = "GRANTEE";
+static constexpr char kIsGrantable[] = "IS_GRANTABLE";
+static constexpr char kPrivilegeType[] = "PRIVILEGE_TYPE";
+static constexpr char kChangeStreamCatalog[] = "CHANGE_STREAM_CATALOG";
+static constexpr char kChangeStreamSchema[] = "CHANGE_STREAM_SCHEMA";
+static constexpr char kChangeStreamName[] = "CHANGE_STREAM_NAME";
+static constexpr char kSpecificCatalog[] = "SPECIFIC_CATALOG";
+static constexpr char kSpecificSchema[] = "SPECIFIC_SCHEMA";
+static constexpr char kSpecificName[] = "SPECIFIC_NAME";
+static constexpr char kRoutineCatalog[] = "ROUTINE_CATALOG";
+static constexpr char kRoutineSchema[] = "ROUTINE_SCHEMA";
+static constexpr char kRoutineName[] = "ROUTINE_NAME";
+static constexpr char kRoutineType[] = "ROUTINE_TYPE";
+static constexpr char kRoutineBody[] = "ROUTINE_BODY";
+static constexpr char kRoutineDefinition[] = "ROUTINE_DEFINITION";
+static constexpr char kSpannerDeterminism[] = "SPANNER_DETERMINISM";
+static constexpr char kParameterName[] = "PARAMETER_NAME";
+static constexpr char kModelCatalog[] = "MODEL_CATALOG";
+static constexpr char kModelSchema[] = "MODEL_SCHEMA";
+static constexpr char kModelName[] = "MODEL_NAME";
+static constexpr char kFunction[] = "FUNCTION";
+static constexpr char kInvoker[] = "INVOKER";
+static constexpr char kSql[] = "SQL";
+static constexpr char kExternal[] = "EXTERNAL";
+
+// The privileges that can be granted on whole tables.
+static constexpr ddl::Privilege::Type kTablePrivilegeTypes[] = {
+    ddl::Privilege::SELECT, ddl::Privilege::INSERT, ddl::Privilege::UPDATE,
+    ddl::Privilege::DELETE};
 
 static int kFloatNumericPrecision = 24;
 static int kDoubleNumericPrecision = 53;
@@ -275,6 +332,22 @@ static const absl::NoDestructor<absl::flat_hash_set<std::string>>
         kTables,
         kViews,
         kPropertyGraphs,
+        kRoles,
+        kRoleGrantees,
+        kTablePrivileges,
+        kColumnPrivileges,
+        kChangeStreamPrivileges,
+        kRoutines,
+        kRoutineOptions,
+        kParameters,
+        kRoutinePrivileges,
+        kRoleTableGrants,
+        kRoleColumnGrants,
+        kRoleChangeStreamGrants,
+        kRoleRoutineGrants,
+        kRoleModelGrants,
+        kModelPrivileges,
+        kTableSynonyms,
     }};
 
 static const absl::NoDestructor<absl::flat_hash_set<std::string>>
@@ -307,6 +380,21 @@ static const absl::NoDestructor<absl::flat_hash_set<std::string>>
         absl::AsciiStrToLower(kTableConstraints),
         absl::AsciiStrToLower(kTables),
         absl::AsciiStrToLower(kViews),
+        absl::AsciiStrToLower(kEnabledRoles),
+        absl::AsciiStrToLower(kApplicableRoles),
+        absl::AsciiStrToLower(kTablePrivileges),
+        absl::AsciiStrToLower(kColumnPrivileges),
+        absl::AsciiStrToLower(kChangeStreamPrivileges),
+        absl::AsciiStrToLower(kRoutines),
+        absl::AsciiStrToLower(kRoutineOptions),
+        absl::AsciiStrToLower(kParameters),
+        absl::AsciiStrToLower(kRoutinePrivileges),
+        absl::AsciiStrToLower(kRoleTableGrants),
+        absl::AsciiStrToLower(kRoleColumnGrants),
+        absl::AsciiStrToLower(kRoleChangeStreamGrants),
+        absl::AsciiStrToLower(kRoleRoutineGrants),
+        absl::AsciiStrToLower(kTableSynonyms),
+        absl::AsciiStrToLower(kInformationSchemaCatalogName),
     }};
 
 static const absl::NoDestructor<
@@ -554,6 +642,58 @@ std::vector<googlesql::Value> GetRowFromRowKVs(
   return row;
 }
 
+// Returns a row like GetRowFromRowKVs, except that columns without a value in
+// `row_kvs` are NULL. Keys that are not columns of `table` are ignored.
+std::vector<googlesql::Value> GetRowFromRowKVsOrNull(
+    const googlesql::Table* table,
+    const absl::flat_hash_map<std::string, googlesql::Value>& row_kvs) {
+  std::vector<googlesql::Value> row;
+  row.reserve(table->NumColumns());
+  for (int i = 0; i < table->NumColumns(); ++i) {
+    const googlesql::Column* column = table->GetColumn(i);
+    auto kv = row_kvs.find(absl::AsciiStrToUpper(column->Name()));
+    row.push_back(kv != row_kvs.end()
+                      ? kv->second
+                      : googlesql::Value::Null(column->GetType()));
+  }
+  return row;
+}
+
+// Returns the privileges granted in `schema`.
+absl::Span<const Grants::Privilege> Privileges(const Schema* schema) {
+  return schema->grants() == nullptr ? absl::Span<const Grants::Privilege>()
+                                     : schema->grants()->privileges();
+}
+
+// Returns the role memberships granted in `schema`.
+absl::Span<const Grants::Membership> Memberships(const Schema* schema) {
+  return schema->grants() == nullptr ? absl::Span<const Grants::Membership>()
+                                     : schema->grants()->memberships();
+}
+
+// Returns the values that the rows of all privilege tables have.
+absl::flat_hash_map<std::string, googlesql::Value> PrivilegeValues(
+    const Grants::Privilege& privilege) {
+  return {
+      {kPrivilegeType, String(ddl::Privilege::Type_Name(privilege.type))},
+      {kGrantee, String(privilege.grantee)},
+      {kIsGrantable, String(kNo)},
+  };
+}
+
+googlesql::Value UdfDeterminism(const Udf* udf) {
+  switch (udf->determinism_level()) {
+    case Udf::Determinism::DETERMINISTIC:
+      return String("DETERMINISTIC");
+    case Udf::Determinism::NOT_DETERMINISTIC_STABLE:
+      return String("NOT_DETERMINISTIC_STABLE");
+    case Udf::Determinism::NOT_DETERMINISTIC_VOLATILE:
+      return String("NOT_DETERMINISTIC_VOLATILE");
+    default:
+      return NullString();
+  }
+}
+
 std::vector<googlesql::Value> GetSchemaRow(const googlesql::Table* table,
                                            googlesql::Value tableCatalog,
                                            googlesql::Value schemaName,
@@ -599,10 +739,13 @@ googlesql::Value GetSearchOrderBy(const Index* index) {
 
 InformationSchemaCatalog::InformationSchemaCatalog(
     const std::string& catalog_name, const Schema* default_schema,
-    const SpannerSysCatalog* spanner_sys_catalog)
+    const SpannerSysCatalog* spanner_sys_catalog, const AccessPolicy* access)
     : googlesql::SimpleCatalog(catalog_name),
       default_schema_(default_schema),
       spanner_sys_catalog_(spanner_sys_catalog),
+      access_(access != nullptr && !access->unfiltered_information_schema()
+                  ? access
+                  : nullptr),
       dialect_(catalog_name == kPGName ? DatabaseDialect::POSTGRESQL
                                        : DatabaseDialect::GOOGLE_STANDARD_SQL) {
   // Create a subset of tables using columns metadata.
@@ -667,6 +810,17 @@ InformationSchemaCatalog::InformationSchemaCatalog(
   FillModelColumnsTable();
   FillModelColumnOptionsTable();
   FillPropertyGraphsTable();
+  FillRolesTable();
+  FillRoleGranteesTable();
+  FillTablePrivilegesTables();
+  FillColumnPrivilegesTables();
+  FillChangeStreamPrivilegesTables();
+  FillRoutinePrivilegesTables();
+  FillModelPrivilegesTables();
+  // ROUTINE_OPTIONS has no rows because no routine has options.
+  FillRoutinesAndParametersTables();
+  FillTableSynonymsTable();
+  FillInformationSchemaCatalogNameTable();
 }
 
 inline std::string InformationSchemaCatalog::GetNameForDialect(
@@ -702,6 +856,102 @@ InformationSchemaCatalog::GetSchemaAndNameForInformationSchema(
                             ? DialectDefaultSchema().ToString()
                             : std::string(schema_part),
                         std::string(name_part));
+}
+
+// TABLES lists the tables that the role holds any privilege on, on the table or
+// on some of its columns.
+bool InformationSchemaCatalog::CanSeeTable(const Table* table) const {
+  return access_ == nullptr || access_->CanSeeTable(table);
+}
+
+// TABLE_PRIVILEGES lists the privileges on the tables that the role holds a
+// privilege on as a whole.
+bool InformationSchemaCatalog::CanSeeTablePrivileges(const Table* table) const {
+  return access_ == nullptr ||
+         absl::c_any_of(kTablePrivilegeTypes,
+                        [&](ddl::Privilege::Type type) {
+                          return access_->Has(type, table);
+                        });
+}
+
+// The column views list the columns that the role holds a privilege on, on the
+// column or on its table.
+bool InformationSchemaCatalog::CanSeeColumn(const Column* column) const {
+  return access_ == nullptr || access_->CanSeeColumn(column);
+}
+
+bool InformationSchemaCatalog::CanSeeView(const View* view) const {
+  return access_ == nullptr || access_->CanSeeView(view);
+}
+
+// The index views list the indexes whose columns the role may all see, and
+// INDEXES also the indexes of tables that the role may delete from.
+bool InformationSchemaCatalog::CanSeeIndex(const Table* table,
+                                           const Index* index,
+                                           bool table_delete_suffices) const {
+  return access_ == nullptr ||
+         access_->CanSeeIndex(table, index, table_delete_suffices);
+}
+
+bool InformationSchemaCatalog::CanSeeSequence(const Sequence* sequence) const {
+  return access_ == nullptr || access_->CanSeeSequence(sequence);
+}
+
+bool InformationSchemaCatalog::CanSeeChangeStream(
+    const ChangeStream* change_stream) const {
+  return access_ == nullptr ||
+         access_->Has(ddl::Privilege::SELECT, change_stream);
+}
+
+bool InformationSchemaCatalog::CanSeeRoutine(const SchemaNode* routine) const {
+  return access_ == nullptr || access_->CanSeeRoutine(routine);
+}
+
+bool InformationSchemaCatalog::CanSeeModel(const Model* model) const {
+  return access_ == nullptr || access_->Has(ddl::Privilege::EXECUTE, model);
+}
+
+// PROPERTY_GRAPHS lists the graphs whose tables the role may all see.
+bool InformationSchemaCatalog::CanSeePropertyGraph(
+    const PropertyGraph* property_graph) const {
+  if (access_ == nullptr) {
+    return true;
+  }
+  auto can_see = [&](const PropertyGraph::GraphElementTable& element_table) {
+    if (const Table* table = default_schema_->FindTable(element_table.name());
+        table != nullptr) {
+      return CanSeeTable(table);
+    }
+    const View* view = default_schema_->FindView(element_table.name());
+    return view != nullptr && CanSeeView(view);
+  };
+  return absl::c_all_of(property_graph->NodeTables(), can_see) &&
+         absl::c_all_of(property_graph->EdgeTables(), can_see);
+}
+
+// The role views list the effective roles of the role.
+bool InformationSchemaCatalog::CanSeeRole(absl::string_view role) const {
+  return access_ == nullptr || access_->IsEffectiveRole(role);
+}
+
+bool InformationSchemaCatalog::CanSeeGrantee(absl::string_view grantee,
+                                             bool include_public) const {
+  return access_ == nullptr ||
+         (access_->IsEffectiveRole(grantee) &&
+          (include_public || !absl::EqualsIgnoreCase(grantee, kPublicRole)));
+}
+
+std::unique_ptr<QueryableChangeStreamTvf>
+InformationSchemaCatalog::CreateReadFunction(
+    const ChangeStream* change_stream) {
+  absl::StatusOr<std::unique_ptr<QueryableChangeStreamTvf>> read_function =
+      QueryableChangeStreamTvf::Create(
+          change_stream->tvf_name(), MakeGoogleSqlAnalyzerOptions(), this,
+          type_factory(), /*is_pg=*/dialect_ == DatabaseDialect::POSTGRESQL,
+          /*is_mutable_key_range=*/change_stream->partition_mode() ==
+              kChangeStreamPartitionModeMutableKeyRange);
+  ABSL_CHECK_OK(read_function.status());  // crash ok
+  return *std::move(read_function);
 }
 
 void InformationSchemaCatalog::AddProtoBundleToSchemataTable() {
@@ -869,6 +1119,34 @@ void InformationSchemaCatalog::FillDatabaseOptionsTable() {
     rows.push_back(GetRowFromRowKVs(table, specific_kvs));
   }
 
+  if (default_schema_->options() != nullptr) {
+    for (const ddl::SetOption& option : default_schema_->options()->options()) {
+      if (!option.has_string_value()) {
+        continue;
+      }
+      std::string name = option.option_name();
+      if (name == "spanner.internal.cloud_default_leader") {
+        name = "default_leader";
+      } else if (name == "spanner.internal.cloud_witness_location") {
+        name = "witness_location";
+      } else if (name == "spanner.internal.read_lease_labels") {
+        name = "read_lease_regions";
+      }
+      if (name != "default_leader" && name != "witness_location" &&
+          name != "read_lease_regions") {
+        continue;
+      }
+      specific_kvs.clear();
+      specific_kvs[kCatalogName] = DialectTableCatalog();
+      specific_kvs[kSchemaName] = DialectDefaultSchema();
+      specific_kvs[kOptionType] = String(
+          dialect_ == DatabaseDialect::POSTGRESQL ? kCharacterVarying : kString);
+      specific_kvs[kOptionName] = String(name);
+      specific_kvs[kOptionValue] = String(option.string_value());
+      rows.push_back(GetRowFromRowKVs(table, specific_kvs));
+    }
+  }
+
   table->SetContents(rows);
 }
 
@@ -886,6 +1164,9 @@ void InformationSchemaCatalog::FillTablesTable() {
   // Add table rows.
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Table* table : default_schema_->tables()) {
+    if (!CanSeeTable(table)) {
+      continue;
+    }
     absl::flat_hash_map<std::string, googlesql::Value> specific_kvs;
     if (dialect_ == DatabaseDialect::POSTGRESQL) {
       googlesql::Value row_deletion_policy_value = NullString();
@@ -941,6 +1222,9 @@ void InformationSchemaCatalog::FillTablesTable() {
   }
 
   for (const View* view : default_schema_->views()) {
+    if (!CanSeeView(view)) {
+      continue;
+    }
     absl::flat_hash_map<std::string, googlesql::Value> specific_kvs;
     const auto& [schema_part, name_part] =
         GetSchemaAndNameForInformationSchema(view->Name());
@@ -1073,6 +1357,10 @@ void InformationSchemaCatalog::FillColumnsTable() {
   for (const Table* table : default_schema_->tables()) {
     int pos = 1;
     for (const Column* column : table->columns()) {
+      if (!CanSeeColumn(column)) {
+        ++pos;
+        continue;
+      }
       if (dialect_ == DatabaseDialect::POSTGRESQL) {
         specific_kvs[kColumnDefault] =
             column->has_default_value() && !column->is_identity_column()
@@ -1181,6 +1469,9 @@ void InformationSchemaCatalog::FillColumnsTable() {
 
   // Add columns for views.
   for (const View* view : default_schema_->views()) {
+    if (!CanSeeView(view)) {
+      continue;
+    }
     int pos = 1;
     for (const View::Column& column : view->columns()) {
       if (dialect_ == DatabaseDialect::POSTGRESQL) {
@@ -1366,6 +1657,9 @@ void InformationSchemaCatalog::FillIndexesTable() {
 
     // Add normal indexes.
     for (const Index* index : table->indexes()) {
+      if (!CanSeeIndex(table, index, /*table_delete_suffices=*/true)) {
+        continue;
+      }
       rows.push_back({
           // table_catalog
           DialectTableCatalog(),
@@ -1407,6 +1701,10 @@ void InformationSchemaCatalog::FillIndexesTable() {
     }
 
     // Add the primary key index.
+    if (!CanSeeIndex(table, /*index=*/nullptr,
+                     /*table_delete_suffices=*/true)) {
+      continue;
+    }
     rows.push_back({
         // table_catalog
         DialectTableCatalog(),
@@ -1502,6 +1800,9 @@ void InformationSchemaCatalog::FillIndexColumnsTable() {
         GetSchemaAndNameForInformationSchema(table->Name());
     // Add normal indexes.
     for (const Index* index : table->indexes()) {
+      if (!CanSeeIndex(table, index, /*table_delete_suffices=*/false)) {
+        continue;
+      }
       int pos = 1;
       // Add key columns.
       for (const KeyColumn* key_column : index->key_columns()) {
@@ -1613,7 +1914,8 @@ void InformationSchemaCatalog::FillIndexColumnsTable() {
     }
 
     // Add the primary key columns.
-    {
+    if (CanSeeIndex(table, /*index=*/nullptr,
+                    /*table_delete_suffices=*/false)) {
       int pos = 1;
       for (const KeyColumn* key_column : table->primary_key()) {
         rows.push_back({
@@ -1703,6 +2005,9 @@ void InformationSchemaCatalog::FillColumnOptionsTable() {
     const auto& [schema_part, table_name_part] =
         GetSchemaAndNameForInformationSchema(table->Name());
     for (const Column* column : table->columns()) {
+      if (!CanSeeColumn(column)) {
+        continue;
+      }
       if (column->allows_commit_timestamp()) {
         std::vector<googlesql::Value> row = {
             // table_catalog
@@ -2335,6 +2640,10 @@ void InformationSchemaCatalog::FillKeyColumnUsageTable() {
     // Add the primary key columns.
     int table_ordinal = 1;
     for (const auto* key_column : table->primary_key()) {
+      if (!CanSeeColumn(key_column->column())) {
+        ++table_ordinal;
+        continue;
+      }
       rows.push_back({
           // constraint_catalog
           DialectTableCatalog(),
@@ -2362,6 +2671,10 @@ void InformationSchemaCatalog::FillKeyColumnUsageTable() {
       // Add the foreign key referencing columns.
       int foreign_key_ordinal = 1;
       for (const auto* column : foreign_key->referencing_columns()) {
+        if (!CanSeeColumn(column)) {
+          ++foreign_key_ordinal;
+          continue;
+        }
         rows.push_back({
             // constraint_catalog
             DialectTableCatalog(),
@@ -2393,6 +2706,10 @@ void InformationSchemaCatalog::FillKeyColumnUsageTable() {
         int index_ordinal = 1;
         for (const auto* key_column :
              foreign_key->referenced_index()->key_columns()) {
+          if (!CanSeeColumn(key_column->column())) {
+            ++index_ordinal;
+            continue;
+          }
           rows.push_back({
               // constraint_catalog
               DialectTableCatalog(),
@@ -2669,6 +2986,9 @@ void InformationSchemaCatalog::FillViewsTable() {
   std::vector<std::vector<googlesql::Value>> rows;
   absl::flat_hash_map<std::string, googlesql::Value> specific_kvs;
   for (const View* view : default_schema_->views()) {
+    if (!CanSeeView(view)) {
+      continue;
+    }
     const auto& [view_schema_part, view_name_part] =
         GetSchemaAndNameForInformationSchema(view->Name());
     specific_kvs[kTableCatalog] = DialectTableCatalog();
@@ -2701,6 +3021,9 @@ void InformationSchemaCatalog::FillChangeStreamsTable() {
   std::vector<std::vector<googlesql::Value>> rows;
   absl::flat_hash_map<std::string, googlesql::Value> specific_kvs;
   for (const ChangeStream* change_stream : default_schema_->change_streams()) {
+    if (!CanSeeChangeStream(change_stream)) {
+      continue;
+    }
     rows.push_back({// change_stream_catalog
                     DialectTableCatalog(),
                     // change_stream_schema
@@ -2726,8 +3049,9 @@ void InformationSchemaCatalog::FillChangeStreamColumnsTable() {
       tables_by_name_.at(GetNameForDialect(kChangeStreamColumns)).get();
   std::vector<std::vector<googlesql::Value>> rows;
   for (const ChangeStream* change_stream : default_schema_->change_streams()) {
-    // Skip change streams tracking the entire database.
-    if (change_stream->track_all()) {
+    // Skip change streams tracking the entire database or hidden from the
+    // role.
+    if (change_stream->track_all() || !CanSeeChangeStream(change_stream)) {
       continue;
     }
     for (const auto& table_to_columns :
@@ -2782,6 +3106,9 @@ void InformationSchemaCatalog::FillChangeStreamOptionsTable() {
                                 ? "character varying"
                                 : "STRING";
   for (const ChangeStream* change_stream : default_schema_->change_streams()) {
+    if (!CanSeeChangeStream(change_stream)) {
+      continue;
+    }
     if (change_stream->retention_period().has_value()) {
       rows.push_back({
           // change_stream_catalog
@@ -2847,8 +3174,9 @@ void InformationSchemaCatalog::FillChangeStreamTablesTable() {
       tables_by_name_.at(GetNameForDialect(kChangeStreamTables)).get();
   std::vector<std::vector<googlesql::Value>> rows;
   for (const ChangeStream* change_stream : default_schema_->change_streams()) {
-    // Skip change streams tracking the entire database.
-    if (change_stream->track_all()) {
+    // Skip change streams tracking the entire database or hidden from the
+    // role.
+    if (change_stream->track_all() || !CanSeeChangeStream(change_stream)) {
       continue;
     }
     for (const auto& table_to_columns :
@@ -2893,6 +3221,9 @@ void InformationSchemaCatalog::FillSequencesTable() {
   auto sequences = tables_by_name_.at(GetNameForDialect(kSequences)).get();
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Sequence* sequence : default_schema_->user_visible_sequences()) {
+    if (!CanSeeSequence(sequence)) {
+      continue;
+    }
     const auto& [sequence_schema_part, sequence_name_part] =
         GetSchemaAndNameForInformationSchema(sequence->Name());
     if (dialect_ == DatabaseDialect::POSTGRESQL) {
@@ -2961,6 +3292,9 @@ void InformationSchemaCatalog::FillSequenceOptionsTable() {
       tables_by_name_.at(GetNameForDialect(kSequenceOptions)).get();
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Sequence* sequence : default_schema_->user_visible_sequences()) {
+    if (!CanSeeSequence(sequence)) {
+      continue;
+    }
     const auto& [sequence_schema_part, sequence_name_part] =
         GetSchemaAndNameForInformationSchema(sequence->Name());
     rows.push_back(
@@ -3029,6 +3363,9 @@ void InformationSchemaCatalog::FillModelsTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Model* model : default_schema_->models()) {
+    if (!CanSeeModel(model)) {
+      continue;
+    }
     const auto& [model_schema_part, model_name_part] =
         GetSchemaAndNameForInformationSchema(model->Name());
     rows.push_back({
@@ -3053,6 +3390,9 @@ void InformationSchemaCatalog::FillModelOptionsTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Model* model : default_schema_->models()) {
+    if (!CanSeeModel(model)) {
+      continue;
+    }
     const auto& [model_schema_part, model_name_part] =
         GetSchemaAndNameForInformationSchema(model->Name());
     if (model->default_batch_size().has_value()) {
@@ -3121,6 +3461,9 @@ void InformationSchemaCatalog::FillModelColumnsTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Model* model : default_schema_->models()) {
+    if (!CanSeeModel(model)) {
+      continue;
+    }
     for (int i = 0; i < model->input().size(); ++i) {
       FillModelColumnsTable(*model, model->input().at(i), "INPUT", i + 1,
                             &rows);
@@ -3167,6 +3510,9 @@ void InformationSchemaCatalog::FillModelColumnOptionsTable() {
 
   std::vector<std::vector<googlesql::Value>> rows;
   for (const Model* model : default_schema_->models()) {
+    if (!CanSeeModel(model)) {
+      continue;
+    }
     for (int i = 0; i < model->input().size(); ++i) {
       FillModelColumnOptionsTable(*model, model->input().at(i), "INPUT", &rows);
     }
@@ -3227,8 +3573,6 @@ void InformationSchemaCatalog::FillLocalityGroupOptionsTable() {
           // A SQL identifier that uniquely identifies the option. This is the
           // key of the OPTIONS clause in SDL.
           String(option.option_name()),
-          // A data type name that is the type of this option value.
-          String(option.has_bool_value() ? kBool : kStringList),
           // A SQL literal describing the value of this option. The value of
           // this column should be re-parseable as part of a query.
           ParseLocalityGroupOptions(option),
@@ -3288,6 +3632,9 @@ void InformationSchemaCatalog::FillPropertyGraphsTable() {
   std::vector<std::vector<googlesql::Value>> rows;
   for (const PropertyGraph* property_graph :
        default_schema_->property_graphs()) {
+    if (!CanSeePropertyGraph(property_graph)) {
+      continue;
+    }
     const auto& [property_graph_schema_part, property_graph_name_part] =
         GetSchemaAndNameForInformationSchema(property_graph->Name());
     std::string property_graph_json;
@@ -3307,6 +3654,360 @@ void InformationSchemaCatalog::FillPropertyGraphsTable() {
     });
   }
   tables_by_name_.at(GetNameForDialect(kPropertyGraphs))->SetContents(rows);
+}
+
+// Fills ROLES (enabled_roles for PostgreSQL) with the system roles and the
+// roles created in the database. PostgreSQL does not list the public role.
+void InformationSchemaCatalog::FillRolesTable() {
+  const bool is_pg = dialect_ == DatabaseDialect::POSTGRESQL;
+  auto roles =
+      tables_by_name_.at(GetNameForDialect(is_pg ? kEnabledRoles : kRoles))
+          .get();
+  std::vector<std::vector<googlesql::Value>> rows;
+  auto add_role = [&](absl::string_view name, bool is_system) {
+    if (CanSeeRole(name)) {
+      rows.push_back({
+          // role_name
+          String(name),
+          // is_system
+          DialectBoolValue(is_system),
+      });
+    }
+  };
+  if (!is_pg) {
+    add_role(kPublicRole, /*is_system=*/true);
+  }
+  add_role(kSpannerInfoReaderRole, /*is_system=*/true);
+  add_role(kSpannerSysReaderRole, /*is_system=*/true);
+  for (const Role* role : default_schema_->roles()) {
+    add_role(role->Name(), /*is_system=*/false);
+  }
+  roles->SetContents(rows);
+}
+
+// Fills ROLE_GRANTEES (applicable_roles for PostgreSQL) with the granted role
+// memberships. The implicit membership of every role in public is not listed.
+void InformationSchemaCatalog::FillRoleGranteesTable() {
+  auto role_grantees =
+      tables_by_name_
+          .at(GetNameForDialect(dialect_ == DatabaseDialect::POSTGRESQL
+                                    ? kApplicableRoles
+                                    : kRoleGrantees))
+          .get();
+  std::vector<std::vector<googlesql::Value>> rows;
+  for (const Grants::Membership& membership : Memberships(default_schema_)) {
+    if (CanSeeRole(membership.member)) {
+      rows.push_back(GetRowFromRowKVsOrNull(
+          role_grantees, {{kRoleName, String(membership.role)},
+                          {kGrantee, String(membership.member)},
+                          {kIsGrantable, String(kNo)}}));
+    }
+  }
+  role_grantees->SetContents(rows);
+}
+
+void InformationSchemaCatalog::FillPrivilegeTable(
+    absl::string_view table_name,
+    absl::Span<const PrivilegeRow> privilege_rows, PrivilegeFilter filter) {
+  auto table = tables_by_name_.at(GetNameForDialect(table_name)).get();
+  std::vector<std::vector<googlesql::Value>> rows;
+  for (const PrivilegeRow& row : privilege_rows) {
+    const bool visible =
+        filter == PrivilegeFilter::kVisibleObject
+            ? row.object_visible
+            : CanSeeGrantee(row.grantee,
+                            filter == PrivilegeFilter::kEffectiveGrantee);
+    if (visible) {
+      rows.push_back(GetRowFromRowKVsOrNull(table, row.values));
+    }
+  }
+  table->SetContents(rows);
+}
+
+// Fills TABLE_PRIVILEGES and ROLE_TABLE_GRANTS with the privileges granted on
+// whole tables and views. GoogleSQL filters TABLE_PRIVILEGES by table, and
+// PostgreSQL by grantee.
+void InformationSchemaCatalog::FillTablePrivilegesTables() {
+  std::vector<PrivilegeRow> rows;
+  for (const Grants::Privilege& privilege : Privileges(default_schema_)) {
+    bool object_visible;
+    if (privilege.object_type == ddl::PrivilegeTarget::TABLE &&
+        privilege.column == nullptr) {
+      object_visible =
+          CanSeeTablePrivileges(privilege.object->As<const Table>());
+    } else if (privilege.object_type == ddl::PrivilegeTarget::VIEW) {
+      object_visible = CanSeeView(privilege.object->As<const View>());
+    } else {
+      continue;
+    }
+    const auto& [schema_part, name_part] =
+        GetSchemaAndNameForInformationSchema(PrivilegeObjectName(privilege));
+    PrivilegeRow row{PrivilegeValues(privilege), privilege.grantee,
+                     object_visible};
+    row.values[kTableCatalog] = DialectTableCatalog();
+    row.values[kTableSchema] = String(schema_part);
+    row.values[kTableName] = String(name_part);
+    rows.push_back(std::move(row));
+  }
+  FillPrivilegeTable(kTablePrivileges, rows,
+                     dialect_ == DatabaseDialect::POSTGRESQL
+                         ? PrivilegeFilter::kEffectiveGrantee
+                         : PrivilegeFilter::kVisibleObject);
+  FillPrivilegeTable(kRoleTableGrants, rows,
+                     PrivilegeFilter::kEffectiveGranteeExceptPublic);
+}
+
+// Fills COLUMN_PRIVILEGES and ROLE_COLUMN_GRANTS with the privileges granted on
+// columns. A SELECT, INSERT or UPDATE privilege on a whole table or view is
+// listed for each of its columns. GoogleSQL filters COLUMN_PRIVILEGES by
+// column, and PostgreSQL by grantee.
+void InformationSchemaCatalog::FillColumnPrivilegesTables() {
+  std::vector<PrivilegeRow> rows;
+  // A column may hold a privilege both on its own and through its table.
+  absl::flat_hash_set<std::tuple<const SchemaNode*, std::string, int,
+                                 std::string>>
+      listed;
+  auto add_row = [&](const Grants::Privilege& privilege,
+                     absl::string_view column_name, bool object_visible) {
+    if (!listed
+             .insert({privilege.object, std::string(column_name),
+                      privilege.type, absl::AsciiStrToLower(privilege.grantee)})
+             .second) {
+      return;
+    }
+    const auto& [schema_part, name_part] =
+        GetSchemaAndNameForInformationSchema(PrivilegeObjectName(privilege));
+    PrivilegeRow row{PrivilegeValues(privilege), privilege.grantee,
+                     object_visible};
+    row.values[kTableCatalog] = DialectTableCatalog();
+    row.values[kTableSchema] = String(schema_part);
+    row.values[kTableName] = String(name_part);
+    row.values[kColumnName] = String(column_name);
+    rows.push_back(std::move(row));
+  };
+  for (const Grants::Privilege& privilege : Privileges(default_schema_)) {
+    if (privilege.type == ddl::Privilege::DELETE) {
+      continue;
+    }
+    if (privilege.object_type == ddl::PrivilegeTarget::TABLE) {
+      if (privilege.column != nullptr) {
+        add_row(privilege, privilege.column->Name(),
+                CanSeeColumn(privilege.column));
+        continue;
+      }
+      for (const Column* column :
+           privilege.object->As<const Table>()->columns()) {
+        add_row(privilege, column->Name(), CanSeeColumn(column));
+      }
+    } else if (privilege.object_type == ddl::PrivilegeTarget::VIEW) {
+      const View* view = privilege.object->As<const View>();
+      for (const View::Column& column : view->columns()) {
+        add_row(privilege, column.name, CanSeeView(view));
+      }
+    }
+  }
+  FillPrivilegeTable(kColumnPrivileges, rows,
+                     dialect_ == DatabaseDialect::POSTGRESQL
+                         ? PrivilegeFilter::kEffectiveGrantee
+                         : PrivilegeFilter::kVisibleObject);
+  FillPrivilegeTable(kRoleColumnGrants, rows,
+                     PrivilegeFilter::kEffectiveGranteeExceptPublic);
+}
+
+// Fills CHANGE_STREAM_PRIVILEGES and ROLE_CHANGE_STREAM_GRANTS.
+void InformationSchemaCatalog::FillChangeStreamPrivilegesTables() {
+  std::vector<PrivilegeRow> rows;
+  for (const Grants::Privilege& privilege : Privileges(default_schema_)) {
+    if (privilege.object_type != ddl::PrivilegeTarget::CHANGE_STREAM) {
+      continue;
+    }
+    PrivilegeRow row{PrivilegeValues(privilege), privilege.grantee};
+    row.values[kChangeStreamCatalog] = DialectTableCatalog();
+    row.values[kChangeStreamSchema] = DialectDefaultSchema();
+    row.values[kChangeStreamName] = String(PrivilegeObjectName(privilege));
+    rows.push_back(std::move(row));
+  }
+  FillPrivilegeTable(kChangeStreamPrivileges, rows,
+                     PrivilegeFilter::kEffectiveGrantee);
+  FillPrivilegeTable(kRoleChangeStreamGrants, rows,
+                     PrivilegeFilter::kEffectiveGranteeExceptPublic);
+}
+
+// Fills ROUTINE_PRIVILEGES and ROLE_ROUTINE_GRANTS with the privileges granted
+// on change stream read functions.
+void InformationSchemaCatalog::FillRoutinePrivilegesTables() {
+  std::vector<PrivilegeRow> rows;
+  for (const Grants::Privilege& privilege : Privileges(default_schema_)) {
+    if (privilege.object_type != ddl::PrivilegeTarget::TABLE_FUNCTION) {
+      continue;
+    }
+    PrivilegeRow row{PrivilegeValues(privilege), privilege.grantee};
+    row.values[kSpecificCatalog] = DialectTableCatalog();
+    row.values[kSpecificSchema] = DialectDefaultSchema();
+    row.values[kSpecificName] = String(PrivilegeObjectName(privilege));
+    row.values[kRoutineCatalog] = DialectTableCatalog();
+    row.values[kRoutineSchema] = DialectDefaultSchema();
+    row.values[kRoutineName] = String(PrivilegeObjectName(privilege));
+    rows.push_back(std::move(row));
+  }
+  FillPrivilegeTable(kRoutinePrivileges, rows,
+                     PrivilegeFilter::kEffectiveGrantee);
+  FillPrivilegeTable(kRoleRoutineGrants, rows,
+                     PrivilegeFilter::kEffectiveGranteeExceptPublic);
+}
+
+// Fills MODEL_PRIVILEGES and ROLE_MODEL_GRANTS, which only GoogleSQL has.
+void InformationSchemaCatalog::FillModelPrivilegesTables() {
+  if (dialect_ == DatabaseDialect::POSTGRESQL) {
+    return;
+  }
+  std::vector<PrivilegeRow> rows;
+  for (const Grants::Privilege& privilege : Privileges(default_schema_)) {
+    if (privilege.object_type != ddl::PrivilegeTarget::MODEL) {
+      continue;
+    }
+    const auto& [schema_part, name_part] =
+        GetSchemaAndNameForInformationSchema(PrivilegeObjectName(privilege));
+    PrivilegeRow row{PrivilegeValues(privilege), privilege.grantee,
+                     CanSeeModel(privilege.object->As<const Model>())};
+    row.values[kModelCatalog] = DialectTableCatalog();
+    row.values[kModelSchema] = String(schema_part);
+    row.values[kModelName] = String(name_part);
+    rows.push_back(std::move(row));
+  }
+  FillPrivilegeTable(kModelPrivileges, rows, PrivilegeFilter::kVisibleObject);
+  FillPrivilegeTable(kRoleModelGrants, rows,
+                     PrivilegeFilter::kEffectiveGranteeExceptPublic);
+}
+
+// Fills ROUTINES and PARAMETERS with the change stream read functions and, for
+// PostgreSQL, the user-defined functions.
+void InformationSchemaCatalog::FillRoutinesAndParametersTables() {
+  auto routines = tables_by_name_.at(GetNameForDialect(kRoutines)).get();
+  auto parameters = tables_by_name_.at(GetNameForDialect(kParameters)).get();
+  std::vector<std::vector<googlesql::Value>> routine_rows;
+  std::vector<std::vector<googlesql::Value>> parameter_rows;
+  auto data_type = [&](const googlesql::Type* type) {
+    return dialect_ == DatabaseDialect::POSTGRESQL
+               ? PGDataType(type)
+               : GetSpannerType(type, std::nullopt);
+  };
+  // Adds the rows of a function. `routine_values` holds the ROUTINES values
+  // that depend on the kind of function.
+  auto add_routine =
+      [&](const std::string& full_name,
+          const googlesql::FunctionSignature& signature,
+          absl::flat_hash_map<std::string, googlesql::Value> routine_values) {
+        const auto& [schema_part, name_part] =
+            GetSchemaAndNameForInformationSchema(full_name);
+        routine_values[kSpecificCatalog] = DialectTableCatalog();
+        routine_values[kSpecificSchema] = String(schema_part);
+        routine_values[kSpecificName] = String(name_part);
+        routine_values[kRoutineCatalog] = DialectTableCatalog();
+        routine_values[kRoutineSchema] = String(schema_part);
+        routine_values[kRoutineName] = String(name_part);
+        routine_values[kRoutineType] = String(kFunction);
+        routine_values[kSecurityType] = String(kInvoker);
+        routine_rows.push_back(
+            GetRowFromRowKVsOrNull(routines, routine_values));
+        for (int i = 0; i < signature.arguments().size(); ++i) {
+          const googlesql::FunctionArgumentType& argument =
+              signature.argument(i);
+          parameter_rows.push_back(GetRowFromRowKVsOrNull(
+              parameters,
+              {{kSpecificCatalog, DialectTableCatalog()},
+               {kSpecificSchema, String(schema_part)},
+               {kSpecificName, String(name_part)},
+               {kOrdinalPosition, Int64(i + 1)},
+               {kParameterName, argument.has_argument_name()
+                                    ? String(argument.argument_name())
+                                    : NullString()},
+               {kDataType, data_type(argument.type())},
+               {kSpannerType, GetSpannerType(argument.type(), std::nullopt)}}));
+        }
+      };
+
+  for (const ChangeStream* change_stream : default_schema_->change_streams()) {
+    if (!CanSeeRoutine(change_stream)) {
+      continue;
+    }
+    std::unique_ptr<QueryableChangeStreamTvf> read_function =
+        CreateReadFunction(change_stream);
+    const googlesql::TVFSchemaColumn output =
+        read_function->result_schema().column(0);
+    const googlesql::Value spanner_type =
+        GetSpannerType(output.type, std::nullopt);
+    // Read functions are built in, so their body is not SQL. A GoogleSQL read
+    // function returns a table with one column of change records, and a
+    // PostgreSQL one returns a set of change records.
+    add_routine(change_stream->tvf_name(), *read_function->GetSignature(0),
+                {{kRoutineBody, String(kExternal)},
+                 {kRoutineDefinition, String("")},
+                 {kDataType, dialect_ == DatabaseDialect::POSTGRESQL
+                                 ? PGDataType(output.type)
+                                 : String(absl::StrCat(
+                                       "TABLE<", output.name, " ",
+                                       spanner_type.string_value(), ">"))},
+                 {kSpannerType, spanner_type}});
+  }
+
+  if (dialect_ == DatabaseDialect::POSTGRESQL) {
+    for (const Udf* udf : default_schema_->udfs()) {
+      if (!CanSeeRoutine(udf)) {
+        continue;
+      }
+      const googlesql::Type* type = udf->signature()->result_type().type();
+      add_routine(udf->Name(), *udf->signature(),
+                  {{kRoutineBody, String(kSql)},
+                   {kRoutineDefinition,
+                    String(udf->body_origin().value_or(udf->body()))},
+                   {kDataType, PGDataType(type)},
+                   {kSpannerType, GetSpannerType(type, std::nullopt)},
+                   {kSpannerDeterminism, UdfDeterminism(udf)}});
+    }
+  }
+
+  routines->SetContents(routine_rows);
+  parameters->SetContents(parameter_rows);
+}
+
+// Fills TABLE_SYNONYMS with the synonym of each table that has one.
+void InformationSchemaCatalog::FillTableSynonymsTable() {
+  std::vector<std::vector<googlesql::Value>> rows;
+  for (const Table* table : default_schema_->tables()) {
+    if (table->synonym().empty()) {
+      continue;
+    }
+    const auto& [table_schema_part, table_name_part] =
+        GetSchemaAndNameForInformationSchema(table->Name());
+    const auto& [synonym_schema_part, synonym_name_part] =
+        GetSchemaAndNameForInformationSchema(table->synonym());
+    rows.push_back({
+        // table_catalog
+        DialectTableCatalog(),
+        // table_schema
+        String(table_schema_part),
+        // table_name
+        String(table_name_part),
+        // synonym_catalog
+        DialectTableCatalog(),
+        // synonym_schema
+        String(synonym_schema_part),
+        // synonym_table_name
+        String(synonym_name_part),
+    });
+  }
+  tables_by_name_.at(GetNameForDialect(kTableSynonyms))->SetContents(rows);
+}
+
+// Fills the PostgreSQL information_schema_catalog_name table, whose one row
+// holds the database name.
+void InformationSchemaCatalog::FillInformationSchemaCatalogNameTable() {
+  if (dialect_ != DatabaseDialect::POSTGRESQL) {
+    return;
+  }
+  tables_by_name_.at(GetNameForDialect(kInformationSchemaCatalogName))
+      ->SetContents({{DialectTableCatalog()}});
 }
 
 }  // namespace backend

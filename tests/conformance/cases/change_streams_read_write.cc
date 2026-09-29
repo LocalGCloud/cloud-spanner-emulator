@@ -1185,9 +1185,9 @@ TEST_F(ChangeStreamTest, SingleInsertDMLVerifyDataChangeRecordContent) {
                })pb"));
 }
 
-// Columns not populated in DML are inserted with null values on emulator while
-// not in production, so this test is disabled.
-TEST_F(ChangeStreamTest, DISABLED_MultipleDMLVerifyDataChangeRecordContent) {
+// A DML UPDATE records only the key and the SET columns, like the equivalent
+// Update mutation, not every tracked column of the row.
+TEST_F(ChangeStreamTest, MultipleDMLVerifyDataChangeRecordContent) {
   // Insert a row with UserId only and then update the row with a age value.
   GOOGLESQL_EXPECT_OK(CommitDml({SqlStatement("INSERT INTO Users (UserId) VALUES (1)")}));
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(
@@ -1237,6 +1237,54 @@ TEST_F(ChangeStreamTest, DISABLED_MultipleDMLVerifyDataChangeRecordContent) {
                            values { string_value: "{\"UserId\":\"1\"}" }
                            values { string_value: "{\"Age\":\"20\"}" }
                            values { string_value: "{}" }
+                         }
+                       })pb"));
+}
+
+TEST_F(ChangeStreamTest, DmlUpdateOldAndNewValuesRecordsOnlySetColumns) {
+  GOOGLESQL_EXPECT_OK(CommitDml({SqlStatement(
+      "INSERT INTO Users (UserId, Name, Age) VALUES (1, 'name1', 10)")}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto commit_result,
+      CommitDml({SqlStatement(
+          "UPDATE Users SET Name = 'name1Update' WHERE UserId = 1")}));
+  Timestamp commit_timestamp = commit_result.commit_timestamp;
+  absl::Time query_start_time = commit_timestamp.get<absl::Time>().value();
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto data_change_records,
+      GetDataRecordsFromStartToNow(query_start_time, "StreamAll"));
+  ASSERT_EQ(data_change_records.size(), 1);
+  DataChangeRecord record = data_change_records[0];
+  EXPECT_EQ(record.table_name.string_value(), "Users");
+  EXPECT_EQ(record.mod_type.string_value(), "UPDATE");
+  EXPECT_EQ(record.value_capture_type.string_value(), "OLD_AND_NEW_VALUES");
+  // Age is tracked but was not SET, so it appears in neither the column types
+  // nor the old or new values.
+  EXPECT_THAT(record.column_types,
+              test::EqualsProto(
+                  R"pb(values {
+                         list_value {
+                           values { string_value: "UserId" }
+                           values { string_value: "{\"code\":\"INT64\"}" }
+                           values { bool_value: true }
+                           values { string_value: "1" }
+                         }
+                       }
+                       values {
+                         list_value {
+                           values { string_value: "Name" }
+                           values { string_value: "{\"code\":\"STRING\"}" }
+                           values { bool_value: false }
+                           values { string_value: "2" }
+                         }
+                       })pb"));
+  EXPECT_THAT(record.mods,
+              test::EqualsProto(
+                  R"pb(values {
+                         list_value {
+                           values { string_value: "{\"UserId\":\"1\"}" }
+                           values { string_value: "{\"Name\":\"name1Update\"}" }
+                           values { string_value: "{\"Name\":\"name1\"}" }
                          }
                        })pb"));
 }
@@ -3438,14 +3486,9 @@ TEST_F(ChangeStreamTest, DiffDataTypes) {
                  }
                })pb"));
 }
-// TODO: This test should be re-enabled after the feature gap is
-// covered. Currently TransactionStore::BufferInsert always substitute the prior
-// DELETE row with the current inserted value, which leads to only 1
-// DataChangeRecord to be generated while in production 2 DataChangeRecords are
-// generated.
 // Single REPLACE is the same as DELETE + INSERT. Single replace to an existing
 // row generates 2 records (1 DELETE record and then 1 INSERT record)
-TEST_F(ChangeStreamTest, DISABLED_SingleReplaceExistingRow) {
+TEST_F(ChangeStreamTest, SingleReplaceExistingRow) {
   // Build the mutation for the 1st transaction
   auto mutation_builder_insert_users =
       InsertMutationBuilder("Users", {"UserId", "Name"});
@@ -3466,7 +3509,8 @@ TEST_F(ChangeStreamTest, DISABLED_SingleReplaceExistingRow) {
   // Commit the 2nd transaction
   absl::StatusOr<CommitResult> commit_result2 =
       Commit({replace_mutation_builder.Build()});
-  GOOGLESQL_EXPECT_OK(commit_result.status());
+  GOOGLESQL_ASSERT_OK(commit_result.status());
+  GOOGLESQL_ASSERT_OK(commit_result2.status());
   Timestamp commit_timestamp_replace = commit_result2->commit_timestamp;
   absl::Time query_start_time_replace =
       commit_timestamp_replace.get<absl::Time>().value();
@@ -3621,12 +3665,7 @@ TEST_F(ChangeStreamTest, DeleteInsertDeleteExistingRow) {
                 })pb"));
 }
 
-// TODO: This test should be re-enabled after the feature gap is
-// covered. Currently TransactionStore::BufferInsert always substitute the prior
-// DELETE row with the current inserted value, which leads to only 1
-// DataChangeRecord to be generated while in production 2 DataChangeRecords are
-// generated.
-TEST_F(ChangeStreamTest, DISABLED_ConsecutiveReplace) {
+TEST_F(ChangeStreamTest, ConsecutiveReplace) {
   // Build the mutation for the 1st transaction
   auto mutation_builder_insert_users =
       InsertMutationBuilder("Users", {"UserId", "Name"});
@@ -3647,7 +3686,8 @@ TEST_F(ChangeStreamTest, DISABLED_ConsecutiveReplace) {
   // Commit the 2nd transaction
   absl::StatusOr<CommitResult> commit_result2 =
       Commit({replace_mutation_builder.Build()});
-  GOOGLESQL_EXPECT_OK(commit_result.status());
+  GOOGLESQL_ASSERT_OK(commit_result.status());
+  GOOGLESQL_ASSERT_OK(commit_result2.status());
   Timestamp commit_timestamp_replace = commit_result2->commit_timestamp;
   absl::Time query_start_time_replace =
       commit_timestamp_replace.get<absl::Time>().value();
@@ -3940,12 +3980,8 @@ TEST_F(ChangeStreamTest, ModValuesOrderByAlphabeticalOrder) {
                        })pb"));
 }
 
-// TODO: This test should be re-enabled after the feature gap is
-// covered. The returned DataChangeRecords should be in the same order as
-// they're committed in the transaction. However, the ordered is messed up by
-// BufferWriteOp in transaction_store.
 TEST_F(ChangeStreamTest,
-       DISABLED_DataChangeRecordOrderForMultiTablesSameTransaction) {
+       DataChangeRecordSequenceForMultiTablesSameTransaction) {
   // INSERT transaction
   auto mutation_builder_insert_users =
       InsertMutationBuilder("Users", {"UserId", "Name", "Age"});
@@ -3963,7 +3999,7 @@ TEST_F(ChangeStreamTest,
   absl::StatusOr<CommitResult> commit_result_insert =
       Commit({mutation_builder_insert_users.Build(),
               mutation_builder_insert_accounts.Build()});
-  GOOGLESQL_EXPECT_OK(commit_result_insert.status());
+  GOOGLESQL_ASSERT_OK(commit_result_insert.status());
   Timestamp commit_timestamp_insert = commit_result_insert->commit_timestamp;
   absl::Time query_start_time_insert =
       commit_timestamp_insert.get<absl::Time>().value();
@@ -3971,10 +4007,12 @@ TEST_F(ChangeStreamTest,
       auto data_change_records,
       GetDataRecordsFromStartToNow(query_start_time_insert, "StreamAll"));
   ASSERT_EQ(data_change_records.size(), 2);
-  DataChangeRecord users_record = data_change_records[0];
-  DataChangeRecord accounts_record = data_change_records[1];
-  EXPECT_EQ(users_record.table_name.string_value(), "Users");
-  EXPECT_EQ(accounts_record.table_name.string_value(), "Accounts");
+  EXPECT_THAT(
+      std::vector<std::string>({data_change_records[0].table_name.string_value(),
+                                data_change_records[1].table_name.string_value()}),
+      testing::UnorderedElementsAre("Users", "Accounts"));
+  EXPECT_LT(data_change_records[0].record_sequence.string_value(),
+            data_change_records[1].record_sequence.string_value());
 }
 
 TEST_F(ChangeStreamTest, GeneratedColumnsAreNotPopulatedInInsert) {

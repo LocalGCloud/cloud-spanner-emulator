@@ -164,7 +164,7 @@ key_column_usage,table_name,YES,character varying
 key_column_usage,column_name,YES,character varying
 key_column_usage,ordinal_position,YES,bigint
 key_column_usage,position_in_unique_constraint,YES,bigint
-locality_group_name,locality_group_name,YES,character varying
+locality_group_options,locality_group_name,YES,character varying
 locality_group_options,option_name,YES,character varying
 locality_group_options,option_value,YES,character varying
 parameters,specific_catalog,YES,character varying
@@ -199,6 +199,7 @@ parameters,scope_name,YES,character varying
 parameters,maximum_cardinality,YES,bigint
 parameters,dtd_identifier,YES,character varying
 parameters,parameter_default,YES,character varying
+parameters,spanner_type,YES,character varying
 placement_options,placement_name,YES,character varying
 placement_options,option_name,YES,character varying
 placement_options,option_type,YES,character varying
@@ -346,6 +347,8 @@ routines,result_cast_scope_schema,YES,character varying
 routines,result_cast_scope_name,YES,character varying
 routines,result_cast_maximum_cardinality,YES,bigint
 routines,result_cast_dtd_identifier,YES,character varying
+routines,spanner_type,YES,character varying
+routines,spanner_determinism,YES,character varying
 schemata,catalog_name,YES,character varying
 schemata,schema_name,YES,character varying
 schemata,schema_owner,YES,character varying
@@ -392,6 +395,12 @@ table_privileges,table_name,YES,character varying
 table_privileges,privilege_type,YES,character varying
 table_privileges,is_grantable,YES,character varying
 table_privileges,with_hierarchy,YES,character varying
+table_synonyms,catalog,YES,character varying
+table_synonyms,schema,YES,character varying
+table_synonyms,table_name,YES,character varying
+table_synonyms,synonym_catalog,YES,character varying
+table_synonyms,synonym_schema,YES,character varying
+table_synonyms,synonym_table_name,YES,character varying
 tables,table_catalog,YES,character varying
 tables,table_schema,YES,character varying
 tables,table_name,YES,character varying

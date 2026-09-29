@@ -49,6 +49,7 @@
 #include "backend/query/search/search_substring_evaluator.h"
 #include "backend/query/search/snippet_evaluator.h"
 #include "backend/query/search/substring_tokenizer.h"
+#include "backend/query/search/tokenizer.h"
 #include "backend/query/search/tokenlist_concat.h"
 #include "googlesql/base/status_macros.h"
 #include "third_party/spanner_pg/datatypes/extended/pg_jsonb_type.h"
@@ -115,6 +116,9 @@ constexpr char kTokenizeJsonFunctionName[] = "tokenize_json";
 
 // Function name for tokenizing jsonb.
 constexpr char kTokenizeJsonbFunctionName[] = "tokenize_jsonb";
+
+// Function name for displaying the tokens in a TOKENLIST.
+constexpr char kDebugTokenlistFunctionName[] = "debug_tokenlist";
 
 googlesql::FunctionArgumentTypeOptions GetArgumentTypeOptions(
     absl::string_view arg_name,
@@ -455,6 +459,35 @@ std::unique_ptr<googlesql::Function> TokenlistConcatFunction(
       function_options);
 }
 
+absl::StatusOr<googlesql::Value> EvalDebugTokenlist(
+    absl::Span<const googlesql::Value> args) {
+  GOOGLESQL_RET_CHECK_EQ(args.size(), 1);
+  if (args[0].is_null()) {
+    return googlesql::Value::NullString();
+  }
+  GOOGLESQL_ASSIGN_OR_RETURN(std::string tokens, DebugTokenList(args[0]));
+  return googlesql::Value::String(tokens);
+}
+
+std::unique_ptr<googlesql::Function> DebugTokenlistFunction(
+    googlesql::TypeFactory* type_factory, const std::string& catalog_name) {
+  googlesql::FunctionOptions function_options;
+  function_options.set_evaluator(
+      googlesql::FunctionEvaluator(EvalDebugTokenlist));
+  function_options.set_arguments_are_coercible(false);
+  function_options.set_supports_safe_error_mode(false);
+
+  // Signature: DEBUG_TOKENLIST(TOKENLIST)
+  return std::make_unique<googlesql::Function>(
+      kDebugTokenlistFunctionName, catalog_name, googlesql::Function::SCALAR,
+      std::vector<googlesql::FunctionSignature>{googlesql::FunctionSignature{
+          type_factory->get_string(),
+          {{type_factory->get_tokenlist(),
+            GetPositionalRequiredArgumentTypeOptions("tokenlist", false)}},
+          nullptr}},
+      function_options);
+}
+
 absl::StatusOr<googlesql::Value> EvalSearch(
     absl::Span<const googlesql::Value> args) {
   return SearchEvaluator::Evaluate(args);
@@ -787,7 +820,8 @@ std::unique_ptr<googlesql::Function> ScoreNgramsFunction(
   // Signature: SCORE_NGRAMS(tokenlist value,
   //                         string ngrams_query,
   //                         string algorithm = "trigrams",
-  //                         string language_tag = NULL)
+  //                         string language_tag = NULL,
+  //                         string array_aggregator = "flatten")
   return std::make_unique<googlesql::Function>(
       kScoreNgramsFunctionName, catalog_name, googlesql::Function::SCALAR,
       std::vector<googlesql::FunctionSignature>{
@@ -799,6 +833,8 @@ std::unique_ptr<googlesql::Function> ScoreNgramsFunction(
                   {string_type, GetRequiredArgumentTypeOptions("ngrams_query")},
                   {string_type, GetNamedOptionalArgTypeOptions("algorithm")},
                   {string_type, GetNamedOptionalArgTypeOptions("language_tag")},
+                  {string_type,
+                   GetNamedOptionalArgTypeOptions("array_aggregator")},
               },
               nullptr},
       },
@@ -868,6 +904,10 @@ GetSearchFunctions(googlesql::TypeFactory* type_factory,
       TokenlistConcatFunction(type_factory, catalog_name);
   function_map[tokenlist_concat_func->Name()] =
       std::move(tokenlist_concat_func);
+
+  auto debug_tokenlist_func =
+      DebugTokenlistFunction(type_factory, catalog_name);
+  function_map[debug_tokenlist_func->Name()] = std::move(debug_tokenlist_func);
 
   auto search_func = SearchFunction(type_factory, catalog_name);
   function_map[search_func->Name()] = std::move(search_func);

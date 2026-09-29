@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>  // C++17
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -28,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/functional/function_ref.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -65,15 +67,19 @@ absl::Status LevelDBStatusToAbsl(const leveldb::Status& status) {
   return absl::InternalError(status.ToString());
 }
 
+// Appends `value` as 4 big-endian bytes.
+void AppendBigEndian32(std::string* out, uint32_t value) {
+  char buf[4];
+  buf[0] = static_cast<char>((value >> 24) & 0xFF);
+  buf[1] = static_cast<char>((value >> 16) & 0xFF);
+  buf[2] = static_cast<char>((value >> 8) & 0xFF);
+  buf[3] = static_cast<char>(value & 0xFF);
+  out->append(buf, 4);
+}
+
 // Appends a 4-byte big-endian length prefix followed by the data.
 void AppendLengthPrefixed(std::string* out, const std::string& data) {
-  uint32_t len = static_cast<uint32_t>(data.size());
-  char buf[4];
-  buf[0] = static_cast<char>((len >> 24) & 0xFF);
-  buf[1] = static_cast<char>((len >> 16) & 0xFF);
-  buf[2] = static_cast<char>((len >> 8) & 0xFF);
-  buf[3] = static_cast<char>(len & 0xFF);
-  out->append(buf, 4);
+  AppendBigEndian32(out, static_cast<uint32_t>(data.size()));
   out->append(data);
 }
 
@@ -89,29 +95,49 @@ bool ReadLengthPrefix(const char* data, size_t data_size, size_t offset,
   return true;
 }
 
-// Extracts the encoded key portion from a length-prefixed LevelDB key.
-// Format: {table_id_len:4BE}{table_id}{encoded_key_len:4BE}{encoded_key}
-//         {column_id_len:4BE}{column_id}{timestamp:8}
-std::string ExtractEncodedKeyFromLevelDBKey(const leveldb::Slice& ldb_key) {
-  const char* data = ldb_key.data();
-  size_t size = ldb_key.size();
-  size_t offset = 0;
-
-  // Skip table_id.
-  uint32_t table_id_len;
-  if (!ReadLengthPrefix(data, size, offset, &table_id_len)) return "";
-  offset += 4 + table_id_len;
-
-  // Read encoded_key.
-  uint32_t encoded_key_len;
-  if (!ReadLengthPrefix(data, size, offset, &encoded_key_len)) return "";
-  offset += 4;
-  if (offset + encoded_key_len > size) return "";
-  std::string result(data + offset, encoded_key_len);
-  return result;
+// Visits, through `it`, the LevelDB entries of the table whose keys start with
+// `table_prefix` and whose encoded row keys are in
+// [start_encoded, limit_encoded); an empty `limit_encoded` has no upper bound.
+// `visit` receives the encoded row key of the entry that `it` is positioned at.
+//
+// LevelDB orders the entries of a table by the 4-byte length prefix of their
+// encoded row key before the key's bytes, so a range of keys is contiguous only
+// among keys of the same length. Each key length is therefore scanned
+// separately, from `start_encoded` up to `limit_encoded`.
+void ForEachEntryInRange(
+    leveldb::Iterator* it, const std::string& table_prefix,
+    const std::string& start_encoded, const std::string& limit_encoded,
+    absl::FunctionRef<void(const std::string& encoded_key)> visit) {
+  it->Seek(table_prefix);
+  while (it->Valid() && it->key().starts_with(table_prefix)) {
+    uint32_t key_length;
+    if (!ReadLengthPrefix(it->key().data(), it->key().size(),
+                          table_prefix.size(), &key_length)) {
+      return;
+    }
+    // The prefix of the entries whose row keys have `key_length` bytes.
+    std::string length_prefix = table_prefix;
+    AppendBigEndian32(&length_prefix, key_length);
+    for (it->Seek(length_prefix + start_encoded);
+         it->Valid() && it->key().starts_with(length_prefix); it->Next()) {
+      const leveldb::Slice key = it->key();
+      if (key.size() < length_prefix.size() + key_length) continue;
+      const std::string encoded_key(key.data() + length_prefix.size(),
+                                    key_length);
+      if (!limit_encoded.empty() && encoded_key >= limit_encoded) break;
+      visit(encoded_key);
+    }
+    if (key_length == std::numeric_limits<uint32_t>::max()) return;
+    // Continue with the next longer row keys.
+    std::string next_length_prefix = table_prefix;
+    AppendBigEndian32(&next_length_prefix, key_length + 1);
+    it->Seek(next_length_prefix);
+  }
 }
 
 // Extracts the column_id portion from a length-prefixed LevelDB key.
+// Format: {table_id_len:4BE}{table_id}{encoded_key_len:4BE}{encoded_key}
+//         {column_id_len:4BE}{column_id}{timestamp:8}
 std::string ExtractColumnIdFromLevelDBKey(const leveldb::Slice& ldb_key) {
   const char* data = ldb_key.data();
   size_t size = ldb_key.size();
@@ -256,8 +282,9 @@ absl::StatusOr<std::unique_ptr<PersistentStorage>> PersistentStorage::Create(
       new PersistentStorage(std::unique_ptr<leveldb::DB>(raw_db)));
 }
 
-absl::Status PersistentStorage::CreateCheckpoint(
-    const std::string& output_dir) const {
+absl::StatusOr<int64_t> PersistentStorage::CreateCheckpoint(
+    const std::string& output_dir, absl::Time version_time,
+    absl::Time changed_since) const {
   if (output_dir.empty()) {
     return absl::InvalidArgumentError(
         "Backup checkpoint directory must not be empty");
@@ -312,11 +339,29 @@ absl::Status PersistentStorage::CreateCheckpoint(
   leveldb::WriteBatch batch;
   size_t batch_bytes = 0;
   constexpr size_t kMaximumBatchBytes = 4 * 1024 * 1024;
+  // Every key ends with its big-endian commit timestamp, so comparing the
+  // encoded suffixes compares commit times.
+  constexpr size_t kTimestampBytes = 8;
+  const std::string encoded_version_time = EncodeTimestamp(version_time);
+  const std::string encoded_changed_since = EncodeTimestamp(changed_since);
+  int64_t changed_bytes = 0;
 
   absl::Status result = absl::OkStatus();
   for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) {
-    batch.Put(iterator->key(), iterator->value());
-    batch_bytes += iterator->key().size() + iterator->value().size();
+    const leveldb::Slice key = iterator->key();
+    if (key.size() < kTimestampBytes) {
+      result = absl::DataLossError(
+          "Persistent storage key is missing its commit timestamp");
+      break;
+    }
+    const leveldb::Slice commit_time(
+        key.data() + key.size() - kTimestampBytes, kTimestampBytes);
+    if (commit_time.compare(encoded_version_time) > 0) continue;
+    if (commit_time.compare(encoded_changed_since) > 0) {
+      changed_bytes += key.size() + iterator->value().size();
+    }
+    batch.Put(key, iterator->value());
+    batch_bytes += key.size() + iterator->value().size();
     if (batch_bytes >= kMaximumBatchBytes) {
       leveldb::Status write_status = destination->Write(write_options, &batch);
       if (!write_status.ok()) {
@@ -342,10 +387,9 @@ absl::Status PersistentStorage::CreateCheckpoint(
           filesystem_error.message()));
     }
   }
-  if (result.ok()) {
-    cleanup.Disarm();
-  }
-  return result;
+  if (!result.ok()) return result;
+  cleanup.Disarm();
+  return changed_bytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -561,34 +605,13 @@ bool PersistentStorage::Exists(const TableID& table_id,
 std::vector<std::string> PersistentStorage::CollectKeysInRange(
     const TableID& table_id, const std::string& start_encoded,
     const std::string& limit_encoded) const {
-  std::string table_prefix = MakeTablePrefix(table_id);
-  std::string seek_start = MakeRowPrefix(table_id, start_encoded);
-
   std::set<std::string> unique_keys;
   std::unique_ptr<leveldb::Iterator> it(
       db_->NewIterator(leveldb::ReadOptions()));
-
-  for (it->Seek(seek_start); it->Valid(); it->Next()) {
-    leveldb::Slice ldb_key = it->key();
-
-    // Stop if we've passed the table prefix.
-    if (!ldb_key.starts_with(table_prefix)) break;
-
-    // Extract the encoded key from the LevelDB key.
-    std::string encoded_key = ExtractEncodedKeyFromLevelDBKey(ldb_key);
-    if (encoded_key.empty()) continue;
-
-    // Compare the extracted encoded key directly against limit_encoded.
-    // We must NOT compare the full LevelDB key against
-    // MakeRowPrefix(table_id, limit_encoded) because EncodeKeyForPrefixLimit
-    // appends 0xFF bytes, changing the byte length. The 4-byte big-endian
-    // length prefix in MakeRowPrefix would then differ (e.g. 0x09 vs 0x11),
-    // causing ALL subsequent rows to sort before the limit — effectively
-    // scanning the entire table instead of just the target range.
-    if (!limit_encoded.empty() && encoded_key >= limit_encoded) break;
-
-    unique_keys.insert(encoded_key);
-  }
+  ForEachEntryInRange(it.get(), MakeTablePrefix(table_id), start_encoded,
+                      limit_encoded, [&](const std::string& encoded_key) {
+                        unique_keys.insert(encoded_key);
+                      });
   // On I/O error, return whatever we collected so far (best effort).
   // Callers that need strict correctness check via Exists()/Lookup().
 
@@ -697,7 +720,6 @@ absl::Status PersistentStorage::Read(
     limit_encoded = EncodeKeyForPrefixLimit(key_range.limit_key());
   }
   std::string table_prefix = MakeTablePrefix(table_id);
-  std::string seek_start = MakeRowPrefix(table_id, start_encoded);
   std::string ts_encoded = EncodeTimestamp(timestamp);
 
   // Build the set of columns we need to collect (requested + _exists +
@@ -725,64 +747,42 @@ absl::Status PersistentStorage::Read(
   read_options.snapshot = snapshot.get();
 
   std::unique_ptr<leveldb::Iterator> it(db_->NewIterator(read_options));
-  for (it->Seek(seek_start); it->Valid(); it->Next()) {
-    leveldb::Slice ldb_key = it->key();
-    if (!ldb_key.starts_with(table_prefix)) break;
+  ForEachEntryInRange(
+      it.get(), table_prefix, start_encoded, limit_encoded,
+      [&](const std::string& encoded_key) {
+        // Parse the column ID and timestamp that follow the row key.
+        leveldb::Slice ldb_key = it->key();
+        const char* kdata = ldb_key.data();
+        size_t ksize = ldb_key.size();
+        size_t offset = table_prefix.size() + 4 + encoded_key.size();
 
-    // Parse the LevelDB key components.
-    const char* kdata = ldb_key.data();
-    size_t ksize = ldb_key.size();
-    size_t offset = 0;
+        // Read column_id.
+        uint32_t col_len;
+        if (!ReadLengthPrefix(kdata, ksize, offset, &col_len)) return;
+        size_t col_start = offset + 4;
+        offset += 4 + col_len;
+        if (offset > ksize) return;
+        std::string col_id(kdata + col_start, col_len);
 
-    // Read table_id.
-    uint32_t tid_len;
-    if (!ReadLengthPrefix(kdata, ksize, offset, &tid_len)) continue;
-    offset += 4 + tid_len;
+        // Read timestamp (last 8 bytes).
+        if (offset + 8 > ksize) return;
+        std::string entry_ts(kdata + offset, 8);
 
-    // Read encoded_key.
-    uint32_t ekey_len;
-    if (!ReadLengthPrefix(kdata, ksize, offset, &ekey_len)) continue;
-    size_t ekey_start = offset + 4;
-    offset += 4 + ekey_len;
-    if (offset > ksize) continue;
-    std::string encoded_key(kdata + ekey_start, ekey_len);
+        // Only consider columns we need.
+        if (needed_columns.find(col_id) == needed_columns.end()) return;
 
-    // Compare the extracted encoded key directly against limit_encoded.
-    // We must NOT compare the full LevelDB key against
-    // MakeRowPrefix(table_id, limit_encoded) because EncodeKeyForPrefixLimit
-    // appends 0xFF bytes, changing the byte length. The 4-byte big-endian
-    // length prefix in MakeRowPrefix would then differ (e.g. 0x09 vs 0x11),
-    // causing ALL subsequent rows to sort before the limit — effectively
-    // scanning the entire table instead of just the target range.
-    if (!limit_encoded.empty() && encoded_key >= limit_encoded) break;
+        // Only consider entries at or before the target timestamp.
+        // Timestamps are encoded ascending, so entry_ts <= ts_encoded means
+        // the entry is at or before our target.
+        if (entry_ts > ts_encoded) return;
 
-    // Read column_id.
-    uint32_t col_len;
-    if (!ReadLengthPrefix(kdata, ksize, offset, &col_len)) continue;
-    size_t col_start = offset + 4;
-    offset += 4 + col_len;
-    if (offset > ksize) continue;
-    std::string col_id(kdata + col_start, col_len);
-
-    // Read timestamp (last 8 bytes).
-    if (offset + 8 > ksize) continue;
-    std::string entry_ts(kdata + offset, 8);
-
-    // Only consider columns we need.
-    if (needed_columns.find(col_id) == needed_columns.end()) continue;
-
-    // Only consider entries at or before the target timestamp.
-    // Timestamps are encoded ascending, so entry_ts <= ts_encoded means
-    // the entry is at or before our target.
-    if (entry_ts > ts_encoded) continue;
-
-    // Keep the latest version at or before timestamp.
-    auto& cell = rows_data[encoded_key][col_id];
-    if (cell.best_timestamp.empty() || entry_ts > cell.best_timestamp) {
-      cell.best_value = it->value().ToString();
-      cell.best_timestamp = entry_ts;
-    }
-  }
+        // Keep the latest version at or before timestamp.
+        auto& cell = rows_data[encoded_key][col_id];
+        if (cell.best_timestamp.empty() || entry_ts > cell.best_timestamp) {
+          cell.best_value = it->value().ToString();
+          cell.best_timestamp = entry_ts;
+        }
+      });
   GOOGLESQL_RETURN_IF_ERROR(CheckIteratorStatus(*it));
 
   // Build result rows from collected data.

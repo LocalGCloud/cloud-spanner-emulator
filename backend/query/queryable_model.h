@@ -66,6 +66,7 @@ class QueryableModel : public googlesql::Model {
     return std::string(SDLObjectName::GetInSchemaName(wrapped_model_->Name()));
   }
   std::string FullName() const override { return wrapped_model_->Name(); }
+  const backend::Model* wrapped_model() const { return wrapped_model_; }
   uint64_t NumInputs() const override { return wrapped_model_->input().size(); }
   const googlesql::Column* GetInput(int i) const override {
     return input_columns_[i].get();

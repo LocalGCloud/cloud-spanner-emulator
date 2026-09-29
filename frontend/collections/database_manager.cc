@@ -1174,6 +1174,17 @@ DatabaseManager::ListDatabases(const std::string& instance_uri) const {
   return GetDatabasesByInstance(database_map_, instance_uri);
 }
 
+std::vector<std::shared_ptr<Database>> DatabaseManager::ListAllDatabases()
+    const {
+  absl::ReaderMutexLock lock(mu_);
+  std::vector<std::shared_ptr<Database>> databases;
+  databases.reserve(database_map_.size());
+  for (const auto& [database_uri, database] : database_map_) {
+    databases.push_back(database);
+  }
+  return databases;
+}
+
 }  // namespace frontend
 }  // namespace emulator
 }  // namespace spanner

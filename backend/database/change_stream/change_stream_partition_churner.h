@@ -122,6 +122,10 @@ class ChangeStreamPartitionChurner {
 
   absl::Status ChurnPartitions(absl::string_view change_stream_name);
 
+  // Deletes the data change records of the change stream that are older than
+  // its retention period.
+  absl::Status DeleteExpiredRecords(absl::string_view change_stream_name);
+
   void PeriodicChurnPartitions(absl::string_view change_stream_name,
                                ChurningThread* churning_thread);
 

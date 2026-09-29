@@ -188,6 +188,10 @@ class DatabaseManager {
   absl::StatusOr<std::vector<std::shared_ptr<Database>>> ListDatabases(
       const std::string& instance_uri) const ABSL_LOCKS_EXCLUDED(mu_);
 
+  // Lists the databases of all instances.
+  std::vector<std::shared_ptr<Database>> ListAllDatabases() const
+      ABSL_LOCKS_EXCLUDED(mu_);
+
   // Records that `database_uri` failed to restore from persisted metadata,
   // with `reason` explaining why. The database becomes visible via
   // ListDatabases/GetDatabase (as a non-serving placeholder -- Cloud

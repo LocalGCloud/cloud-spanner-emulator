@@ -264,6 +264,14 @@ This layout allows prefix scans at three levels:
 | `{table}{key}` | All stored columns and versions of one row |
 | `{table}{key}{column}` | All stored versions of one cell |
 
+Because the encoded row key is length-prefixed, LevelDB orders a table's rows
+by encoded key length first and by key bytes second. A key range is therefore
+contiguous only among keys of the same length: `Read()` and range `Delete()`
+scan each key length separately (`ForEachEntryInRange()`), from the start key
+up to the limit key. Builds before 2026-09-28 scanned one contiguous run and
+could skip rows whose keys had another length, which let unique index checks
+miss existing values.
+
 ### Timestamp encoding
 
 Timestamps are 8-byte big-endian microseconds since the Unix epoch, with the
@@ -275,7 +283,8 @@ overwrite each other.
 ### Encoded key format
 
 `EncodeKey()` in `backend/storage/key_codec.h` turns a `Key` into bytes that
-sort in the same order as `Key::Compare()`:
+sort in the same order as `Key::Compare()` (among keys of one encoded length;
+see above for how the length prefix affects LevelDB order):
 
 | Type | Encoding |
 |------|----------|
@@ -334,8 +343,9 @@ versions of a cell together, so one scan is enough.
 ```text
 Read(timestamp, table, key_range, column_ids):
   1. Take a LevelDB snapshot.
-  2. Scan {table}{start_key} to {table}{limit_key} with that snapshot.
-     For each entry at or before timestamp, keep the latest per (key, column).
+  2. With that snapshot, scan each encoded key length of {table} from
+     start_key to limit_key. For each entry at or before timestamp, keep the
+     latest per (key, column).
   3. Keep rows whose _exists is true, order the columns, and rebuild each Key
      from __key_data__.
   4. Return a SnapshotOwningIterator(rows, db_, snapshot).
@@ -493,9 +503,11 @@ for validation.
 | `MarkDroppedTable()`, `MarkDroppedColumn()` | `mu_` | Protects the dropped-object maps. |
 | `SetVersionRetentionPeriod()`, `RemoveExpiredVersions()` | `version_retention_period_mu_` | Declared `ABSL_ACQUIRED_AFTER(mu_)`. |
 
-Nothing locks `data_dir` as a whole. LevelDB's own `LOCK` file stops two
-processes from opening the same database. `metadata.json` and
-`backup_catalog.json` have no lock.
+`emulator_main` takes an exclusive `flock` on `<data_dir>/.lock`
+(`frontend/persistence/data_dir_lock.cc`) before it reads anything, and writes
+its PID there, so a second emulator process on the same directory exits at
+startup. LevelDB's own `LOCK` file also stops two processes from opening the
+same database.
 
 ## Garbage collection
 

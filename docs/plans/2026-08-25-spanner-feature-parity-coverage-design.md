@@ -6,6 +6,18 @@
 **Current status:** Inventory, generator, and CI implemented; the
 [coverage catalog](../feature-coverage.md) remains an evolving baseline.
 
+**2026-09-28 update:** The developer-usability closure applied a narrower
+definition of `supported`: a developer can use the feature locally with
+correct, documented, observable behavior through the public gRPC/REST API,
+backed by native test evidence. Physical production properties no longer keep a
+record `partial`; they are split into `not-applicable` records, which added
+`security.iam_enforcement`, `ops.rate_quotas`, and `vector.ann_recall_latency`.
+The inventory now has 155 records: 137 supported, 9 accepted-no-op, and 9
+not-applicable, with no `partial`, `unsupported`, or `unknown` records. See the
+[closure plan](2026-09-27-usability-closure-plan.md) and
+[usability audit worksheet](2026-09-27-usability-audit-worksheet.md). The
+status meanings below are unchanged.
+
 **Audience:** Emulator maintainers and contributors
 
 ## 1. Purpose

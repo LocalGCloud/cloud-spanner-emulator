@@ -72,8 +72,9 @@ TEST(ExactMatchTokenizerTest, TestArgNotString) {
 TEST(ExactMatchTokenizerTest, TestTokenizeNull) {
   absl::StatusOr<googlesql::Value> result =
       ExactMatchTokenizer::Tokenize({googlesql::Value::NullString()});
-
-  ValidateResult(result);
+  GOOGLESQL_EXPECT_OK(result.status());
+  EXPECT_TRUE(result->type()->IsTokenList());
+  EXPECT_TRUE(result->is_null());
 }
 
 TEST(ExactMatchTokenizerTest, TestTokenizeArray) {

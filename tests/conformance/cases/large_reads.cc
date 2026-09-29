@@ -14,14 +14,20 @@
 // limitations under the License.
 //
 
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "google/spanner/admin/database/v1/common.pb.h"
+#include "google/spanner/v1/result_set.pb.h"
+#include "google/spanner/v1/spanner.pb.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "grpcpp/client_context.h"
 #include "tests/conformance/common/database_test_base.h"
 
 namespace google {
@@ -30,6 +36,8 @@ namespace emulator {
 namespace test {
 
 namespace {
+
+namespace spanner_api = ::google::spanner::v1;
 
 constexpr int64_t kNumRows = 20;
 constexpr int64_t kStringSize = 409600;
@@ -55,6 +63,53 @@ class LargeReadsTest
       GOOGLESQL_EXPECT_OK(Insert("Users", {"ID", "Name"},
                        {i, std::string(kStringSize, 'a' + (i % 26))}));
     }
+  }
+
+  absl::StatusOr<std::string> CreateSession() {
+    grpc::ClientContext context;
+    spanner_api::CreateSessionRequest request;
+    request.set_database(database()->FullName());
+    spanner_api::Session response;
+    GOOGLESQL_RETURN_IF_ERROR(
+        raw_client()->CreateSession(&context, request, &response));
+    return response.name();
+  }
+
+  // Returns the stream of responses to `request`.
+  absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
+  ExecuteStreamingSql(const spanner_api::ExecuteSqlRequest& request) {
+    grpc::ClientContext context;
+    std::unique_ptr<grpc::ClientReader<spanner_api::PartialResultSet>> reader =
+        raw_client()->ExecuteStreamingSql(&context, request);
+    std::vector<spanner_api::PartialResultSet> responses;
+    spanner_api::PartialResultSet response;
+    while (reader->Read(&response)) {
+      responses.push_back(response);
+    }
+    GOOGLESQL_RETURN_IF_ERROR(reader->Finish());
+    return responses;
+  }
+
+  // Returns the IDs of the rows that `responses` complete. Values of the
+  // Name column span several responses.
+  static std::vector<std::string> RowIds(
+      const std::vector<spanner_api::PartialResultSet>& responses) {
+    std::vector<std::string> ids;
+    bool continues_value = false;
+    int column = 0;
+    for (const spanner_api::PartialResultSet& response : responses) {
+      for (int i = 0; i < response.values_size(); ++i) {
+        const bool continued = i == 0 && continues_value;
+        if (!continued) {
+          if (column == 0) {
+            ids.push_back(response.values(i).string_value());
+          }
+          column = (column + 1) % 2;
+        }
+      }
+      continues_value = response.chunked_value();
+    }
+    return ids;
   }
 };
 
@@ -91,6 +146,45 @@ TEST_P(LargeReadsTest, CanPerformLargeReadWithAllRows) {
                 testing::ElementsAre(
                     Value(i), Value(std::string(kStringSize, 'a' + (i % 26)))));
   }
+}
+
+// Resumes a stream the way client libraries do after the stream breaks: by
+// resending the request with the resume token of the last response received.
+TEST_P(LargeReadsTest, ResumesStreamingQueryAfterResumeToken) {
+  PopulateDatabase();
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(std::string session, CreateSession());
+  spanner_api::ExecuteSqlRequest request;
+  request.set_session(session);
+  request.set_sql("SELECT ID, Name FROM Users");
+  request.mutable_transaction()
+      ->mutable_single_use()
+      ->mutable_read_only()
+      ->set_strong(true);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      std::vector<spanner_api::PartialResultSet> original,
+      ExecuteStreamingSql(request));
+  const std::vector<std::string> ids = RowIds(original);
+  ASSERT_EQ(ids.size(), kNumRows);
+
+  int resumed_streams = 0;
+  for (int i = 0; i + 1 < original.size(); ++i) {
+    if (original[i].resume_token().empty()) {
+      continue;
+    }
+    ++resumed_streams;
+    const std::vector<std::string> received =
+        RowIds({original.begin(), original.begin() + i + 1});
+    request.set_resume_token(original[i].resume_token());
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        std::vector<spanner_api::PartialResultSet> rest,
+        ExecuteStreamingSql(request));
+    std::vector<std::string> resumed_ids = received;
+    for (const std::string& id : RowIds(rest)) {
+      resumed_ids.push_back(id);
+    }
+    EXPECT_EQ(resumed_ids, ids) << "after response " << i;
+  }
+  EXPECT_GT(resumed_streams, 1);
 }
 
 }  // namespace

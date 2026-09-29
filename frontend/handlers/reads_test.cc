@@ -29,9 +29,13 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "frontend/common/protos.h"
+#include "frontend/converters/time.h"
 #include "tests/common/proto_matchers.h"
 #include "tests/common/test_env.h"
+#include "grpcpp/client_context.h"
 #include "grpcpp/server_context.h"
 #include "absl/status/status.h"
 #include "googlesql/base/status_macros.h"
@@ -85,8 +89,91 @@ class ReadApiTest : public test::ServerTest {
     return Commit(commit_request, &commit_response);
   }
 
+  // Sends `request` as a Read and as a StreamingRead, each with a call
+  // deadline `timeout` from now, and returns their statuses.
+  std::vector<absl::Status> ReadWithTimeout(
+      const spanner_api::ReadRequest& request, absl::Duration timeout) {
+    std::vector<absl::Status> statuses;
+    {
+      grpc::ClientContext context;
+      context.set_deadline(absl::ToChronoTime(absl::Now() + timeout));
+      spanner_api::ResultSet response;
+      statuses.push_back(
+          test_env()->spanner_client()->Read(&context, request, &response));
+    }
+    {
+      grpc::ClientContext context;
+      context.set_deadline(absl::ToChronoTime(absl::Now() + timeout));
+      auto reader =
+          test_env()->spanner_client()->StreamingRead(&context, request);
+      spanner_api::PartialResultSet response;
+      while (reader->Read(&response)) {
+      }
+      statuses.push_back(reader->Finish());
+    }
+    return statuses;
+  }
+
   std::string test_session_uri_;
 };
+
+TEST_F(ReadApiTest, FutureReadTimestampPastCallDeadlineFailsAtOnce) {
+  // A read at a future timestamp waits for it. When the call's deadline comes
+  // first, the read fails right away instead of waiting past the deadline.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto read_timestamp,
+                       TimestampToProto(absl::Now() + absl::Minutes(1)));
+  spanner_api::BeginTransactionRequest begin_request;
+  begin_request.set_session(test_session_uri_);
+  *begin_request.mutable_options()
+       ->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+  spanner_api::Transaction txn;
+  GOOGLESQL_ASSERT_OK(BeginTransaction(begin_request, &txn));
+
+  std::vector<spanner_api::TransactionSelector> selectors(4);
+  *selectors[0].mutable_single_use()->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+  *selectors[1].mutable_single_use()->mutable_read_only()
+       ->mutable_min_read_timestamp() = read_timestamp;
+  *selectors[2].mutable_begin()->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+  selectors[3].set_id(txn.id());
+  for (const spanner_api::TransactionSelector& selector : selectors) {
+    SCOPED_TRACE(selector.DebugString());
+    spanner_api::ReadRequest request = PARSE_TEXT_PROTO(R"pb(
+      table: "test_table"
+      columns: "int64_col"
+      key_set { all: true }
+    )pb");
+    request.set_session(test_session_uri_);
+    *request.mutable_transaction() = selector;
+
+    const absl::Time start = absl::Now();
+    EXPECT_THAT(ReadWithTimeout(request, absl::Seconds(10)),
+                testing::Each(
+                    StatusIs(absl::StatusCode::kDeadlineExceeded,
+                             testing::HasSubstr("request deadline"))));
+    EXPECT_LT(absl::Now() - start, absl::Seconds(10));
+  }
+}
+
+TEST_F(ReadApiTest, FutureReadTimestampBeforeCallDeadlineWaits) {
+  const absl::Time read_time = absl::Now() + absl::Milliseconds(200);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto read_timestamp,
+                                 TimestampToProto(read_time));
+  spanner_api::ReadRequest request = PARSE_TEXT_PROTO(R"pb(
+    table: "test_table"
+    columns: "int64_col"
+    key_set { all: true }
+  )pb");
+  request.set_session(test_session_uri_);
+  *request.mutable_transaction()->mutable_single_use()->mutable_read_only()
+       ->mutable_read_timestamp() = read_timestamp;
+
+  EXPECT_THAT(ReadWithTimeout(request, absl::Seconds(30)),
+              testing::Each(StatusIs(absl::StatusCode::kOk)));
+  EXPECT_GE(absl::Now(), read_time);
+}
 
 TEST_F(ReadApiTest, CannotReadBeyondVersionGCLimit) {
   // Cloud Spanner does not allow read only transactions with a staleness > 1h.
@@ -161,6 +248,10 @@ TEST_F(ReadApiTest, CanReadUsingAnAlreadyStartedTransaction) {
   // StreamingRead
   std::vector<spanner_api::PartialResultSet> streaming_read_response;
   GOOGLESQL_EXPECT_OK(StreamingRead(read_request, &streaming_read_response));
+  // The response ends on a row boundary, where the stream can resume.
+  ASSERT_EQ(streaming_read_response.size(), 1);
+  EXPECT_FALSE(streaming_read_response.front().resume_token().empty());
+  streaming_read_response.front().clear_resume_token();
   EXPECT_THAT(streaming_read_response,
               testing::ElementsAre(test::EqualsProto(
                   R"pb(metadata {
@@ -240,6 +331,10 @@ TEST_F(ReadApiTest, ReadWriteTransactionReturnsPrecommitToken) {
   // StreamingRead
   std::vector<spanner_api::PartialResultSet> streaming_read_response;
   GOOGLESQL_EXPECT_OK(StreamingRead(read_request, &streaming_read_response));
+  // The response ends on a row boundary, where the stream can resume.
+  ASSERT_EQ(streaming_read_response.size(), 1);
+  EXPECT_FALSE(streaming_read_response.front().resume_token().empty());
+  streaming_read_response.front().clear_resume_token();
   EXPECT_THAT(streaming_read_response,
               testing::ElementsAre(test::EqualsProto(
                   R"pb(metadata {

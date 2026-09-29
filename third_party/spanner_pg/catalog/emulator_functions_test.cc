@@ -544,7 +544,7 @@ INSTANTIATE_TEST_SUITE_P(
             kGoogleSQLSubscriptFunctionName,
             {*CreatePgJsonbValueWithMemoryContext(R"([null, "string val"])"),
              googlesql::Value::Int64(-1)},
-            *CreatePgJsonbValueWithMemoryContext(R"("string val")")},
+            CreatePgJsonbNullValue()},
         PGScalarFunctionTestCase{
             kGoogleSQLSubscriptFunctionName,
             {CreatePgJsonbNullValue(), googlesql::Value::Int64(0)},
@@ -2675,6 +2675,16 @@ TEST_F(EmulatorFunctionsTest, PGJsonbMutatorFunctions) {
                   {pg_jsonb_object, googlesql::values::Bool(true)})),
               IsOkAndHolds(*CreatePgJsonbValueWithMemoryContext(
                   "[{\"a\": 1, \"b\": 2}, true]")));
+  // The right operand's elements follow the left operand's.
+  EXPECT_THAT(evaluator_(absl::MakeConstSpan(
+                  {pg_jsonb_array,
+                   *CreatePgJsonbValueWithMemoryContext("[1, 2]")})),
+              IsOkAndHolds(*CreatePgJsonbValueWithMemoryContext(
+                  "[\"a\", \"b\", 1, 2]")));
+  EXPECT_THAT(
+      evaluator_(absl::MakeConstSpan({pg_jsonb_object, pg_jsonb_array})),
+      IsOkAndHolds(*CreatePgJsonbValueWithMemoryContext(
+          "[{\"a\": 1, \"b\": 2}, \"a\", \"b\"]")));
 
   const googlesql::Function* jsonb_insert_function =
       functions_[kPGJsonbInsertFunctionName].get();
@@ -4362,7 +4372,7 @@ TEST_F(EvalJsonbSubscriptText, ElementIndexInput) {
       evaluator_,
       JsonbArrayElementText(
           CreatePgJsonbValueWithMemoryContext(R"([null, "string val"])"), -1,
-          googlesql::values::String("string val")));
+          kNullStringValue));
   EXPECT_THAT(evaluator_,
               JsonbArrayElementText(
                   CreatePgJsonbValueWithMemoryContext(R"({"a": "string val"})"),

@@ -292,8 +292,8 @@ absl::StatusOr<googlesql::Value> SearchEvaluator::Evaluate(
                                                             source_is_null));
   }
 
-  if (source_is_null || query_string.is_null()) {
-    // Return FALSE if query is null.
+  if (tokenlist.is_null() || source_is_null || query_string.is_null()) {
+    // SEARCH returns NULL when the tokens or the query are NULL.
     return googlesql::Value::NullBool();
   }
 
@@ -302,27 +302,45 @@ absl::StatusOr<googlesql::Value> SearchEvaluator::Evaluate(
     return googlesql::Value::Bool(false);
   }
 
+  bool remove_diacritics = false;
+  if (!tokenlist.is_null()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(remove_diacritics,
+                              TokenListRemovesDiacritics(tokenlist));
+  }
+
   Dialect dialect = Dialect::RQUERY;
   if (args.size() > 4 && !args[4].is_null()) {
     GOOGLESQL_ASSIGN_OR_RETURN(dialect, ParseDialect(args[4].string_value()));
   }
 
+  std::string query = query_string.string_value();
+  // The RQUERY parser needs its operator spelling (OR, AROUND) intact.
+  if (dialect != Dialect::RQUERY && args.size() > 3 &&
+      !args[3].is_null() && !args[3].string_value().empty()) {
+    GOOGLESQL_ASSIGN_OR_RETURN(
+        query, NormalizeSearchText(query, remove_diacritics,
+                                   args[3].string_value()));
+  } else if (remove_diacritics) {
+    GOOGLESQL_ASSIGN_OR_RETURN(query,
+                              NormalizeSearchText(query, true, "", false));
+  }
+
   if (dialect == Dialect::WORDS) {
     GOOGLESQL_ASSIGN_OR_RETURN(
         const bool result,
-        EvaluateWordsDialect(query_string.string_value(), token_map));
+        EvaluateWordsDialect(query, token_map));
     return googlesql::Value::Bool(result);
   } else if (dialect == Dialect::WORDS_PHRASE) {
     GOOGLESQL_ASSIGN_OR_RETURN(
         const bool result,
-        EvaluateWordsPhraseDialect(query_string.string_value(), tokenlist));
+        EvaluateWordsPhraseDialect(query, tokenlist));
     return googlesql::Value::Bool(result);
   }
 
   GOOGLESQL_RET_CHECK(dialect == Dialect::RQUERY);
   GOOGLESQL_ASSIGN_OR_RETURN(SimpleNode * search_query,
                    SearchQueryCache::GetInstance()->GetParsedQuery(
-                       query_string.string_value()));
+                       query));
 
   GOOGLESQL_ASSIGN_OR_RETURN(MatchResult match_result,
                    MatchQueryNode(search_query, token_map));

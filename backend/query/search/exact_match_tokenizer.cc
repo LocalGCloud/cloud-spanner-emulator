@@ -39,6 +39,7 @@ absl::StatusOr<googlesql::Value> ExactMatchTokenizer::Tokenize(
   }
   GOOGLESQL_RET_CHECK(isValidType);
 
+  if (args[0].is_null()) return googlesql::Value::NullTokenList();
   return TokenListFromStrings({std::string(kExactMatchTokenizer)});
 }
 

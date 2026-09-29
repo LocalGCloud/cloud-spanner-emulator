@@ -391,13 +391,6 @@ absl::Status PopulateMetadata(
   return absl::OkStatus();
 }
 
-void PopulateFakeResumeTokens(
-    std::vector<spanner_api::PartialResultSet>* responses) {
-  for (auto& response : *responses) {
-    *response.mutable_resume_token() = kChangeStreamDummyResumeToken;
-  }
-}
-
 }  // namespace
 
 absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
@@ -421,7 +414,6 @@ ConvertHeartbeatTimestampToStruct(absl::Time timestamp, bool expect_metadata) {
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -453,7 +445,6 @@ ConvertPartitionTableRowCursorToStruct(
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -482,7 +473,6 @@ ConvertDataTableRowCursorToStruct(backend::RowCursor* row_cursor,
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -735,15 +725,17 @@ struct PartitionRow {
   std::vector<std::string> parents;
 };
 
-absl::Status ConvertMergeEventToProto(const PartitionRow& row,
-                                      absl::string_view partition_token,
-                                      spanner_api::ResultSet& result_pb) {
+// Converts a move (one parent) or a merge (several parents), which both hand
+// the key range of `partition_token` to the single child partition in `row`.
+absl::Status ConvertMoveOrMergeEventToProto(const PartitionRow& row,
+                                            absl::string_view partition_token,
+                                            spanner_api::ResultSet& result_pb) {
   int64_t record_sequence = 0;
 
   bool is_first_parent =
       !row.parents.empty() && partition_token == row.parents[0];
 
-  // PartitionStartRecord for merged child (only generated in 1st parent).
+  // PartitionStartRecord for the child (only generated in 1st parent).
   if (is_first_parent) {
     spanner_api::ChangeStreamRecord start_record_proto;
     auto* start_proto = start_record_proto.mutable_partition_start_record();
@@ -839,13 +831,8 @@ absl::Status RowCursorToProtoPartitionChurningRecord(
     rows.push_back(r);
   }
 
-  if (rows.size() == 1 && rows[0].parents.size() == 1) {
-    return absl::InternalError(
-        "Move event partition churning is not supported in mutable key range "
-        "Change Streams.");
-  }
-  if (rows.size() == 1 && rows[0].parents.size() > 1) {
-    return ConvertMergeEventToProto(rows[0], partition_token, result_pb);
+  if (rows.size() == 1) {
+    return ConvertMoveOrMergeEventToProto(rows[0], partition_token, result_pb);
   }
   if (rows.size() > 1) {
     return ConvertSplitEventToProto(rows, partition_token, result_pb);
@@ -888,7 +875,6 @@ ConvertPartitionTableRowCursorToProto(
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -934,7 +920,6 @@ ConvertQueryStartPartitionTableRowCursorToProto(backend::RowCursor* row_cursor,
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -959,7 +944,6 @@ ConvertHeartbeatTimestampToProto(absl::Time timestamp, bool expect_metadata) {
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -986,7 +970,6 @@ ConvertDataTableRowCursorToProto(backend::RowCursor* row_cursor,
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 

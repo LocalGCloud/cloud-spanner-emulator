@@ -60,6 +60,9 @@ absl::Status ProcessMutationGroup(
   backend::Mutation backend_mutation;
   absl::Status status =
       MutationFromProto(*schema, mutation_group.mutations(), &backend_mutation);
+  if (status.ok()) {
+    status = ValidateExplicitWriteCellLimit(*schema, backend_mutation);
+  }
   if (!status.ok()) {
     SetResponseStatus(response, status);
     txn->MaybeInvalidate(status);
@@ -125,6 +128,9 @@ absl::Status BatchWrite(RequestContext* ctx,
     }
 
     std::shared_ptr<Transaction> txn = *single_use_transaction;
+    if (request->has_request_options()) {
+      txn->SetTransactionTag(request->request_options().transaction_tag());
+    }
 
     // Wrap all operations on this transaction so they are atomic.
     absl::Status txn_status =

@@ -261,6 +261,8 @@ archive_override(
     module_name = "googlesql",
     # Patches applied:
     # - Give visibility to GoogleSQL's base library to reuse some utilities
+    # - Pass graph arguments to table-valued functions in the reference
+    #   implementation (Spanner Graph algorithms)
     integrity = "sha256-9zT65nfWcsYaJ41WJHO/iuLQF/R9TdKzf6Jh5RNoUng=",
     patch_strip = 1,
     patches = ["//build/bazel:googlesql.patch"],

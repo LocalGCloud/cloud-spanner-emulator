@@ -146,6 +146,8 @@ cc_test(
         ":status",
         "//common:constants",
         "//tests/common:proto_matchers",
+        "//third_party/spanner_pg/errors",
+        "//third_party/spanner_pg/errors:errors_cc_proto",
         "@com_github_google_benchmark//:benchmark",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/status",
@@ -155,5 +157,39 @@ cc_test(
         "@com_google_googlesql//googlesql/base:ret_check",
         "@com_google_googlesql//googlesql/base/testing:status_matchers",
         "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_library(
+    name = "list_filter",
+    srcs = ["list_filter.cc"],
+    hdrs = ["list_filter.h"],
+    deps = [
+        "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+        "@com_google_googleapis//google/longrunning:longrunning_cc_proto",
+        "@com_google_googlesql//googlesql/base:status",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+cc_test(
+    name = "list_filter_test",
+    srcs = ["list_filter_test.cc"],
+    deps = [
+        ":list_filter",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_googleapis//google/longrunning:longrunning_cc_proto",
+        "@com_google_googleapis//google/spanner/admin/database/v1:database_cc_proto",
+        "@com_google_googlesql//googlesql/base/testing:status_matchers",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_protobuf//:cc_wkt_protos",
+        "@com_google_protobuf//:protobuf",
     ],
 )

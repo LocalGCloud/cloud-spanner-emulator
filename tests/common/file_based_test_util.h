@@ -29,6 +29,9 @@ namespace test {
 // `path` must not have "/" at the beginning.
 std::string GetTestFileDir(const std::string& path);
 
+// Returns the runfiles path for a directory in this repository.
+std::string GetRunfilesDir(const std::string& dir);
+
 }  // namespace test
 }  // namespace emulator
 }  // namespace spanner

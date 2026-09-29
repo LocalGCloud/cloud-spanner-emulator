@@ -201,13 +201,6 @@ absl::Status PopulateMetadata(
   return absl::OkStatus();
 }
 
-void PopulateFakeResumeTokens(
-    std::vector<spanner_api::PartialResultSet>* responses) {
-  for (auto& response : *responses) {
-    *response.mutable_resume_token() = kChangeStreamDummyResumeToken;
-  }
-}
-
 }  // namespace
 
 absl::StatusOr<std::vector<spanner_api::PartialResultSet>>
@@ -230,7 +223,6 @@ ConvertHeartbeatTimestampToJson(absl::Time timestamp,
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -261,7 +253,6 @@ ConvertPartitionTableRowCursorToJson(
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 
@@ -288,7 +279,6 @@ ConvertDataTableRowCursorToJson(backend::RowCursor* row_cursor,
   } else {
     responses.at(0).clear_metadata();
   }
-  PopulateFakeResumeTokens(&responses);
   return responses;
 }
 

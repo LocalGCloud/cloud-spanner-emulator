@@ -56,8 +56,10 @@ using JSON = ::nlohmann::json;
 static const char kSnippets[] = "snippets";
 static const char kSnippet[] = "snippet";
 static const char kHighLights[] = "highlights";
-static const char kStartPosition[] = "start_position";
-static const char kEndPosition[] = "end_position";
+static const char kBegin[] = "begin";
+static const char kEnd[] = "end";
+static const char kSourceBegin[] = "source_begin";
+static const char kSourceEnd[] = "source_end";
 
 static const char kHtmlContentType[] = "text/html";
 static const char kTextContentType[] = "text/plain";
@@ -153,6 +155,9 @@ absl::StatusOr<std::string> SnippetEvaluator::BuildSnippets(
   // returned.
   JSON highlights = nlohmann::json::array_t();
   std::string snippet_string;
+  // 1-based range of `target` that the snippet comes from, end exclusive.
+  int64_t source_begin = 1;
+  int64_t source_end = 1;
 
   std::vector<std::string> terms = absl::StrSplit(
       query, absl::ByAnyChar(kDelimiter), absl::SkipWhitespace());
@@ -185,14 +190,16 @@ absl::StatusOr<std::string> SnippetEvaluator::BuildSnippets(
     const_iterator match_begin =
         GetMatchBegin(target, first_match, match_end, max_snippet_length);
     snippet_string = std::string(match_begin, match_end);
+    source_begin = match_begin - target.begin() + 1;
+    source_end = match_end - target.begin() + 1;
 
     // Since the iterators in the matches are iterators pointing to the original
     // string, getting the highlight positions by adjusting the offset based on
-    // match_begin.
+    // match_begin. Like Spanner, the highlight positions are JSON strings.
     for (auto& match : matches) {
       JSON positions;
-      positions[kStartPosition] = match.first - match_begin + 1;
-      positions[kEndPosition] = match.second - match_begin + 1;
+      positions[kBegin] = absl::StrCat(match.first - match_begin + 1);
+      positions[kEnd] = absl::StrCat(match.second - match_begin + 1);
       highlights.push_back(std::move(positions));
     }
   }
@@ -200,6 +207,8 @@ absl::StatusOr<std::string> SnippetEvaluator::BuildSnippets(
   JSON snippet;
   snippet[kHighLights] = std::move(highlights);
   snippet[kSnippet] = std::move(snippet_string);
+  snippet[kSourceBegin] = source_begin;
+  snippet[kSourceEnd] = source_end;
 
   JSON snippets = nlohmann::json::array_t();
   snippets.push_back(std::move(snippet));

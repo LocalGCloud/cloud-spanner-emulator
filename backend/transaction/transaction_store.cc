@@ -171,7 +171,7 @@ absl::Status TransactionStore::BufferDelete(const Table* table,
 
 absl::Status TransactionStore::BufferWriteOp(const WriteOp& op) {
   current_statement_ops_.push_back(op);
-  return std::visit(
+  absl::Status status = std::visit(
       overloaded{
           [&](const InsertOp& op) {
             return BufferInsert(op.table, op.key, op.columns, op.values);
@@ -182,6 +182,20 @@ absl::Status TransactionStore::BufferWriteOp(const WriteOp& op) {
           [&](const DeleteOp& op) { return BufferDelete(op.table, op.key); },
       },
       op);
+  if (status.ok()) {
+    const Table* table = TableOf(op);
+    const Key& key =
+        std::visit([](const auto& write) -> const Key& { return write.key; },
+                   op);
+    auto [it, inserted] = stream_keys_[table].try_emplace(key, false);
+    if (inserted) {
+      stream_order_.emplace_back(table, key);
+    }
+    if (std::holds_alternative<DeleteOp>(op)) {
+      it->second = true;
+    }
+  }
+  return status;
 }
 
 void TransactionStore::TrackCommitTimestamps() {
@@ -240,9 +254,16 @@ absl::Status TransactionStore::Read(
     const Table* table, const KeyRange& key_range,
     absl::Span<const Column* const> columns,
     std::unique_ptr<StorageIterator>* storage_itr,
-    bool allow_pending_commit_timestamps_in_read) const {
-  // Acquire locks to prevent another transaction to modify this entity.
-  GOOGLESQL_RETURN_IF_ERROR(AcquireReadLock(table, key_range, columns));
+    bool allow_pending_commit_timestamps_in_read,
+    bool lock_scanned_ranges_exclusive,
+    std::optional<absl::Time> snapshot_timestamp) const {
+  // Acquire locks to prevent another transaction from modifying the scan.
+  // Repeatable-read snapshot reads take no shared locks.
+  if (lock_scanned_ranges_exclusive) {
+    GOOGLESQL_RETURN_IF_ERROR(AcquireWriteLock(table, key_range, columns));
+  } else if (!snapshot_timestamp.has_value()) {
+    GOOGLESQL_RETURN_IF_ERROR(AcquireReadLock(table, key_range, columns));
+  }
 
   // Read rows buffered within transaction store.
   // Table lookup.
@@ -281,9 +302,9 @@ absl::Status TransactionStore::Read(
   // Read from the base storage and apply the changes buffered in transaction
   // store.
   std::unique_ptr<StorageIterator> base_itr;
-  GOOGLESQL_RETURN_IF_ERROR(base_storage_->Read(absl::InfiniteFuture(), table->id(),
-                                      key_range, GetColumnIDs(columns),
-                                      &base_itr));
+  GOOGLESQL_RETURN_IF_ERROR(base_storage_->Read(
+      snapshot_timestamp.value_or(absl::InfiniteFuture()), table->id(),
+      key_range, GetColumnIDs(columns), &base_itr));
 
   while (base_itr->Next()) {
     const Key& base_key = base_itr->Key();
@@ -355,7 +376,8 @@ absl::Status TransactionStore::Read(
   return absl::OkStatus();
 }
 
-bool TransactionStore::RowExistsInStorage(const Table* table, const Key& key) {
+bool TransactionStore::RowExistsInStorage(const Table* table,
+                                          const Key& key) const {
   absl::Status row_in_base_storage =
       base_storage_->Lookup(absl::InfiniteFuture(), table->id(), key, {}, {});
   return row_in_base_storage.code() != absl::StatusCode::kNotFound;
@@ -431,36 +453,52 @@ absl::StatusOr<ValueList> TransactionStore::Lookup(
   return values;
 }
 
+WriteOp TransactionStore::ToWriteOp(const Table* table, const Key& key,
+                                    const RowOp& row_op) {
+  if (row_op.first == OpType::kDelete) {
+    return DeleteOp{table, key};
+  }
+  std::vector<const Column*> columns;
+  ValueList values;
+  for (const auto& cell : row_op.second) {
+    columns.emplace_back(cell.first);
+    values.emplace_back(cell.second);
+  }
+  if (row_op.first == OpType::kInsert) {
+    return InsertOp{table, key, columns, values};
+  }
+  return UpdateOp{table, key, columns, values};
+}
+
 std::vector<WriteOp> TransactionStore::GetBufferedOps() const {
   std::vector<WriteOp> buffered_ops;
-  for (const auto& entry : buffered_ops_) {
-    const Table* table = entry.first;
-    for (const auto& row : entry.second) {
-      const Key& key = row.first;
-      const RowOp& row_op = row.second;
-      std::vector<const Column*> columns;
-      ValueList values;
-      for (const auto& cell : row_op.second) {
-        columns.emplace_back(cell.first);
-        values.emplace_back(cell.second);
-      }
-      switch (row_op.first) {
-        case OpType::kInsert: {
-          buffered_ops.emplace_back(InsertOp{table, key, columns, values});
-          break;
-        }
-        case OpType::kUpdate: {
-          buffered_ops.emplace_back(UpdateOp{table, key, columns, values});
-          break;
-        }
-        case OpType::kDelete: {
-          buffered_ops.emplace_back(DeleteOp{table, key});
-          break;
-        }
-      }
+  for (const auto& [table, rows] : buffered_ops_) {
+    for (const auto& [key, row_op] : rows) {
+      buffered_ops.push_back(ToWriteOp(table, key, row_op));
     }
   }
   return buffered_ops;
+}
+
+std::vector<WriteOp> TransactionStore::GetChangeStreamOps() const {
+  std::vector<WriteOp> stream_ops;
+  for (const auto& [table, key] : stream_order_) {
+    const auto table_it = buffered_ops_.find(table);
+    if (table_it == buffered_ops_.end()) {
+      continue;
+    }
+    const auto row_it = table_it->second.find(key);
+    if (row_it == table_it->second.end()) {
+      continue;
+    }
+    const RowOp& row_op = row_it->second;
+    if (row_op.first == OpType::kInsert && stream_keys_.at(table).at(key) &&
+        RowExistsInStorage(table, key)) {
+      stream_ops.emplace_back(DeleteOp{table, key});
+    }
+    stream_ops.push_back(ToWriteOp(table, key, row_op));
+  }
+  return stream_ops;
 }
 
 }  // namespace backend

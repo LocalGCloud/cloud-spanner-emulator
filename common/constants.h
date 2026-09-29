@@ -102,6 +102,10 @@ constexpr char kInstancePartitionResourceType[] =
 // The default timezone used by the query engine.
 constexpr char kDefaultTimeZone[] = "America/Los_Angeles";
 
+// The query optimizer version reported by the emulator (the default row of
+// SPANNER_SYS.SUPPORTED_OPTIMIZER_VERSIONS).
+constexpr int64_t kDefaultOptimizerVersion = 42;
+
 // The default version retention period for the database.
 constexpr char kDefaultVersionRetentionPeriod[] = "1h";
 

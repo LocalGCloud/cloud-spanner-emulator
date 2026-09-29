@@ -17,11 +17,8 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_QUERY_SEARCH_PLAIN_FULL_TEXT_TOKENIZER_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_QUERY_SEARCH_PLAIN_FULL_TEXT_TOKENIZER_H_
 
-#include <string>
-#include <vector>
-
 #include "googlesql/public/value.h"
-#include "absl/status/status.h"
+#include "absl/types/span.h"
 
 namespace google {
 namespace spanner {
@@ -35,9 +32,6 @@ class PlainFullTextTokenizer {
   static absl::StatusOr<googlesql::Value> Tokenize(
       absl::Span<const googlesql::Value> args);
 
- private:
-  static absl::Status TokenizeString(absl::string_view str,
-                                     std::vector<std::string>& token_list);
 };
 
 }  // namespace search

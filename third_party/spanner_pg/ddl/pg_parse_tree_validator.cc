@@ -2350,10 +2350,11 @@ absl::Status ValidateParseTreeNode(const IndexStmt& node,
   GOOGLESQL_RET_CHECK_NE(node.relation, nullptr);
   GOOGLESQL_RETURN_IF_ERROR(ValidateParseTreeNode(*node.relation, "CREATE INDEX"));
 
-  // `accessMethod` only allows specifying a vector index type.
-  // Setting it to any other value, including the default (btree), is not
-  // supported.
-  if (strcmp(node.accessMethod, DEFAULT_INDEX_TYPE) != 0) {
+  // `accessMethod` is the default (btree) unless the statement creates a
+  // vector index, whose only access method is `scann`.
+  const bool is_vector_index =
+      node.accessMethod == PGConstants::kVectorIndexAccessMethod;
+  if (!is_vector_index && strcmp(node.accessMethod, DEFAULT_INDEX_TYPE) != 0) {
     return UnsupportedTranslationError(
         "Setting access method is not supported in <CREATE INDEX> statement.");
   }
@@ -2375,7 +2376,7 @@ absl::Status ValidateParseTreeNode(const IndexStmt& node,
   // `options` defines storage parameters for index in WITH clause. e.g.
   // CREATE INDEX title_idx ON films (title) WITH (deduplicate_items = off);
   // This is only supported for vector indexes.
-  if (!IsListEmpty(node.options)) {
+  if (!is_vector_index && !IsListEmpty(node.options)) {
     return UnsupportedTranslationError(
         "Index options are not supported in <CREATE INDEX> statement.");
   }

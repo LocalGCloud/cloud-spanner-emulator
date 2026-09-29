@@ -24,4 +24,8 @@ std::string MakeChangeStreamPartitionTableName(
 
 bool IsChangeStreamPartitionTable(absl::string_view table_name);
 
+std::string MakeChangeStreamDataTableName(absl::string_view change_stream_name);
+
+bool IsChangeStreamDataTable(absl::string_view table_name);
+
 #endif  // THIRD_PARTY_CLOUD_SPANNER_EMULATOR_COMMON_CHANGE_STREAM_H_

@@ -17,10 +17,12 @@
 #include "backend/storage/persistent_storage.h"
 
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -31,11 +33,14 @@
 #include "absl/time/time.h"
 #include "backend/datamodel/key_range.h"
 #include "backend/storage/iterator.h"
+#include "backend/storage/key_codec.h"
+#include "backend/storage/value_codec.h"
 #include "gmock/gmock.h"
 #include "googlesql/base/testing/status_matchers.h"
 #include "googlesql/public/json_value.h"
 #include "googlesql/public/numeric_value.h"
 #include "googlesql/public/types/type.h"
+#include "googlesql/public/uuid_value.h"
 #include "gtest/gtest.h"
 #include "tests/common/proto_matchers.h"
 
@@ -184,6 +189,35 @@ TEST(PersistentStorageCreateTest, DataPersistsAcrossCloseAndReopen) {
   std::filesystem::remove_all(base);
 }
 
+TEST(PersistentStorageCodecTest, UuidValueAndKeyRoundTrip) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::UuidValue first_uuid,
+      googlesql::UuidValue::FromString(
+          "00000000-0000-0000-0000-000000000001"));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::UuidValue second_uuid,
+      googlesql::UuidValue::FromString(
+          "00000000-0000-0000-0000-000000000002"));
+  const googlesql::Value first = googlesql::Value::Uuid(first_uuid);
+  const googlesql::Value second = googlesql::Value::Uuid(second_uuid);
+  const googlesql::Value null_uuid = googlesql::values::NullUuid();
+  const googlesql::Value uuid_array = googlesql::values::Array(
+      googlesql::types::UuidArrayType(), {first, null_uuid, second});
+  for (const googlesql::Value& value :
+       {first, second, null_uuid, uuid_array}) {
+    EXPECT_EQ(DecodeValue(EncodeValue(value)), value);
+  }
+
+  Key first_key({first});
+  Key second_key({second});
+  EXPECT_LT(EncodeKey(first_key), EncodeKey(second_key));
+  EXPECT_NE(EncodeKey(first_key),
+            EncodeKey(Key({String(first_uuid.ToString())})));
+  first_key.SetColumnDescending(0, true);
+  second_key.SetColumnDescending(0, true);
+  EXPECT_GT(EncodeKey(first_key), EncodeKey(second_key));
+}
+
 TEST(PersistentStorageCreateTest, CheckpointIsFrozenPointInTimeCopy) {
   std::string base = MakeTempDir("checkpoint");
   std::string source_path = base + "/db/storage";
@@ -212,6 +246,64 @@ TEST(PersistentStorageCreateTest, CheckpointIsFrozenPointInTimeCopy) {
   EXPECT_THAT(values, testing::ElementsAre(String("before-checkpoint")));
 
   checkpoint->reset();
+  source->reset();
+  std::filesystem::remove_all(base);
+}
+
+TEST(PersistentStorageCreateTest, CheckpointKeepsVersionsUpToVersionTime) {
+  const std::string base = MakeTempDir("checkpoint_version_time");
+  const TableID table_id = "checkpoint_table:0";
+  const ColumnID column_id = "payload:0";
+  const absl::Time first = absl::Now();
+  const absl::Time second = first + absl::Seconds(1);
+  const absl::Time third = first + absl::Seconds(2);
+
+  auto source = PersistentStorage::Create(base + "/db/storage");
+  ASSERT_TRUE(source.ok()) << source.status();
+  GOOGLESQL_ASSERT_OK((*source)->Write(first, table_id, Key({Int64(1)}),
+                                       {column_id}, {String("first")}));
+  GOOGLESQL_ASSERT_OK((*source)->Write(first, table_id, Key({Int64(3)}),
+                                       {column_id}, {String("deleted-later")}));
+  GOOGLESQL_ASSERT_OK((*source)->Write(second, table_id, Key({Int64(1)}),
+                                       {column_id}, {String("second")}));
+  GOOGLESQL_ASSERT_OK((*source)->Write(third, table_id, Key({Int64(1)}),
+                                       {column_id}, {String("third")}));
+  GOOGLESQL_ASSERT_OK((*source)->Write(third, table_id, Key({Int64(2)}),
+                                       {column_id},
+                                       {String("inserted-later")}));
+  GOOGLESQL_ASSERT_OK(
+      (*source)->Delete(third, table_id, KeyRange::Point(Key({Int64(3)}))));
+
+  absl::StatusOr<int64_t> historical_changed =
+      (*source)->CreateCheckpoint(base + "/historical/storage", second, first);
+  ASSERT_TRUE(historical_changed.ok()) << historical_changed.status();
+  absl::StatusOr<int64_t> latest_changed = (*source)->CreateCheckpoint(
+      base + "/latest/storage", absl::InfiniteFuture(), first);
+  ASSERT_TRUE(latest_changed.ok()) << latest_changed.status();
+  absl::StatusOr<int64_t> unchanged =
+      (*source)->CreateCheckpoint(base + "/unchanged/storage", first, second);
+  ASSERT_TRUE(unchanged.ok()) << unchanged.status();
+  EXPECT_GT(*historical_changed, 0);
+  EXPECT_GT(*latest_changed, *historical_changed);
+  EXPECT_EQ(*unchanged, 0);
+
+  auto historical = PersistentStorage::Create(base + "/historical/storage");
+  ASSERT_TRUE(historical.ok()) << historical.status();
+  std::unique_ptr<StorageIterator> iterator;
+  GOOGLESQL_ASSERT_OK((*historical)->Read(absl::InfiniteFuture(), table_id,
+                                          KeyRange::All(), {column_id},
+                                          &iterator));
+  std::vector<std::pair<int64_t, std::string>> rows;
+  while (iterator->Next()) {
+    rows.emplace_back(iterator->Key().ColumnValue(0).int64_value(),
+                      iterator->ColumnValue(0).string_value());
+  }
+  GOOGLESQL_EXPECT_OK(iterator->Status());
+  EXPECT_THAT(rows, testing::ElementsAre(testing::Pair(1, "second"),
+                                         testing::Pair(3, "deleted-later")));
+
+  iterator.reset();
+  historical->reset();
   source->reset();
   std::filesystem::remove_all(base);
 }
@@ -258,7 +350,7 @@ TEST(PersistentStorageCreateTest,
   }
 
   absl::Status checkpoint_status =
-      (*source)->CreateCheckpoint(checkpoint_path);
+      (*source)->CreateCheckpoint(checkpoint_path).status();
   stop.store(true);
   writer.join();
   GOOGLESQL_ASSERT_OK(checkpoint_status);
@@ -402,6 +494,59 @@ TEST_F(PersistentStorageTest, ReadRangeFromSingleTable) {
     EXPECT_EQ(itr_->ColumnValue(0), String(absl::StrCat("value-", i)));
   }
   EXPECT_FALSE(itr_->Next());
+}
+
+// LevelDB orders the rows of a table by the length of their encoded key before
+// the key itself. Range reads and deletes must still find every row in the
+// range when the keys have different lengths, as in a unique index lookup of
+// one value of a STRING column.
+TEST_F(PersistentStorageTest, RangesCoverKeysOfDifferentLengths) {
+  absl::Time t0 = absl::Now();
+  const std::vector<Key> keys = {
+      Key({String("user14@example.com"), Int64(3)}),
+      Key({String("user14@example.com"), Int64(1234567)}),
+      Key({String("user5@example.com"), Int64(7)}),
+      Key({String("user100@example.com"), Int64(8)}),
+      Key({String("a"), Int64(9)}),
+      Key({String("zz"), Int64(10)}),
+  };
+  for (const Key& key : keys) {
+    GOOGLESQL_ASSERT_OK(
+        storage_->Write(t0, kTableId0, key, {kColumnID}, {String("v")}));
+  }
+  auto read_keys = [&](const KeyRange& range) {
+    std::vector<Key> found;
+    EXPECT_TRUE(
+        storage_->Read(t0, kTableId0, range, {kColumnID}, &itr_).ok());
+    while (itr_->Next()) {
+      found.push_back(itr_->Key());
+    }
+    return found;
+  };
+
+  EXPECT_THAT(
+      read_keys(KeyRange::Prefix(Key({String("user14@example.com")}))
+                    .ToClosedOpen()),
+      testing::ElementsAre(keys[0], keys[1]));
+  EXPECT_THAT(read_keys(KeyRange::ClosedOpen(Key({String("user")}),
+                                             Key({String("user5")}))),
+              testing::ElementsAre(keys[3], keys[0], keys[1]));
+  EXPECT_THAT(read_keys(KeyRange::All()),
+              testing::ElementsAre(keys[4], keys[3], keys[0], keys[1], keys[2],
+                          keys[5]));
+
+  // Deleting a prefix removes every row with the prefix.
+  GOOGLESQL_ASSERT_OK(storage_->Delete(
+      t0 + absl::Seconds(1), kTableId0,
+      KeyRange::Prefix(Key({String("user14@example.com")})).ToClosedOpen()));
+  itr_.reset();
+  std::vector<Key> remaining;
+  GOOGLESQL_ASSERT_OK(storage_->Read(t0 + absl::Seconds(1), kTableId0,
+                                     KeyRange::All(), {kColumnID}, &itr_));
+  while (itr_->Next()) {
+    remaining.push_back(itr_->Key());
+  }
+  EXPECT_THAT(remaining, testing::ElementsAre(keys[4], keys[3], keys[2], keys[5]));
 }
 
 TEST_F(PersistentStorageTest, LookupByTimestamp) {

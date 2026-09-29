@@ -90,10 +90,30 @@ the binaries to `artifacts/spanner-emulator-main-<arch>` and
 `artifacts/gateway-main-<arch>`.
 
 ```shell
-./build.sh                         # linux/arm64, offline repository cache (default)
-./build.sh --online                # download dependencies and import the Docker Hub layer cache
+./build.sh                         # linux/arm64, offline repository cache (default, imports registry cache)
+./build.sh --online                # download dependencies inside container instead of host distdir
+./build.sh --no-registry-cache     # build purely locally without importing Docker Hub layer cache
+./build.sh --local-cache-dir=DIR   # export/import BuildKit layer cache to/from local disk directory
+./build.sh --skip-fetch            # skip host bazel fetch (auto-skipped if bazel-distdir is populated)
+./build.sh --force-fetch           # force host bazel fetch even if bazel-distdir exists
+./build.sh --skip-tests            # package image without running database_manager_test
+./build.sh --jobs=4                # override Bazel parallel compile jobs
 ./build.sh --platform=amd64        # linux/amd64
-BAZEL_JOBS=3 ./build.sh --online   # override the Bazel job count
+```
+
+### Running and testing the built image
+
+```shell
+# In-memory mode (port 9010 gRPC, port 9020 REST)
+docker run -d --name spanner-emulator -p 9010:9010 -p 9020:9020 spanner-emulator-extended:local
+
+# Persistent volume mode
+docker run -d --name spanner-persist -p 9010:9010 -p 9020:9020 -v spanner-data:/data \
+  spanner-emulator-extended:local \
+  ./gateway_main --hostname 0.0.0.0 --data_dir=/data
+
+# Run the automated image verification suite
+python3 tests/image_verification_test.py
 ```
 
 ### What it does
@@ -110,15 +130,16 @@ BAZEL_JOBS=3 ./build.sh --online   # override the Bazel job count
 3. **Dependency manifest.** `build/docker/generate_build_manifest.py` writes
    `build_files.tar` with the BUILD files the `deps` stage needs. The dependency
    fetch layer then changes only when the dependency graph changes.
-4. **Downloads.** Offline mode (the default) downloads the Bazel binary and
-   runs `bazel fetch` on the host into `bazel-distdir/`, then builds from that.
-   This needs Bazel on the host. `--online` skips this, downloads inside the
-   build, and imports the Docker Hub layer cache.
-5. **Compile.** The `build` stage runs `bazel test` for
-   `//binaries:emulator_main`, `//binaries:gateway_main`, and
-   `//frontend/collections:database_manager_test`. The Bazel output base,
-   disk cache, and repository cache are BuildKit cache mounts named
-   `spanner-emulator-<arch>-output`, `-disk`, and `-repo`.
+4. **Downloads.** Offline mode (the default) uses `bazel-distdir/`. If
+   `bazel-distdir/content_addressable` is already populated, `build.sh` skips
+   the slow host `bazel fetch` step automatically (saving 60–90 seconds);
+   pass `--force-fetch` to force re-evaluation. Both modes import the Docker Hub
+   layer cache by default unless `--no-registry-cache` or `SPANNER_REGISTRY_CACHE=""`
+   is set. Local disk caching is supported via `--local-cache-dir=<dir>`.
+5. **Compile.** The `build` stage compiles `//binaries:emulator_main` and
+   `//binaries:gateway_main` (and optionally runs `//frontend/collections:database_manager_test`
+   when `--run-tests` is passed). The Bazel output base, disk cache, and repository
+   cache are BuildKit cache mounts named `spanner-emulator-<arch>-output`, `-disk`, and `-repo`.
 6. **Package.** The runtime image is `gcr.io/distroless/cc-debian12` with the
    two binaries.
 
@@ -131,11 +152,10 @@ BAZEL_JOBS=3 ./build.sh --online   # override the Bazel job count
   changed, its first build compiles everything, GoogleSQL included. An exact
   Docker build-layer cache hit can skip that step; later builds on the same
   builder recompile only what changed.
-- **Job count.** `build.sh` picks jobs from the Docker VM's memory: under
-  20 GiB 1, under 32 GiB 2, under 44 GiB 3, otherwise 4. Heavy GoogleSQL files
-  can use several GB each, so more jobs risks running out of memory. A 32 GiB
-  colima VM reports about 31 GiB and gets 2 jobs. Set `BAZEL_JOBS` to override,
-  or give the VM more memory.
+- **Job count.** `build.sh` scales jobs from the Docker VM's memory: under
+  20 GiB 1, under 26 GiB 2, under 40 GiB 4, otherwise 6. Heavy GoogleSQL files
+  can use several GB each, so more jobs risks running out of memory. Set
+  `--jobs=N` (or `BAZEL_JOBS=N`) to override explicitly.
 - **Disk space.** A full arm64 build leaves about 11 GB in cache mounts (output
   base 7.6 GB, disk cache 2.6 GB, repository cache 1 GB) and about 17 GB on the
   builder overall. `buildkitd.toml` keeps cache mounts for up to 60 days.
@@ -172,7 +192,7 @@ BAZEL_JOBS=3 ./build.sh --online   # override the Bazel job count
 | `SPANNER_BASE_IMAGE` | `jaysen2apache/spanner-emulator-base:<arch>` | Base image |
 | `SPANNER_BASE_IMAGE_REPO` | `jaysen2apache/spanner-emulator-base` | Repository for the default base image |
 | `SPANNER_BUILDER` | `spanner-emulator-local` | buildx builder that holds the caches |
-| `SPANNER_REGISTRY_CACHE` | `jaysen2apache/spanner-emulator-extended:buildcache-<arch>` | Layer cache imported with `--online`; empty disables it |
+| `SPANNER_REGISTRY_CACHE` | `jaysen2apache/spanner-emulator-extended:buildcache-<arch>` | Layer cache imported from registry; empty or `--no-registry-cache` disables it |
 | `SPANNER_CACHE_TO_REF` | unset | Registry ref to export the layer cache to (same as `--cache-to=`) |
 | `SPANNER_TOOLCHAIN_CACHE_EPOCH` | `ubuntu22-gcc13-bazel7.6.1` | Selects the cache mount names |
 | `BAZEL_JOBS` | from Docker memory | Bazel `--jobs` |

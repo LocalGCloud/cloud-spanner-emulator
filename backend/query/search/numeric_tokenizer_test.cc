@@ -20,6 +20,7 @@
 #include <limits>
 #include <vector>
 
+#include "googlesql/public/types/type_factory.h"
 #include "googlesql/public/value.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -49,11 +50,30 @@ TEST_P(NumericTokenizerTest, TestTokenize) {
   googlesql::Value token_list = result.value();
   EXPECT_TRUE(token_list.type()->IsTokenList());
 
-  // For numeric tokenized column, since no operation is supported on the
-  // column, we don't store original text but only the tokenizer information.
+  // Numeric tokenlists start with the tokenizer name; no search function
+  // reads their other tokens.
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto tokens, StringsFromTokenList(token_list));
-  ASSERT_EQ(tokens.size(), 1);
+  ASSERT_GE(tokens.size(), 1);
   EXPECT_EQ(tokens[0], "numeric");
+}
+
+TEST(NumericTokenizerDebugTest, DocumentedLogtreeTokens) {
+  // The TOKENIZE_NUMBER example of DEBUG_TOKENLIST in the documentation.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::Value values,
+      googlesql::Value::MakeArray(
+          googlesql::types::Int64ArrayType(),
+          {googlesql::Value::Int64(1), googlesql::Value::Int64(10)}));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      googlesql::Value tokenlist,
+      NumericTokenizer::Tokenize(
+          {values, googlesql::Value::NullString(),
+           googlesql::Value::NullString(), googlesql::Value::Int64(1),
+           googlesql::Value::Int64(10)}));
+  EXPECT_THAT(DebugTokenList(tokenlist),
+              googlesql_base::testing::IsOkAndHolds(
+                  "==1, ==10, [1, 1], [1, 2], [1, 4], [1, 8], [9, 10], "
+                  "[9, 12], [9, 16], [10, 10]"));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -90,6 +110,13 @@ INSTANTIATE_TEST_SUITE_P(
            googlesql::Value::String("auto"), googlesql::Value::NullInt64(),
            googlesql::Value::NullInt64(), googlesql::Value::Double(2),
            googlesql::Value::Int64(4), googlesql::Value::Int64(8)}}}));
+
+TEST(NumericTokenizerNullTest, NullInputValue) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto result, NumericTokenizer::Tokenize({googlesql::Value::NullInt64()}));
+  EXPECT_TRUE(result.type()->IsTokenList());
+  EXPECT_TRUE(result.is_null());
+}
 
 // TODO: Add more code and test to check the parameter values.
 

@@ -334,6 +334,32 @@ TEST_F(QueryValidatorTest, ValidateJoinMethodHintInvalidValueReturnsError) {
 }
 
 // Tests for ignore_unknown_hints
+TEST_F(QueryValidatorTest, DetectsExclusiveLockScannedRangesHint) {
+  QueryableTable table{schema()->FindTable("test_table"), /*reader=*/nullptr};
+  auto make_query = [&table]() {
+    return googlesql::MakeResolvedQueryStmt(
+        /*output_column_list=*/{}, /*is_value_table=*/false,
+        googlesql::MakeResolvedTableScan(/*column_list=*/{}, &table,
+                                         /*for_system_time_expr=*/nullptr));
+  };
+  auto with_hint = [&make_query](const std::string& qualifier,
+                                 const std::string& value) {
+    std::unique_ptr<googlesql::ResolvedQueryStmt> query = make_query();
+    query->add_hint_list(googlesql::MakeResolvedOption(
+        qualifier, "LOCK_SCANNED_RANGES",
+        googlesql::MakeResolvedLiteral(googlesql::Value::String(value))));
+    return query;
+  };
+
+  EXPECT_TRUE(HasExclusiveLockScannedRangesHint(*with_hint("", "exclusive")));
+  EXPECT_TRUE(
+      HasExclusiveLockScannedRangesHint(*with_hint("spanner", "EXCLUSIVE")));
+  EXPECT_FALSE(HasExclusiveLockScannedRangesHint(*with_hint("", "shared")));
+  EXPECT_FALSE(HasExclusiveLockScannedRangesHint(
+      *with_hint("other_engine", "exclusive")));
+  EXPECT_FALSE(HasExclusiveLockScannedRangesHint(*make_query()));
+}
+
 TEST_F(QueryValidatorTest, IgnoreUnknownHints_SpannerQualifierFails) {
   QueryableTable table{schema()->FindTable("test_table"), /*reader=*/nullptr};
   std::unique_ptr<googlesql::ResolvedTableScan> resolved_table_scan =

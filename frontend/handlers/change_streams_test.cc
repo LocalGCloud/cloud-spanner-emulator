@@ -46,6 +46,7 @@
 #include "frontend/converters/change_streams.h"
 #include "frontend/converters/pg_change_streams.h"
 #include "frontend/handlers/change_streams.h"
+#include "frontend/proto/resume_token.pb.h"
 #include "tests/common/chunking.h"
 #include "tests/common/proto_matchers.h"
 #include "tests/common/scoped_feature_flags_setter.h"
@@ -114,7 +115,10 @@ class ChangeStreamQueryAPITest
     for (int i = 0; i < response.size(); ++i) {
       GOOGLESQL_RET_CHECK(i == 0 ? response[i].has_metadata()
                        : !response[i].has_metadata());
-      GOOGLESQL_RET_CHECK(response[i].resume_token() == kChangeStreamDummyResumeToken);
+      // Every response that ends on a record boundary can resume the stream.
+      GOOGLESQL_RET_CHECK(response[i].values().empty() ||
+                          response[i].chunked_value() ||
+                          !response[i].resume_token().empty());
     }
     GOOGLESQL_ASSIGN_OR_RETURN(auto result_set, backend::test::MergePartialResultSets(
                                           response, /*columns_per_row=*/1));
@@ -200,6 +204,28 @@ class ChangeStreamQueryAPITest
 
     spanner_api::CommitResponse commit_response;
     return Commit(commit_request, &commit_response);
+  }
+
+  absl::Status InsertRowWithKey(absl::string_view table_name, int64_t key,
+                                spanner_api::CommitResponse* response) {
+    spanner_api::CommitRequest commit_request = PARSE_TEXT_PROTO(
+        absl::Substitute(R"pb(
+                           single_use_transaction { read_write {} }
+                           mutations {
+                             insert {
+                               table: "$0"
+                               columns: "int64_col"
+                               columns: "string_col"
+                               values {
+                                 values { string_value: "$1" }
+                                 values { string_value: "row_$1" }
+                               }
+                             }
+                           }
+                         )pb",
+                         table_name, key));
+    *commit_request.mutable_session() = test_session_uri_;
+    return Commit(commit_request, response);
   }
 
   absl::Status PopulateTestDatabase() {
@@ -698,6 +724,121 @@ TEST_P(ChangeStreamQueryAPITest,
   ASSERT_EQ(change_records.data_change_records.size(), 0);
 }
 
+TEST_P(ChangeStreamQueryAPITest, ResumesPartitionQueryAfterResumeToken) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto initial_active_token,
+                       GetActiveTokenFromInitialQuery(now_));
+  for (int key = 2; key <= 4; ++key) {
+    spanner_api::CommitRequest commit_request;
+    commit_request.set_session(test_session_uri_);
+    commit_request.mutable_single_use_transaction()->mutable_read_write();
+    auto* insert = commit_request.add_mutations()->mutable_insert();
+    insert->set_table("test_table");
+    insert->add_columns("int64_col");
+    insert->add_columns("string_col");
+    auto* row = insert->add_values();
+    row->add_values()->set_string_value(absl::StrCat(key));
+    row->add_values()->set_string_value(absl::StrCat("row_", key));
+    spanner_api::CommitResponse commit_response;
+    GOOGLESQL_ASSERT_OK(Commit(commit_request, &commit_response));
+  }
+  spanner_api::ExecuteSqlRequest request;
+  request.set_session(test_session_uri_);
+  request.set_sql(ConstructChangeStreamQuery(now_, Clock().Now(),
+                                             initial_active_token));
+  std::vector<spanner_api::PartialResultSet> original;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &original));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      spanner_api::ResultSet all,
+      backend::test::MergePartialResultSets(original, /*columns_per_row=*/1));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(test::ChangeStreamRecords all_records,
+                       test::GetChangeStreamRecordsFromResultSet(all));
+  ASSERT_EQ(all_records.data_change_records.size(), 4);
+
+  // Resumes after the first `skipped` records of the original stream.
+  auto expect_resumes_after = [&](const std::string& resume_token,
+                                  int skipped) {
+    request.set_resume_token(resume_token);
+    std::vector<spanner_api::PartialResultSet> resumed;
+    GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &resumed));
+    ASSERT_FALSE(resumed.empty());
+    EXPECT_TRUE(resumed.front().has_metadata());
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        spanner_api::ResultSet rest,
+        backend::test::MergePartialResultSets(resumed, /*columns_per_row=*/1));
+    ASSERT_EQ(rest.rows_size(), all.rows_size() - skipped);
+    for (int i = 0; i < rest.rows_size(); ++i) {
+      EXPECT_THAT(rest.rows(i), test::EqualsProto(all.rows(skipped + i)));
+    }
+  };
+  int skipped = 0;
+  for (int i = 0; i + 1 < original.size(); ++i) {
+    skipped += original[i].values_size();
+    ASSERT_FALSE(original[i].resume_token().empty());
+    SCOPED_TRACE(absl::StrCat("after response ", i));
+    expect_resumes_after(original[i].resume_token(), skipped);
+  }
+
+  // Positions within a response: after each data change record.
+  ResumeToken position;
+  ASSERT_TRUE(position.ParseFromString(original.front().resume_token()));
+  EXPECT_EQ(position.change_stream().partition_token(), initial_active_token);
+  for (int i = 0; i < all_records.data_change_records.size(); ++i) {
+    SCOPED_TRACE(absl::StrCat("after data change record ", i));
+    absl::Time commit_timestamp;
+    std::string error;
+    ASSERT_TRUE(absl::ParseTime(
+        absl::RFC3339_full,
+        all_records.data_change_records[i].commit_timestamp.string_value(),
+        &commit_timestamp, &error))
+        << error;
+    position.mutable_change_stream()->set_timestamp_micros(
+        absl::ToUnixMicros(commit_timestamp));
+    position.mutable_change_stream()->set_record_index(1);
+    expect_resumes_after(position.SerializeAsString(), i + 1);
+  }
+}
+
+TEST_P(ChangeStreamQueryAPITest, ResumesInitialQueryAfterResumeToken) {
+  spanner_api::ExecuteSqlRequest request;
+  request.set_session(test_session_uri_);
+  request.set_sql(ConstructChangeStreamQuery(now_));
+  std::vector<spanner_api::PartialResultSet> original;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &original));
+  ASSERT_EQ(original.size(), 1);
+  ResumeToken position;
+  ASSERT_TRUE(position.ParseFromString(original.front().resume_token()));
+  EXPECT_EQ(position.change_stream().partition_token(), "");
+  EXPECT_EQ(position.change_stream().timestamp_micros(),
+            absl::ToUnixMicros(now_));
+  EXPECT_EQ(position.change_stream().record_index(),
+            original.front().values_size());
+
+  // Nothing follows the last record of the initial query.
+  request.set_resume_token(original.front().resume_token());
+  std::vector<spanner_api::PartialResultSet> resumed;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &resumed));
+  ASSERT_EQ(resumed.size(), 1);
+  EXPECT_TRUE(resumed.front().has_metadata());
+  EXPECT_TRUE(resumed.front().values().empty());
+}
+
+TEST_P(ChangeStreamQueryAPITest, RejectsResumeTokensOfOtherRequests) {
+  spanner_api::ExecuteSqlRequest request;
+  request.set_session(test_session_uri_);
+  request.set_sql(ConstructChangeStreamQuery(now_));
+  std::vector<spanner_api::PartialResultSet> original;
+  GOOGLESQL_ASSERT_OK(ExecuteStreamingSql(request, &original));
+
+  std::vector<spanner_api::PartialResultSet> resumed;
+  request.set_resume_token("not a token");
+  EXPECT_THAT(ExecuteStreamingSql(request, &resumed),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+  request.set_sql(ConstructChangeStreamQuery(now_ + absl::Microseconds(1)));
+  request.set_resume_token(original.front().resume_token());
+  EXPECT_THAT(ExecuteStreamingSql(request, &resumed),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST_P(ChangeStreamQueryAPITest, ExecuteRealTimePartitionQueryWithStaleToken) {
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto initial_active_token,
                        GetActiveTokenFromInitialQuery(now_));
@@ -832,6 +973,98 @@ TEST_P(ChangeStreamQueryAPITest, ExecuteRealTimePartitionQueryThreaded) {
   ASSERT_EQ(change_records.child_partition_records.size(), 0);
   ASSERT_EQ(change_records.heartbeat_records.size(), 0);
   ASSERT_EQ(change_records.data_change_records.size(), 2);
+}
+
+TEST_P(ChangeStreamQueryAPITest, CommitOnChopBoundaryIsCaptured) {
+  absl::SetFlag(&FLAGS_change_stream_churning_interval, absl::Hours(1));
+  absl::SetFlag(&FLAGS_change_stream_churn_thread_sleep_interval,
+                absl::Hours(1));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto initial_active_token,
+                       GetActiveTokenFromInitialQuery(now_));
+
+  absl::SleepFor(absl::Milliseconds(100));
+  spanner_api::CommitResponse commit_response;
+  GOOGLESQL_ASSERT_OK(InsertRowWithKey("test_table", 999, &commit_response));
+  absl::Time commit_ts =
+      absl::FromUnixSeconds(commit_response.commit_timestamp().seconds()) +
+      absl::Nanoseconds(commit_response.commit_timestamp().nanos());
+
+  // Set the chop interval exactly to commit_ts - now_ so the first scan slice ends
+  // precisely at commit_ts.
+  const absl::Duration chop_interval = commit_ts - now_;
+  absl::SetFlag(&FLAGS_change_streams_partition_query_chop_interval,
+                chop_interval);
+
+  // The first scan slice will be [now_, commit_ts).
+  // The commit occurs exactly at the boundary (commit_ts). It must not be skipped.
+  absl::Time query_start = now_;
+  absl::Time query_end = commit_ts + absl::Milliseconds(200);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      test::ChangeStreamRecords change_records,
+      ExecuteChangeStreamQuery(ConstructChangeStreamQuery(
+          query_start, query_end, initial_active_token)));
+
+  bool found_commit = false;
+  for (const auto& dcr : change_records.data_change_records) {
+    absl::Time record_ts;
+    std::string err;
+    if (absl::ParseTime(absl::RFC3339_full, dcr.commit_timestamp.string_value(),
+                        &record_ts, &err) &&
+        record_ts == commit_ts) {
+      found_commit = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_commit);
+}
+
+TEST_P(ChangeStreamQueryAPITest, TransactionTagIsPropagatedToChangeStream) {
+  absl::SetFlag(&FLAGS_change_stream_churning_interval, absl::Hours(1));
+  absl::SetFlag(&FLAGS_change_stream_churn_thread_sleep_interval,
+                absl::Hours(1));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto initial_active_token,
+                       GetActiveTokenFromInitialQuery(now_));
+  spanner_api::CommitRequest commit_request = PARSE_TEXT_PROTO(R"pb(
+    single_use_transaction { read_write {} }
+    mutations {
+      insert {
+        table: "test_table"
+        columns: "int64_col"
+        columns: "string_col"
+        values {
+          values { string_value: "99" }
+          values { string_value: "tagged_row" }
+        }
+      }
+    }
+    request_options { transaction_tag: "user_txn_tag_99" }
+  )pb");
+  *commit_request.mutable_session() = test_session_uri_;
+
+  spanner_api::CommitResponse commit_response;
+  GOOGLESQL_ASSERT_OK(Commit(commit_request, &commit_response));
+
+  absl::Time commit_ts =
+      absl::FromUnixSeconds(commit_response.commit_timestamp().seconds()) +
+      absl::Nanoseconds(commit_response.commit_timestamp().nanos());
+  absl::Time query_start = commit_ts - absl::Microseconds(1);
+  absl::Time query_end = commit_ts + absl::Seconds(1);
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      test::ChangeStreamRecords change_records,
+      ExecuteChangeStreamQuery(ConstructChangeStreamQuery(
+          query_start, query_end, initial_active_token)));
+
+  bool found_tagged_record = false;
+  for (const auto& dcr : change_records.data_change_records) {
+    if (dcr.transaction_tag.string_value() == "user_txn_tag_99") {
+      EXPECT_EQ(dcr.is_system_transaction.bool_value(), false);
+      found_tagged_record = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_tagged_record);
 }
 
 TEST_P(ChangeStreamQueryAPITest, ExecuteRealTimePartitionQueryWithParameter) {
@@ -1624,6 +1857,164 @@ TEST_P(MutableKeyRangeChangeStreamQueryAPITest,
   ASSERT_EQ(change_records.partition_end_records.size(), 1);
   EXPECT_EQ(change_records.partition_end_records[0].partition_token(),
             "historical_token1");
+}
+
+TEST_P(MutableKeyRangeChangeStreamQueryAPITest,
+       ExecuteRealTimePartitionQueryOnNullEndPartitionToken) {
+  GOOGLESQL_ASSERT_OK(PopulatePartitionTable());
+  absl::SetFlag(&FLAGS_cloud_spanner_emulator_test_with_fake_partition_table,
+                true);
+  // With no records in the window, the query still returns one heartbeat at the
+  // tvf end, in the mutable key range record format.
+  const absl::Time end = now_ + absl::Microseconds(500);
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      test::ChangeStreamRecords change_records,
+      ExecuteChangeStreamQuery(ConstructChangeStreamQuery(
+          now_ - absl::Microseconds(2), end, "null_end_token")));
+  EXPECT_EQ(change_records.heartbeat_records.size(), 0);
+  ASSERT_EQ(change_records.mutable_key_range_heartbeat_records.size(), 1);
+  const auto& heartbeat_ts =
+      change_records.mutable_key_range_heartbeat_records[0].timestamp();
+  EXPECT_EQ(absl::ToUnixMicros(absl::FromUnixSeconds(heartbeat_ts.seconds()) +
+                               absl::Nanoseconds(heartbeat_ts.nanos())),
+            absl::ToUnixMicros(end));
+  EXPECT_EQ(change_records.partition_event_records.size(), 0);
+}
+
+TEST_P(MutableKeyRangeChangeStreamQueryAPITest,
+       ExecuteHistoricalPartitionQueryOnMovedPartition) {
+  absl::SetFlag(&FLAGS_cloud_spanner_emulator_disable_cs_retention_check, true);
+  absl::SetFlag(&FLAGS_cloud_spanner_emulator_test_with_fake_partition_table,
+                true);
+
+  absl::Time start_time = now_;
+  absl::Time end_time = start_time + absl::Microseconds(1);
+  std::string start_str = test::EncodeTimestampString(start_time);
+  std::string end_str = test::EncodeTimestampString(end_time);
+
+  // historical_token1 moves its whole key range to moved_token1.
+  spanner_api::CommitRequest commit_request = PARSE_TEXT_PROTO(absl::Substitute(
+      R"pb(
+        single_use_transaction { read_write {} }
+        mutations {
+          insert {
+            table: "partition_table"
+            columns: "partition_token"
+            columns: "start_time"
+            columns: "end_time"
+            columns: "parents"
+            columns: "children"
+            values {
+              values { string_value: "historical_token1" }
+              values { string_value: "$0" }
+              values { string_value: "$1" }
+              values { list_value {} }
+              values { list_value { values { string_value: "moved_token1" } } }
+            }
+            values {
+              values { string_value: "moved_token1" }
+              values { string_value: "$1" }
+              values { null_value: NULL_VALUE }
+              values {
+                list_value { values { string_value: "historical_token1" } }
+              }
+              values { list_value {} }
+            }
+          }
+        }
+      )pb",
+      start_str, end_str));
+  commit_request.set_session(test_session_uri_);
+  spanner_api::CommitResponse commit_response;
+  GOOGLESQL_ASSERT_OK(Commit(commit_request, &commit_response));
+
+  // The moved partition starts its child, moves its key range out to the child
+  // and ends.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      test::ChangeStreamRecords parent_records,
+      ExecuteChangeStreamQuery(ConstructChangeStreamQuery(
+          end_time, end_time + absl::Microseconds(1), "historical_token1")));
+  ASSERT_EQ(parent_records.partition_start_records.size(), 1);
+  ASSERT_EQ(parent_records.partition_start_records[0].partition_tokens_size(),
+            1);
+  EXPECT_EQ(parent_records.partition_start_records[0].partition_tokens(0),
+            "moved_token1");
+  ASSERT_EQ(parent_records.partition_event_records.size(), 1);
+  const auto& move_out_event = parent_records.partition_event_records[0];
+  EXPECT_EQ(move_out_event.partition_token(), "historical_token1");
+  EXPECT_EQ(move_out_event.move_in_events_size(), 0);
+  ASSERT_EQ(move_out_event.move_out_events_size(), 1);
+  EXPECT_EQ(move_out_event.move_out_events(0).destination_partition_token(),
+            "moved_token1");
+  ASSERT_EQ(parent_records.partition_end_records.size(), 1);
+  EXPECT_EQ(parent_records.partition_end_records[0].partition_token(),
+            "historical_token1");
+
+  // The child reports the key range moving in from its parent.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      test::ChangeStreamRecords child_records,
+      ExecuteChangeStreamQuery(
+          ConstructChangeStreamQuery(end_time, end_time, "moved_token1")));
+  ASSERT_EQ(child_records.partition_event_records.size(), 1);
+  const auto& move_in_event = child_records.partition_event_records[0];
+  EXPECT_EQ(move_in_event.partition_token(), "moved_token1");
+  EXPECT_EQ(move_in_event.move_out_events_size(), 0);
+  ASSERT_EQ(move_in_event.move_in_events_size(), 1);
+  EXPECT_EQ(move_in_event.move_in_events(0).source_partition_token(),
+            "historical_token1");
+}
+
+TEST_P(MutableKeyRangeChangeStreamQueryAPITest, ChurnedMoveEmitsMoveEvents) {
+  // SetUp gives partitions a 500ms lifetime. One of the two initial partitions
+  // splits when it churns and the other moves.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      test::ChangeStreamRecords initial_records,
+      ExecuteChangeStreamQuery(ConstructChangeStreamQuery(now_, now_)));
+  std::vector<std::string> initial_tokens;
+  for (const auto& start_record : initial_records.partition_start_records) {
+    for (const std::string& token : start_record.partition_tokens()) {
+      initial_tokens.push_back(token);
+    }
+  }
+  ASSERT_EQ(initial_tokens.size(), 2);
+
+  std::string moved_token;
+  std::string move_child_token;
+  absl::Time move_time;
+  for (const std::string& token : initial_tokens) {
+    // Returns as soon as the partition churns.
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+        test::ChangeStreamRecords records,
+        ExecuteChangeStreamQuery(ConstructChangeStreamQuery(
+            now_, now_ + absl::Seconds(10), token)));
+    ASSERT_EQ(records.partition_end_records.size(), 1);
+    EXPECT_EQ(records.partition_end_records[0].partition_token(), token);
+    ASSERT_FALSE(records.partition_event_records.empty());
+    const auto& event = records.partition_event_records.back();
+    EXPECT_EQ(event.partition_token(), token);
+    if (event.move_out_events_size() != 1) {
+      continue;
+    }
+    moved_token = token;
+    move_child_token = event.move_out_events(0).destination_partition_token();
+    move_time = absl::FromUnixSeconds(event.commit_timestamp().seconds()) +
+                absl::Nanoseconds(event.commit_timestamp().nanos());
+    ASSERT_EQ(records.partition_start_records.size(), 1);
+    EXPECT_EQ(records.partition_start_records[0].partition_tokens(0),
+              move_child_token);
+  }
+  ASSERT_FALSE(moved_token.empty());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      test::ChangeStreamRecords child_records,
+      ExecuteChangeStreamQuery(
+          ConstructChangeStreamQuery(move_time, move_time, move_child_token)));
+  ASSERT_EQ(child_records.partition_event_records.size(), 1);
+  ASSERT_EQ(child_records.partition_event_records[0].move_in_events_size(), 1);
+  EXPECT_EQ(child_records.partition_event_records[0]
+                .move_in_events(0)
+                .source_partition_token(),
+            moved_token);
 }
 
 }  // namespace

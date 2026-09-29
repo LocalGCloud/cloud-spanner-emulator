@@ -32,6 +32,7 @@ namespace search {
 
 absl::StatusOr<googlesql::Value> JsonbTokenizer::Tokenize(
     absl::Span<const googlesql::Value> args) {
+  if (args[0].is_null()) return googlesql::Value::NullTokenList();
   return TokenListFromStrings({std::string(kJsonbTokenizer)});
 }
 

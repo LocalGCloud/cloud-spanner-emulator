@@ -17,7 +17,9 @@
 #include "frontend/converters/mutations.h"
 
 #include <algorithm>
+#include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -186,6 +188,38 @@ absl::Status MutationFromProto(
         break;
       default:
         return error::MissingRequiredFieldError("Mutation.operation");
+    }
+  }
+  return absl::OkStatus();
+}
+
+absl::Status ValidateExplicitWriteCellLimit(const backend::Schema& schema,
+                                            const backend::Mutation& mutation) {
+  constexpr size_t kMaxMutations = 80000;
+  std::set<std::tuple<std::string, backend::Key, std::string>> cells;
+  for (const backend::MutationOp& op : mutation.ops()) {
+    if (op.type == backend::MutationOpType::kDelete) continue;
+    const backend::Table* table = schema.FindTable(op.table);
+    if (table == nullptr) return absl::OkStatus();
+
+    std::vector<int> key_indices;
+    for (const backend::KeyColumn* key_column : table->primary_key()) {
+      auto it = std::find(op.columns.begin(), op.columns.end(),
+                          key_column->column()->Name());
+      if (it == op.columns.end()) return absl::OkStatus();
+      key_indices.push_back(it - op.columns.begin());
+    }
+    for (const backend::ValueList& row : op.rows) {
+      if (row.size() != op.columns.size()) return absl::OkStatus();
+      backend::Key key;
+      for (int index : key_indices) key.AddColumn(row[index]);
+      for (const std::string& column : op.columns) {
+        cells.emplace(op.table, key, column);
+        if (cells.size() > kMaxMutations) {
+          return absl::InvalidArgumentError(
+              "Explicit write cells exceed the 80,000 mutation limit");
+        }
+      }
     }
   }
   return absl::OkStatus();

@@ -33,6 +33,7 @@
 #include "google/cloud/spanner/json.h"
 #include "google/cloud/spanner/numeric.h"
 #include "google/cloud/spanner/oid.h"
+#include "google/cloud/spanner/uuid.h"
 #include "tests/common/scoped_feature_flags_setter.h"
 #include "tests/conformance/common/database_test_base.h"
 #include "third_party/spanner_pg/datatypes/common/numeric_core.h"
@@ -102,6 +103,68 @@ class PGFunctionsTest : public DatabaseTest {
  private:
   test::ScopedEmulatorFeatureFlagsSetter feature_flags_;
 };
+
+TEST_F(PGFunctionsTest, SpannerVectorDistanceFunctions) {
+  EXPECT_THAT(Query(R"sql(SELECT spanner.cosine_distance(
+      ARRAY[1.0, 0.0]::float4[], ARRAY[0.0, 1.0]::float4[]))sql"),
+              IsOkAndHoldsRows({{1.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.cosine_distance(
+      ARRAY[1.0, 0.0]::float8[], ARRAY[0.0, 1.0]::float8[]))sql"),
+              IsOkAndHoldsRows({{1.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.euclidean_distance(
+      ARRAY[3.0, 4.0]::float4[], ARRAY[0.0, 0.0]::float4[]))sql"),
+              IsOkAndHoldsRows({{5.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.euclidean_distance(
+      ARRAY[3.0, 4.0]::float8[], ARRAY[0.0, 0.0]::float8[]))sql"),
+              IsOkAndHoldsRows({{5.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.dot_product(
+      ARRAY[1.0, 2.0]::float4[], ARRAY[3.0, 4.0]::float4[]))sql"),
+              IsOkAndHoldsRows({{11.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.dot_product(
+      ARRAY[1.0, 2.0]::float8[], ARRAY[3.0, 4.0]::float8[]))sql"),
+              IsOkAndHoldsRows({{11.0}}));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.dot_product(
+      ARRAY[1, 2]::int8[], ARRAY[3, 4]::int8[]))sql"),
+              IsOkAndHoldsRows({{11.0}}));
+
+  EXPECT_THAT(Query(R"sql(SELECT spanner.cosine_distance(
+      NULL::float4[], ARRAY[1.0]::float4[]))sql"),
+              IsOkAndHoldsRows({{Null<double>()}}));
+  EXPECT_FALSE(Query(R"sql(SELECT spanner.cosine_distance(
+      ARRAY[0.0, 0.0]::float4[], ARRAY[1.0, 0.0]::float4[]))sql").ok());
+  EXPECT_FALSE(Query(R"sql(SELECT spanner.cosine_distance(
+      ARRAY[]::float8[], ARRAY[]::float8[]))sql").ok());
+  EXPECT_FALSE(Query(R"sql(SELECT spanner.euclidean_distance(
+      ARRAY[1.0]::float8[], ARRAY[1.0, 2.0]::float8[]))sql").ok());
+  EXPECT_FALSE(Query(R"sql(SELECT spanner.dot_product(
+      ARRAY[1.0, NULL]::float8[], ARRAY[1.0, 2.0]::float8[]))sql").ok());
+  EXPECT_THAT(Query(R"sql(SELECT spanner.dot_product(
+      ARRAY['NaN'::float8], ARRAY[1.0]::float8[]))sql"),
+              IsOkAndHoldsRows({{std::numeric_limits<double>::quiet_NaN()}}));
+}
+
+// Examples from the Spanner PostgreSQL function reference.
+TEST_F(PGFunctionsTest, SplitSubstr) {
+  EXPECT_THAT(Query("SELECT spanner.split_substr('www.abc.xyz.com', '.', 1, 0)"),
+              IsOkAndHoldsRows({{""}}));
+  EXPECT_THAT(Query("SELECT spanner.split_substr('www.abc.xyz.com', '.', 1, 2)"),
+              IsOkAndHoldsRows({{"www.abc"}}));
+  EXPECT_THAT(Query("SELECT spanner.split_substr('www.abc.xyz.com', '.', -1, 1)"),
+              IsOkAndHoldsRows({{"com"}}));
+  EXPECT_THAT(Query("SELECT spanner.split_substr('www.abc.xyz.com', '.', 2, 2)"),
+              IsOkAndHoldsRows({{"abc.xyz"}}));
+  EXPECT_THAT(Query("SELECT spanner.split_substr('www.abc.xyz.com', '.', 3)"),
+              IsOkAndHoldsRows({{"xyz.com"}}));
+}
+
+TEST_F(PGFunctionsTest, GenerateSeries) {
+  EXPECT_THAT(Query("SELECT * FROM generate_series(2, 4)"),
+              IsOkAndHoldsUnorderedRows({{2}, {3}, {4}}));
+  EXPECT_THAT(Query("SELECT * FROM generate_series(3, 0, -2)"),
+              IsOkAndHoldsUnorderedRows({{3}, {1}}));
+  EXPECT_THAT(Query("SELECT s FROM generate_series(1, 5, 2) AS s ORDER BY s"),
+              IsOkAndHoldsRows({{1}, {3}, {5}}));
+}
 
 TEST_F(PGFunctionsTest, CastToDate) {
   EXPECT_THAT(Query(
@@ -456,23 +519,13 @@ TEST_F(PGFunctionsTest, SumDouble) {
   EXPECT_THAT(Query("SELECT sum(1.0::float8)"), IsOkAndHoldsRows({{1.0}}));
 }
 
-// This is a known issue where despite this column being of type float8, the
-// output is PG.NUMERIC because the evaluator doesn't know the type of the
-// return value. But the GSQL reference implementation detects this and throws
-// an error.
-// TODO: Figure out how to return a double value.
-TEST_F(PGFunctionsTest, DISABLED_SumDoubleOnEmptyTable) {
+TEST_F(PGFunctionsTest, SumDoubleOnEmptyTable) {
   EXPECT_THAT(
       Query("SELECT sum(double_value) FROM values"),
-      IsOkAndHoldsRows({{in_prod_env() ? Null<double>() : Null<PgNumeric>()}}));
+      IsOkAndHoldsRows({{Null<double>()}}));
 }
 
-// This is a known issue where despite this column being of type float8, the
-// output is PG.NUMERIC because the evaluator doesn't know the type of the
-// return value. But the GSQL reference implementation detects this and throws
-// an error.
-// TODO: Figure out how to return a double value.
-TEST_F(PGFunctionsTest, DISABLED_SumDoubleFromTableWithOnlyNull) {
+TEST_F(PGFunctionsTest, SumDoubleFromTableWithOnlyNull) {
   PopulateDatabase();
   EXPECT_THAT(Query("SELECT sum(double_value) FROM values WHERE id=4"),
               IsOkAndHoldsRows({{Null<double>()}}));
@@ -538,23 +591,13 @@ TEST_F(PGFunctionsTest, AvgDouble) {
   EXPECT_THAT(Query("SELECT avg(1.0::float8)"), IsOkAndHoldsRows({{1.0}}));
 }
 
-// This is a known issue where despite this column being of type float8, the
-// output is PG.NUMERIC because the evaluator doesn't know the type of the
-// return value. But the GSQL reference implementation detects this and throws
-// an error.
-// TODO: Figure out how to return a double value.
-TEST_F(PGFunctionsTest, DISABLED_AvgDoubleOnEmptyTable) {
+TEST_F(PGFunctionsTest, AvgDoubleOnEmptyTable) {
   EXPECT_THAT(
       Query("SELECT avg(double_value) FROM values"),
-      IsOkAndHoldsRows({{in_prod_env() ? Null<double>() : Null<PgNumeric>()}}));
+      IsOkAndHoldsRows({{Null<double>()}}));
 }
 
-// This is a known issue where despite this column being of type float8, the
-// output is PG.NUMERIC because the evaluator doesn't know the type of the
-// return value. But the GSQL reference implementation detects this and throws
-// an error.
-// TODO: Figure out how to return a double value.
-TEST_F(PGFunctionsTest, DISABLED_AvgDoubleFromTableWithOnlyNull) {
+TEST_F(PGFunctionsTest, AvgDoubleFromTableWithOnlyNull) {
   PopulateDatabase();
   EXPECT_THAT(Query("SELECT avg(double_value) FROM values WHERE id=5"),
               IsOkAndHoldsRows({{Null<double>()}}));
@@ -1777,10 +1820,11 @@ TEST_F(PGFunctionsTest, JsonBArrayElementText) {
               IsOkAndHoldsRows({"1"}));
   EXPECT_THAT(Query("select jsonb_array_element_text('[1,2]', 1)"),
               IsOkAndHoldsRows({"2"}));
+  // Spanner does not support negative array indexes and returns NULL.
   EXPECT_THAT(Query("select jsonb_array_element_text('[1,2]', -2)"),
-              IsOkAndHoldsRows({"1"}));
+              IsOkAndHoldsRows({Null<std::string>()}));
   EXPECT_THAT(Query("select jsonb_array_element_text('[1,2]', -1)"),
-              IsOkAndHoldsRows({"2"}));
+              IsOkAndHoldsRows({Null<std::string>()}));
 
   EXPECT_THAT(Query("select jsonb_array_element_text('[]', 0)"),
               IsOkAndHoldsRows({Null<std::string>()}));
@@ -1914,19 +1958,26 @@ TEST_F(PGFunctionsTest, ExtendedTypeArrayCatTest) {
           {{Array<PgOid>({PgOid(123), PgOid(234), PgOid(123), PgOid(234)})}}));
 }
 
-// TODO: Array order is not guaranteed. Update test to handle this.
-TEST_F(PGFunctionsTest, DISABLED_ExtendedTypeArrayAggTest) {
+TEST_F(PGFunctionsTest, NumericArrayAgg) {
   PopulateDatabase();
   EXPECT_THAT(
-      Query(R"(SELECT array_agg(numeric_value) FROM values)"),
+      Query(R"(SELECT array_agg(numeric_value ORDER BY id) FROM values)"),
       IsOkAndHoldsRows(
-          {{Array<PgNumeric>({*MakePgNumeric("123"), std::nullopt,
-                              *MakePgNumeric("12"), *MakePgNumeric("3")})}}));
-  EXPECT_THAT(Query(R"(SELECT array_agg(to_jsonb(int_value)) FROM values)"),
+          {{Array<PgNumeric>({*MakePgNumeric("123"), *MakePgNumeric("12"),
+                              *MakePgNumeric("3"), std::nullopt})}}));
+}
+
+TEST_F(PGFunctionsTest, JsonbArrayAgg) {
+  PopulateDatabase();
+  EXPECT_THAT(Query(R"(SELECT array_agg(to_jsonb(int_value) ORDER BY id) FROM values)"),
               IsOkAndHoldsRows({{Array<JsonB>(
                   {JsonB("1"), JsonB("0"), JsonB("5"), std::nullopt})}}));
+}
+
+TEST_F(PGFunctionsTest, OidArrayAgg) {
+  PopulateDatabase();
   EXPECT_THAT(
-      Query(R"(SELECT array_agg(int_value::oid) FROM values)"),
+      Query(R"(SELECT array_agg(int_value::oid ORDER BY id) FROM values)"),
       IsOkAndHoldsRows(
           {{Array<PgOid>({PgOid(1), PgOid(0), PgOid(5), std::nullopt})}}));
 }
@@ -1935,6 +1986,153 @@ TEST_F(PGFunctionsTest, ExtendedTypeCountTest) {
   PopulateDatabase();
   EXPECT_THAT(Query(R"(SELECT count(int_value::oid) FROM values)"),
               IsOkAndHoldsRows({{3}}));
+}
+
+// JSONB examples from the Spanner PostgreSQL function and operator reference.
+TEST_F(PGFunctionsTest, JsonbWriteFunctions) {
+  EXPECT_THAT(Query(R"sql(SELECT jsonb_set(
+      '[{"f1":1,"f2":null},2,null,3]', '{0,f1}', '[2,3,4]', false))sql"),
+              IsOkAndHoldsRows(
+                  {{JsonB(R"([{"f1": [2, 3, 4], "f2": null}, 2, null, 3])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT jsonb_set(
+      '[{"f1":1,"f2":null},2]', '{0,f3}', '[2,3,4]'))sql"),
+              IsOkAndHoldsRows(
+                  {{JsonB(R"([{"f1": 1, "f2": null, "f3": [2, 3, 4]}, 2])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT jsonb_set_lax(
+      '[{"f1":99,"f2":null},2]', '{0,f3}', null, true, 'return_target'))sql"),
+              IsOkAndHoldsRows({{JsonB(R"([{"f1": 99, "f2": null}, 2])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT jsonb_insert(
+      '{"a": [0,1,2]}', '{a, 1}', '"new_value"'))sql"),
+              IsOkAndHoldsRows({{JsonB(R"({"a": [0, "new_value", 1, 2]})")}}));
+  EXPECT_THAT(Query(R"sql(SELECT jsonb_insert(
+      '{"a": [0,1,2]}', '{a, 1}', '"new_value"', true))sql"),
+              IsOkAndHoldsRows({{JsonB(R"({"a": [0, 1, "new_value", 2]})")}}));
+  EXPECT_THAT(
+      Query(R"sql(SELECT jsonb_strip_nulls(
+      '[{"f1":1, "f2":null}, 2, null, 3]'))sql"),
+      IsOkAndHoldsRows({{JsonB(R"([{"f1": 1}, 2, null, 3])")}}));
+}
+
+TEST_F(PGFunctionsTest, JsonbOperators) {
+  // The right operand's elements follow the left operand's.
+  EXPECT_THAT(Query(R"sql(SELECT '["a", "b"]'::jsonb || '["a", "d"]'::jsonb)sql"),
+              IsOkAndHoldsRows({{JsonB(R"(["a", "b", "a", "d"])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '{"a": "b"}'::jsonb || '{"c": "d"}'::jsonb)sql"),
+              IsOkAndHoldsRows({{JsonB(R"({"a": "b", "c": "d"})")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '[1, 2]'::jsonb || '3'::jsonb)sql"),
+              IsOkAndHoldsRows({{JsonB("[1, 2, 3]")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '{"a": "b"}'::jsonb || '42'::jsonb)sql"),
+              IsOkAndHoldsRows({{JsonB(R"([{"a": "b"}, 42])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '{"a": 1}'::jsonb || '["x"]'::jsonb)sql"),
+              IsOkAndHoldsRows({{JsonB(R"([{"a": 1}, "x"])")}}));
+  EXPECT_THAT(
+      Query(R"sql(SELECT '[1, 2]'::jsonb || jsonb_build_array('[3, 4]'::jsonb))sql"),
+      IsOkAndHoldsRows({{JsonB("[1, 2, [3, 4]]")}}));
+
+  EXPECT_THAT(Query(R"sql(SELECT '{"a": "b", "c": "d"}'::jsonb - 'a')sql"),
+              IsOkAndHoldsRows({{JsonB(R"({"c": "d"})")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '["a", "b", "c", "b"]'::jsonb - 'b')sql"),
+              IsOkAndHoldsRows({{JsonB(R"(["a", "c"])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '["a", "b"]'::jsonb - 1)sql"),
+              IsOkAndHoldsRows({{JsonB(R"(["a"])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '["a", "b"]'::jsonb - -1)sql"),
+              IsOkAndHoldsRows({{JsonB(R"(["a"])")}}));
+  EXPECT_THAT(Query(R"sql(SELECT '["a", {"b":1}]'::jsonb #- '{1,b}')sql"),
+              IsOkAndHoldsRows({{JsonB(R"(["a", {}])")}}));
+
+  // Spanner does not support negative array indexes and returns NULL.
+  EXPECT_THAT(Query(R"sql(SELECT
+      '[{"a":"apple"},{"b":"bear"},{"c":"cat"}]'::jsonb -> 2,
+      '[{"a":"apple"},{"b":"bear"},{"c":"cat"}]'::jsonb ->> 2,
+      '[{"a":"apple"},{"b":"bear"},{"c":"cat"}]'::jsonb -> -1 IS NULL,
+      '[{"a":"apple"},{"b":"bear"},{"c":"cat"}]'::jsonb ->> -1 IS NULL)sql"),
+              IsOkAndHoldsRows({{JsonB(R"({"c": "cat"})"), R"({"c": "cat"})",
+                                 true, true}}));
+}
+
+TEST_F(PGFunctionsTest, SpannerJsonbArrayFunctions) {
+  EXPECT_THAT(Query("SELECT spanner.bool_array('[true, false]'::jsonb)"),
+              IsOkAndHoldsRows({{Array<bool>({true, false})}}));
+  EXPECT_THAT(Query("SELECT spanner.int64_array('[1, -2, 3.0]'::jsonb)"),
+              IsOkAndHoldsRows({{Array<int64_t>({1, -2, 3})}}));
+  EXPECT_THAT(Query("SELECT spanner.float32_array('[1, -2, 3.0]'::jsonb)"),
+              IsOkAndHoldsRows({{Array<float>({1.0, -2.0, 3.0})}}));
+  EXPECT_THAT(Query("SELECT spanner.float64_array('[1, -2, 3.0]'::jsonb)"),
+              IsOkAndHoldsRows({{Array<double>({1.0, -2.0, 3.0})}}));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.string_array('["a", "b", "c"]'::jsonb))sql"),
+              IsOkAndHoldsRows({{Array<std::string>({"a", "b", "c"})}}));
+  EXPECT_THAT(Query("SELECT spanner.bool_array(null::jsonb) IS NULL"),
+              IsOkAndHoldsRows({{true}}));
+
+  EXPECT_THAT(Query(R"sql(SELECT spanner.bool_array('["true"]'::jsonb))sql"),
+              StatusIs(absl::StatusCode::kOutOfRange,
+                       HasSubstr("not a boolean")));
+  EXPECT_THAT(Query("SELECT spanner.float32_array('[1e100]'::jsonb)"),
+              StatusIs(absl::StatusCode::kOutOfRange,
+                       HasSubstr("cannot be converted to FLOAT32")));
+  EXPECT_THAT(Query("SELECT spanner.int64_array('[1.1]'::jsonb)"),
+              StatusIs(absl::StatusCode::kOutOfRange,
+                       HasSubstr("cannot be converted to an int64")));
+  EXPECT_THAT(Query("SELECT spanner.string_array('[null]'::jsonb)"),
+              StatusIs(absl::StatusCode::kOutOfRange,
+                       HasSubstr("not a string")));
+  EXPECT_THAT(Query(R"sql(SELECT spanner.bool_array('{"a": true}'::jsonb))sql"),
+              StatusIs(absl::StatusCode::kOutOfRange,
+                       HasSubstr("not an array")));
+}
+
+TEST_F(PGFunctionsTest, MakeInterval) {
+  EXPECT_THAT(Query(R"sql(SELECT make_interval(years => 1, months => 2,
+      weeks => 3, days => 15, hours => 10, mins => 30, secs => 15.1)::text)sql"),
+              IsOkAndHoldsRows({{"1 year 2 mons 36 days 10:30:15.1"}}));
+  EXPECT_THAT(Query("SELECT make_interval(1, 2, 3)::text"),
+              IsOkAndHoldsRows({{"1 year 2 mons 21 days"}}));
+  EXPECT_THAT(Query("SELECT make_interval(days => 1, secs => 1.5::float8)::text"),
+              IsOkAndHoldsRows({{"1 day 00:00:01.5"}}));
+  EXPECT_THAT(Query("SELECT make_interval()::text"),
+              IsOkAndHoldsRows({{"00:00:00"}}));
+}
+
+TEST_F(PGFunctionsTest, PatternMatching) {
+  EXPECT_THAT(Query("SELECT pg.ilike('Apple', 'aPp%'), "
+                    "pg.not_ilike('Apple', 'aPp%')"),
+              IsOkAndHoldsRows({{true, false}}));
+  EXPECT_THAT(Query("SELECT pg.ilike(null, 'a') IS NULL"),
+              IsOkAndHoldsRows({{true}}));
+  EXPECT_THAT(Query("SELECT 'Apple' !~~ 'ap%', 'Apple' !~~ 'Ap%'"),
+              IsOkAndHoldsRows({{true, false}}));
+  EXPECT_THAT(Query(R"sql(SELECT 'a_c' LIKE 'a\_c' ESCAPE '\',
+      'abc' NOT LIKE 'a\_c' ESCAPE '\',
+      'ABC' ILIKE 'a\_c' ESCAPE '\',
+      'A_C' NOT ILIKE 'a\_c' ESCAPE '\')sql"),
+              IsOkAndHoldsRows({{true, true, false, false}}));
+  EXPECT_THAT(Query("SELECT 'a' NOT LIKE 'a' ESCAPE '#'"),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       HasSubstr("Invalid escape character")));
+}
+
+TEST_F(PGFunctionsTest, RegexpReplaceReplacesFirstMatch) {
+  EXPECT_THAT(Query("SELECT regexp_replace('Thomas', '.[mN]a.', 'M')"),
+              IsOkAndHoldsRows({{"ThM"}}));
+  EXPECT_THAT(Query("SELECT regexp_replace('aaa', 'a', 'b')"),
+              IsOkAndHoldsRows({{"baa"}}));
+  EXPECT_THAT(Query("SELECT regexp_replace('abc', 'x', 'y')"),
+              IsOkAndHoldsRows({{"abc"}}));
+  EXPECT_THAT(Query("SELECT regexp_replace(null, 'a', 'b') IS NULL"),
+              IsOkAndHoldsRows({{true}}));
+}
+
+TEST_F(PGFunctionsTest, UuidArrayAgg) {
+  EXPECT_THAT(Query(R"sql(SELECT array_agg(x ORDER BY x) FROM (
+      SELECT '00000000-0000-0000-0000-000000000002'::uuid AS x
+      UNION ALL SELECT '00000000-0000-0000-0000-000000000001'::uuid) t)sql"),
+              IsOkAndHoldsRows({{Array<cloud::spanner::Uuid>(
+                  {cloud::spanner::MakeUuid(
+                       "00000000-0000-0000-0000-000000000001")
+                       .value(),
+                   cloud::spanner::MakeUuid(
+                       "00000000-0000-0000-0000-000000000002")
+                       .value()})}}));
 }
 
 TEST_F(PGFunctionsTest, FarmFingerprintTest) {

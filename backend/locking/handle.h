@@ -17,11 +17,16 @@
 #ifndef THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_LOCKING_HANDLE_H_
 #define THIRD_PARTY_CLOUD_SPANNER_EMULATOR_BACKEND_LOCKING_HANDLE_H_
 
+#include <utility>
+
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/time/time.h"
+#include "absl/types/span.h"
 #include "backend/common/ids.h"
+#include "backend/datamodel/key.h"
+#include "backend/datamodel/key_range.h"
 #include "backend/locking/request.h"
 #include "absl/status/status.h"
 
@@ -33,6 +38,12 @@ namespace backend {
 // Forward declaration of the LockManager to avoid a circular reference.
 class LockManager;
 
+// A row written by a commit, identified by its table and primary key.
+using CommittedRow = std::pair<TableID, Key>;
+
+// A key range read under a lock, identified by its table.
+using LockedRange = std::pair<TableID, KeyRange>;
+
 // LockHandle encapsulates a transaction's interface to the lock manager.
 //
 // A transaction first creates a lock handle via LockManager::CreateHandle().
@@ -43,7 +54,8 @@ class LockManager;
 // EnqueueLock() is non-blocking and only enqueues the lock request. The
 // transaction can subsequently query whether the requests have completed by
 // checking IsBlocked() or perform a blocking Wait() to find out the final
-// state of the lock requests.
+// state of the lock requests. A request blocks while it waits for an older
+// transaction to release a conflicting lock (see LockManager).
 //
 // Usage (happy path, error handling skipped):
 //    // Get a handle.
@@ -83,13 +95,14 @@ class LockHandle {
   // Returns true if this handle is waiting on any lock requests to complete.
   bool IsBlocked() ABSL_LOCKS_EXCLUDED(mu_);
 
-  // Returns true if this handle has been aborted by the lock manager. Previous
-  // locks acquired by the handle are not release automatically. The handle must
-  // explicitly call UnlockAll().
+  // Returns true if this handle has been aborted by the lock manager. The lock
+  // manager releases the locks of an aborted handle, but the handle must call
+  // UnlockAll() before it can acquire locks again.
   bool IsAborted() ABSL_LOCKS_EXCLUDED(mu_);
 
   // Waits till all locks requested via this handle have either all been granted
-  // or have at least one request denied. Lock denials will return ABORTED
+  // or have at least one request denied. Lock denials, including requests that
+  // waited longer than config::lock_wait_timeout(), will return ABORTED
   // status, otherwise OK will be returned.
   absl::Status Wait() ABSL_LOCKS_EXCLUDED(mu_);
 
@@ -104,6 +117,21 @@ class LockHandle {
   // commits.
   void WaitForSafeRead(absl::Time read_time);
 
+  // Returns a repeatable-read snapshot timestamp for this transaction. Until
+  // this handle releases its locks, later commits record the rows they write
+  // so that HasCommittedWriteAfter() can detect write-write conflicts.
+  absl::Time AcquireSnapshot();
+
+  // Records the rows written by this handle's commit at its reserved commit
+  // timestamp. Call between ReserveCommitTimestamp() and MarkCommitted().
+  void RecordCommittedWrites(absl::Span<const CommittedRow> rows);
+
+  // Returns true if another transaction committed a write to one of `rows`, or
+  // to a row within one of `ranges`, after `snapshot`.
+  bool HasCommittedWriteAfter(absl::Time snapshot,
+                              absl::Span<const CommittedRow> rows,
+                              absl::Span<const LockedRange> ranges);
+
  private:
   // Only the LockManager is allowed to create and destroy LockHandles.
   friend class LockManager;
@@ -113,11 +141,23 @@ class LockHandle {
              TransactionPriority priority);
   ~LockHandle();
 
+  // Returns the status of the lock requests without waiting for them.
+  absl::Status status() ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Returns true if the transaction of this handle can be aborted, so that
+  // other transactions may wound it or wait for it.
+  bool IsAbortable() ABSL_LOCKS_EXCLUDED(mu_);
+
   // Aborts the requests made by this handle (and puts it in a final state).
   void Abort(const absl::Status& status) ABSL_LOCKS_EXCLUDED(mu_);
   // Tries to abort this transaction. This is a best effort attempt and returns
   // OK only if the transaction could successfully be aborted.
   absl::Status TryAbortTransaction(const absl::Status& status)
+      ABSL_LOCKS_EXCLUDED(mu_);
+
+  // Marks an active read-write handle aborted when its transaction mutex is
+  // busy. Commit checks this status before reserving a timestamp.
+  bool ForceAbortTransaction(const absl::Status& status)
       ABSL_LOCKS_EXCLUDED(mu_);
 
   // Resets the state of this handle.

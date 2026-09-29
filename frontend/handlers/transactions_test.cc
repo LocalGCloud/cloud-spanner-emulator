@@ -161,6 +161,109 @@ TEST_P(TransactionApiTest, CanCommitSingleUseReadWriteTransaction) {
   GOOGLESQL_EXPECT_OK(Commit(commit_request, &commit_response));
 }
 
+TEST_P(TransactionApiTest, CommitReturnsMutationCountWhenRequested) {
+  const std::string session =
+      GetSessionUri(GetSessionType() == SessionType::kMultiplexedSession);
+  // Two rows with two columns each count both columns per row, the primary
+  // key included.
+  spanner_api::CommitRequest insert_request = PARSE_TEXT_PROTO(R"pb(
+    single_use_transaction { read_write {} }
+    return_commit_stats: true
+    mutations {
+      insert {
+        table: "test_table"
+        columns: "int64_col"
+        columns: "string_col"
+        values {
+          values { string_value: "1" }
+          values { string_value: "one" }
+        }
+        values {
+          values { string_value: "2" }
+          values { string_value: "two" }
+        }
+      }
+    }
+  )pb");
+  insert_request.set_session(session);
+  spanner_api::CommitResponse insert_response;
+  GOOGLESQL_ASSERT_OK(Commit(insert_request, &insert_response));
+  EXPECT_EQ(insert_response.commit_stats().mutation_count(), 4);
+
+  // Updating one non-key column still counts the primary key column.
+  spanner_api::CommitRequest update_request = PARSE_TEXT_PROTO(R"pb(
+    single_use_transaction { read_write {} }
+    return_commit_stats: true
+    mutations {
+      update {
+        table: "test_table"
+        columns: "int64_col"
+        columns: "string_col"
+        values {
+          values { string_value: "1" }
+          values { string_value: "uno" }
+        }
+      }
+    }
+  )pb");
+  update_request.set_session(session);
+  spanner_api::CommitResponse update_response;
+  GOOGLESQL_ASSERT_OK(Commit(update_request, &update_response));
+  EXPECT_EQ(update_response.commit_stats().mutation_count(), 2);
+
+  // A deleted row counts once, and stats are omitted unless requested.
+  spanner_api::CommitRequest delete_request = PARSE_TEXT_PROTO(R"pb(
+    single_use_transaction { read_write {} }
+    return_commit_stats: true
+    mutations {
+      delete {
+        table: "test_table"
+        key_set { keys { values { string_value: "2" } } }
+      }
+    }
+  )pb");
+  delete_request.set_session(session);
+  spanner_api::CommitResponse delete_response;
+  GOOGLESQL_ASSERT_OK(Commit(delete_request, &delete_response));
+  EXPECT_EQ(delete_response.commit_stats().mutation_count(), 1);
+
+  delete_request.set_return_commit_stats(false);
+  spanner_api::CommitResponse no_stats_response;
+  GOOGLESQL_ASSERT_OK(Commit(delete_request, &no_stats_response));
+  EXPECT_FALSE(no_stats_response.has_commit_stats());
+}
+
+TEST_P(TransactionApiTest, CommitAcceptsMaxCommitDelayUpTo500Milliseconds) {
+  spanner_api::CommitRequest commit_request = PARSE_TEXT_PROTO(R"pb(
+    single_use_transaction { read_write {} }
+  )pb");
+  commit_request.set_session(
+      GetSessionUri(GetSessionType() == SessionType::kMultiplexedSession));
+  spanner_api::CommitResponse commit_response;
+
+  commit_request.mutable_max_commit_delay()->set_seconds(0);
+  GOOGLESQL_EXPECT_OK(Commit(commit_request, &commit_response));
+
+  commit_request.mutable_max_commit_delay()->set_nanos(500000000);
+  GOOGLESQL_EXPECT_OK(Commit(commit_request, &commit_response));
+  EXPECT_TRUE(commit_response.has_commit_timestamp());
+
+  commit_request.mutable_max_commit_delay()->set_nanos(500000001);
+  EXPECT_THAT(Commit(commit_request, &commit_response),
+              StatusIs(absl::StatusCode::kInvalidArgument,
+                       ::testing::HasSubstr("between 0 and 500 ms")));
+
+  commit_request.mutable_max_commit_delay()->set_seconds(1);
+  commit_request.mutable_max_commit_delay()->set_nanos(0);
+  EXPECT_THAT(Commit(commit_request, &commit_response),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+
+  commit_request.mutable_max_commit_delay()->set_seconds(0);
+  commit_request.mutable_max_commit_delay()->set_nanos(-1);
+  EXPECT_THAT(Commit(commit_request, &commit_response),
+              StatusIs(absl::StatusCode::kInvalidArgument));
+}
+
 TEST_P(TransactionApiTest, CannotCommitSingleUseReadOnlyTransaction) {
   spanner_api::CommitRequest commit_request = PARSE_TEXT_PROTO(R"(
     single_use_transaction { read_only {} }

@@ -85,6 +85,30 @@ absl::Status OperationNotFound(absl::string_view uri);
 // IAM errors.
 absl::Status IAMPoliciesNotSupported();
 
+// Fine-grained access control errors.
+absl::Status RoleNotFound(absl::string_view role);
+absl::Status RoleLacksPrivileges(absl::string_view role,
+                                 absl::string_view object_kind,
+                                 absl::string_view object_name);
+absl::Status DatabaseRoleNotFound(absl::string_view role);
+absl::Status TooManyRolesPerDatabase(absl::string_view role, int limit);
+absl::Status CannotDropSystemRole(absl::string_view role);
+absl::Status CannotDropRoleWithPrivileges(absl::string_view role);
+absl::Status CannotGrantPrivilegesToSystemRole(absl::string_view role);
+absl::Status CannotGrantMembershipInPublicRole();
+absl::Status SystemRoleCannotBeMember(absl::string_view role);
+absl::Status RoleMembershipCycle(absl::string_view role,
+                                 absl::string_view member);
+absl::Status InvalidPrivilegeForObject(absl::string_view privilege,
+                                       absl::string_view object_kind,
+                                       absl::string_view object_name);
+absl::Status ColumnPrivilegeNotAllowed(absl::string_view privilege,
+                                       absl::string_view object_kind,
+                                       absl::string_view object_name);
+absl::Status PrivilegeOnGeneratedColumn(absl::string_view privilege,
+                                        absl::string_view table,
+                                        absl::string_view column);
+
 // Label errors
 absl::Status TooManyLabels(int num);
 absl::Status BadLabelKey(absl::string_view key);
@@ -146,6 +170,9 @@ absl::Status AbortConcurrentTransaction(int64_t requestor_id,
 absl::Status AbortCurrentTransaction(backend::TransactionID holder_id,
                                      backend::TransactionID requestor_id);
 absl::Status WoundedTransaction(backend::TransactionID id);
+absl::Status LockWaitTimeout(backend::TransactionID requestor_id,
+                             backend::TransactionID holder_id,
+                             absl::Duration timeout);
 absl::Status CouldNotObtainLockHandleMutex(backend::TransactionID id);
 absl::Status CouldNotObtainTransactionMutex(backend::TransactionID id);
 absl::Status TransactionNotFound(backend::TransactionID id);
@@ -172,12 +199,14 @@ absl::Status PartitionedDMLOnlySupportsSimpleQuery();
 absl::Status NoInsertForPartitionedDML();
 absl::Status InvalidOperationUsingPartitionedDmlTransaction();
 absl::Status CannotCommitAfterRollback();
+absl::Status InvalidMaxCommitDelay(absl::Duration max_commit_delay);
 absl::Status CannotRollbackAfterCommit();
 absl::Status CannotReadOrQueryAfterCommitOrRollback();
 absl::Status CannotUseTransactionAfterConstraintError();
 absl::Status ReadTimestampPastVersionGCLimit(absl::Time timestamp);
 absl::Status ReadTimestampTooFarInFuture(absl::Time timestamp);
 absl::Status AbortDueToConcurrentSchemaChange(backend::TransactionID id);
+absl::Status AbortRepeatableReadWriteConflict(backend::TransactionID id);
 absl::Status AbortReadWriteTransactionOnFirstCommit(backend::TransactionID id);
 absl::Status UpdateDeletedRowInTransaction(absl::string_view table,
                                            absl::string_view key);
@@ -856,6 +885,9 @@ absl::Status QueryStringTooLong(int query_length, int max_length);
 absl::Status InvalidBytesPerBatch(absl::string_view message_name);
 absl::Status InvalidMaxPartitionCount(absl::string_view message_name);
 absl::Status InvalidPartitionToken();
+absl::Status InvalidResumeToken();
+absl::Status ResumeTokenMismatch();
+absl::Status ResumedRowsChanged();
 absl::Status InvalidStreamingPartitionToken();
 absl::Status InvalidStreamingPartitionTokenMetadata();
 absl::Status ReadFromDifferentSession();
@@ -921,6 +953,7 @@ absl::Status SearchIndexNotUsable(absl::string_view index_name,
 
 absl::Status SearchIndexTokenlistKeyOrderUnsupported(
     absl::string_view column_name, absl::string_view index_name);
+absl::Status SearchIndexRequiresTokenlistColumn(absl::string_view index_name);
 
 // create vector index errors
 absl::Status VectorIndexPartitionByUnsupported(absl::string_view index_name);
@@ -1144,6 +1177,10 @@ absl::Status CannotAlterIdentityColumnToGeneratedOrDefaultColumn(
 
 absl::Status OptionsError(absl::string_view error_string);
 
+// SPANNER_SYS-related errors
+absl::Status SpannerSysTableUnsupportedInReadWriteTransactions(
+    absl::string_view table_name);
+
 // FOR UPDATE-related errors
 absl::Status ForUpdateUnsupportedInReadOnlyTransactions();
 absl::Status ForUpdateUnsupportedInSearchQueries();
@@ -1174,6 +1211,8 @@ absl::Status VectorIndexesUnusableForceIndexWrongColumn(
     absl::string_view column_string);
 absl::Status NotVectorIndexes(absl::string_view index_string);
 absl::Status RenameTableNotSupportedInPostgreSQL();
+absl::Status ReadTimestampPastRequestDeadline(absl::Time timestamp,
+                                              absl::Time deadline);
 }  // namespace error
 }  // namespace emulator
 }  // namespace spanner

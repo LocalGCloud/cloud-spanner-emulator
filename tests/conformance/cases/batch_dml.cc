@@ -20,6 +20,7 @@
 #include "googlesql/base/testing/status_matchers.h"
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
+#include "absl/time/time.h"
 #include "google/cloud/spanner/transaction.h"
 #include "common/config.h"
 #include "tests/conformance/common/database_test_base.h"
@@ -184,6 +185,9 @@ TEST_P(BatchDmlTest, MixDmlAndBatchDmlInTransactionSucceeds) {
 TEST_P(BatchDmlTest, ConcurrentTransactionWithBatchDmlNotAllowed) {
   auto current_probability = config::abort_current_transaction_probability();
   config::set_abort_current_transaction_probability(0);
+  // The younger transaction aborts instead of waiting for the older one.
+  const absl::Duration current_lock_wait_timeout = config::lock_wait_timeout();
+  config::set_lock_wait_timeout_ms(0);
 
   auto txn1 = Transaction(Transaction::ReadWriteOptions());
   auto txn2 = Transaction(Transaction::ReadWriteOptions());
@@ -223,6 +227,8 @@ TEST_P(BatchDmlTest, ConcurrentTransactionWithBatchDmlNotAllowed) {
   // Commit second transaction succeeds.
   GOOGLESQL_EXPECT_OK(CommitTransaction(txn2, {}));
 
+  config::set_lock_wait_timeout_ms(
+      absl::ToInt64Milliseconds(current_lock_wait_timeout));
   config::set_abort_current_transaction_probability(current_probability);
 }
 

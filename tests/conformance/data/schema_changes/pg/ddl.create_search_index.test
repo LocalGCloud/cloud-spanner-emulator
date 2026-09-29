@@ -1,0 +1,38 @@
+CREATE TABLE albums (
+  albumid bigint NOT NULL,
+  singerid bigint NOT NULL,
+  releasets bigint,
+  title varchar,
+  "Body" varchar,
+  title_tokens spanner.tokenlist GENERATED ALWAYS AS (spanner.tokenize_fulltext(title)) STORED HIDDEN,
+  body_tokens spanner.tokenlist GENERATED ALWAYS AS (spanner.tokenize_fulltext("Body")) STORED HIDDEN,
+  PRIMARY KEY(albumid)
+);
+CREATE SEARCH INDEX albums_idx ON albums (title_tokens, body_tokens)
+--
+CREATE SEARCH INDEX albums_idx ON albums(title_tokens, body_tokens)
+==
+
+CREATE TABLE albums (
+  albumid bigint NOT NULL,
+  singerid bigint NOT NULL,
+  releasets bigint,
+  title varchar,
+  "Body" varchar,
+  title_tokens spanner.tokenlist GENERATED ALWAYS AS (spanner.tokenize_fulltext(title)) STORED HIDDEN,
+  PRIMARY KEY(albumid)
+);
+CREATE SEARCH INDEX albums_idx ON albums (title_tokens) INCLUDE (title, "Body") PARTITION BY singerid ORDER BY releasets DESC WHERE releasets IS NOT NULL WITH (sort_order_sharding = true)
+--
+CREATE SEARCH INDEX albums_idx ON albums(title_tokens) INCLUDE (title, "Body") PARTITION BY singerid ORDER BY releasets DESC WHERE releasets IS NOT NULL WITH (sort_order_sharding = true)
+==
+
+CREATE TABLE items (
+  id bigint NOT NULL,
+  name varchar,
+  embedding float4[] VECTOR LENGTH 2,
+  PRIMARY KEY(id)
+);
+CREATE INDEX vec_idx ON items USING scann (embedding) INCLUDE (name) WITH (distance_type = 'COSINE', tree_depth = 3, num_leaves = 10, num_branches = 2) WHERE embedding IS NOT NULL
+--
+CREATE INDEX vec_idx ON items USING scann (embedding) INCLUDE (name) WITH (tree_depth = 3, num_leaves = 10, num_branches = 2, distance_type = 'COSINE') WHERE (embedding IS NOT NULL)

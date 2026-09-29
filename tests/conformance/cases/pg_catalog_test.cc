@@ -941,7 +941,6 @@ TEST_F(PGCatalogTest, PGProc) {
 }
 
 TEST_F(PGCatalogTest, PGProc_UDFs) {
-  GTEST_SKIP() << "Temporarily disable this test.";
   if (in_prod_env()) {
     GTEST_SKIP() << "Test not applicable to the real Spanner backend (the "
                     "production pg_proc doesn't fully populate UDFs yet)";
@@ -957,8 +956,14 @@ TEST_F(PGCatalogTest, PGProc_UDFs) {
          RETURNS text
          LANGUAGE sql
          VOLATILE
-         RETURN (a || b))"}));
+         RETURN (a || b))",
+      "CREATE SCHEMA sch",
+      R"(CREATE FUNCTION sch.my_sub(a integer, b integer)
+         RETURNS integer
+         LANGUAGE sql
+         RETURN a - b)"}));
 
+  // provolatile is not a documented content column of pg_proc.
   auto results = Query(R"sql(
       SELECT
         p.proname,
@@ -966,7 +971,6 @@ TEST_F(PGCatalogTest, PGProc_UDFs) {
         p.prorettype,
         p.proargtypes,
         p.prokind,
-        p.provolatile,
         p.prosqlbody
       FROM
         pg_catalog.pg_proc as p
@@ -979,10 +983,12 @@ TEST_F(PGCatalogTest, PGProc_UDFs) {
 
   std::vector<ValueRow> expected = {
       {"my_add", "public", PgOid(20), std::vector<PgOid>{PgOid(20), PgOid(20)},
-       "f", "i", "(b + a)"},
+       "f", "(b + a)"},
       {"my_concat", "public", PgOid(25),
-       std::vector<PgOid>{PgOid(25), PgOid(25)}, "f", "v",
+       std::vector<PgOid>{PgOid(25), PgOid(25)}, "f",
        "((a)::text || (b)::text)"},
+      {"my_sub", "sch", PgOid(20), std::vector<PgOid>{PgOid(20), PgOid(20)},
+       "f", "(a - b)"},
   };
   EXPECT_THAT(results, IsOkAndHoldsRows(expected));
 }

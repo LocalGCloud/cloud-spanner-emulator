@@ -43,12 +43,14 @@ static const absl::NoDestructor<
         {"BOOL", googlesql::types::BoolType()},
         {"DATE", googlesql::types::DateType()},
         {"INT64", googlesql::types::Int64Type()},
-        {"FLOAT64", googlesql::types::FloatType()},
+        {"FLOAT64", googlesql::types::DoubleType()},
+        {"BYTES(MAX)", googlesql::types::BytesType()},
         {"STRING(32)", googlesql::types::StringType()},
         {"STRING(100)", googlesql::types::StringType()},
         {"STRING(MAX)", googlesql::types::StringType()},
         {"TIMESTAMP", googlesql::types::TimestampType()},
         {"JSON", googlesql::types::JsonType()},
+        {"ARRAY<INT64>", googlesql::types::Int64ArrayType()},
         {"ARRAY<STRING(MAX)>", googlesql::types::StringArrayType()},
     }};
 
@@ -73,7 +75,8 @@ static const absl::NoDestructor<
 // added to a SimpleCatalog mapped by the table name. The tables are created by
 // mapping the spanner type in the ColumnsMetaEntry to the GoogleSQL type given
 // by the provided mapping. Only tables for the given supported list of tables
-// is returned. The metadata entries must be ordered by table name.
+// is returned. ARRAY<STRUCT<...>> columns whose type is not in the mapping are
+// omitted. The metadata entries must be grouped by table name.
 absl::flat_hash_map<std::string, std::unique_ptr<googlesql::SimpleTable>>
 AddTablesFromMetadata(
     const std::vector<ColumnsMetaEntry>& metadata_entries,

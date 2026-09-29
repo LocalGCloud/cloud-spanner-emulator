@@ -17,13 +17,20 @@
 #include "backend/query/queryable_table.h"
 
 #include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
+#include "googlesql/public/evaluator_table_iterator.h"
 #include "googlesql/public/type.h"
 #include "googlesql/public/value.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "googlesql/base/testing/status_matchers.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
 #include "backend/access/read.h"
+#include "backend/datamodel/key_set.h"
 #include "backend/query/catalog.h"
 #include "backend/query/queryable_column.h"
 #include "tests/common/row_cursor.h"
@@ -112,6 +119,67 @@ TEST_F(QueryableTableTest, CreateEvaluatorTableIteratorWithAllColumns) {
   EXPECT_EQ(iterator->GetValue(0).int64_value(), 42);
   EXPECT_EQ(iterator->GetValue(1).string_value(), "foo");
   ASSERT_FALSE(iterator->NextRow());
+}
+
+class RecordingReader : public RowReader {
+ public:
+  explicit RecordingReader(RowReader* delegate) : delegate_(delegate) {}
+
+  absl::Status Read(const ReadArg& arg,
+                    std::unique_ptr<RowCursor>* cursor) override {
+    reads.push_back(arg);
+    return delegate_->Read(arg, cursor);
+  }
+
+  std::vector<ReadArg> reads;
+
+ private:
+  RowReader* delegate_;
+};
+
+TEST_F(QueryableTableTest, ForUpdateLocksExactKeyAfterFilter) {
+  bool select_for_update = true;
+  RecordingReader recording_reader(reader());
+  QueryableTable table{schema()->FindTable("test_table"),
+                       &recording_reader, std::nullopt, nullptr, nullptr,
+                       false, &select_for_update};
+  auto iterator =
+      table.CreateEvaluatorTableIterator(/*column_idxs=*/{0, 1}).value();
+  EXPECT_TRUE(recording_reader.reads.empty());
+
+  absl::flat_hash_map<int, std::unique_ptr<googlesql::ColumnFilter>> filters;
+  auto key = googlesql::values::Int64(42);
+  filters.emplace(0, std::make_unique<googlesql::ColumnFilter>(key, key));
+  GOOGLESQL_ASSERT_OK(iterator->SetColumnFilterMap(std::move(filters)));
+  ASSERT_TRUE(iterator->NextRow());
+  GOOGLESQL_ASSERT_OK(iterator->Status());
+  ASSERT_EQ(recording_reader.reads.size(), 1);
+  EXPECT_TRUE(recording_reader.reads.front().lock_scanned_ranges_exclusive);
+  ASSERT_EQ(recording_reader.reads.front().key_set.keys().size(), 1);
+  EXPECT_EQ(recording_reader.reads.front()
+                .key_set.keys().front().ColumnValue(0).int64_value(),
+            42);
+  EXPECT_TRUE(recording_reader.reads.front().key_set.ranges().empty());
+}
+
+TEST_F(QueryableTableTest, ForUpdateBroadFilterLocksFullRange) {
+  bool select_for_update = true;
+  RecordingReader recording_reader(reader());
+  QueryableTable table{schema()->FindTable("test_table"),
+                       &recording_reader, std::nullopt, nullptr, nullptr,
+                       false, &select_for_update};
+  auto iterator =
+      table.CreateEvaluatorTableIterator(/*column_idxs=*/{0, 1}).value();
+
+  absl::flat_hash_map<int, std::unique_ptr<googlesql::ColumnFilter>> filters;
+  filters.emplace(0, std::make_unique<googlesql::ColumnFilter>(
+                         googlesql::Value(), googlesql::values::Int64(42)));
+  GOOGLESQL_ASSERT_OK(iterator->SetColumnFilterMap(std::move(filters)));
+  ASSERT_TRUE(iterator->NextRow());
+  ASSERT_EQ(recording_reader.reads.size(), 1);
+  EXPECT_TRUE(recording_reader.reads.front().lock_scanned_ranges_exclusive);
+  EXPECT_EQ(recording_reader.reads.front().key_set.DebugString(),
+            KeySet::All().DebugString());
 }
 
 }  // namespace

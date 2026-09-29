@@ -83,9 +83,13 @@ absl::Status SearchNgramsEvaluator::BuildTokenLists(
       //   [substring|ngrams]-ngram_size_max-ngram_size_min-is_source_null
       std::vector<std::string> signature =
           absl::StrSplit(tokens[i], absl::ByChar('-'), absl::SkipEmpty());
+      // Substring signatures may end with the "d" (remove_diacritics) and "a"
+      // (short_tokens_only_for_anchors) flags.
       GOOGLESQL_RET_CHECK(
           (signature.size() == kTokenizerSignatureArgumentSize ||
-           signature.size() == kSubstringTokenizerSignatureArgumentSize) &&
+           signature.size() == kTokenizerSignatureArgumentSize + 1 ||
+           (signature.size() >= kSubstringTokenizerSignatureArgumentSize &&
+            signature.size() <= kSubstringTokenizerSignatureArgumentSize + 2)) &&
           absl::SimpleAtoi(signature[kNgramMaxSizeIndex], &ngram_max_size) &&
           absl::SimpleAtoi(signature[kNgramMinSizeIndex], &ngram_min_size));
       source_is_null = signature[kIsNullIndex] != "0";
@@ -170,7 +174,12 @@ absl::StatusOr<googlesql::Value> SearchNgramsEvaluator::Evaluate(
   std::vector<std::string> tokenlist_ngrams;
   absl::flat_hash_set<std::string> query_ngrams;
   bool source_is_null;
-  GOOGLESQL_RETURN_IF_ERROR(BuildTokenLists(tokenlist, query.string_value(),
+  GOOGLESQL_ASSIGN_OR_RETURN(bool remove_diacritics,
+                            TokenListRemovesDiacritics(tokenlist));
+  GOOGLESQL_ASSIGN_OR_RETURN(
+      std::string normalized_query,
+      NormalizeSearchText(query.string_value(), remove_diacritics));
+  GOOGLESQL_RETURN_IF_ERROR(BuildTokenLists(tokenlist, normalized_query,
                                   source_is_null, tokenlist_ngrams,
                                   query_ngrams));
 

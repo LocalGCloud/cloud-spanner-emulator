@@ -27,7 +27,9 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "absl/strings/strip.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/types/span.h"
@@ -149,6 +151,8 @@ constexpr absl::string_view kHintExportDataWriteMode = "write_mode";
 constexpr absl::string_view kHintExportDataSpannerOptions = "spanner_options";
 
 constexpr absl::string_view kHintOptimizerVersion = "optimizer_version";
+constexpr absl::string_view kHintOptimizerStatisticsPackage =
+    "optimizer_statistics_package";
 
 absl::Status CollectHintsForNode(
     const googlesql::ResolvedOption* hint,
@@ -185,6 +189,27 @@ bool IsSelectForUpdateQuery(const googlesql::ResolvedNode& node) {
   node.GetDescendantsSatisfying(
       &googlesql::ResolvedNode::Is<googlesql::ResolvedLockMode>, &scan_nodes);
   return !scan_nodes.empty();
+}
+
+bool HasExclusiveLockScannedRangesHint(
+    const googlesql::ResolvedStatement& statement) {
+  for (const auto& hint : statement.hint_list()) {
+    if (!(hint->qualifier().empty() ||
+          absl::EqualsIgnoreCase(hint->qualifier(),
+                                 kSpannerQueryEngineHintPrefix)) ||
+        !absl::EqualsIgnoreCase(hint->name(), kHintLockScannedRanges) ||
+        !hint->value()->Is<googlesql::ResolvedLiteral>()) {
+      continue;
+    }
+    const googlesql::Value& value =
+        hint->value()->GetAs<googlesql::ResolvedLiteral>()->value();
+    if (value.type()->IsString() && !value.is_null() &&
+        absl::EqualsIgnoreCase(value.string_value(),
+                               kHintLockScannedRangesExclusive)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 absl::Status QueryValidator::ValidateHints(
@@ -302,10 +327,15 @@ absl::Status QueryValidator::CheckSpannerHintName(
       {googlesql::RESOLVED_ARRAY_SCAN,
        {kHintJoinTypeDeprecated, kHintJoinMethod, kHashJoinBuildSide,
         kHintJoinBatch, kHintJoinForceOrder}},
-      {googlesql::RESOLVED_INSERT_STMT, {kHintLockScannedRanges}},
+      {googlesql::RESOLVED_INSERT_STMT,
+       {kHintLockScannedRanges, kHintOptimizerVersion,
+        kHintOptimizerStatisticsPackage}},
       {googlesql::RESOLVED_UPDATE_STMT,
-       {kHintLockScannedRanges, kHintPDMLMaxParallelism}},
-      {googlesql::RESOLVED_DELETE_STMT, {kHintLockScannedRanges}},
+       {kHintLockScannedRanges, kHintPDMLMaxParallelism, kHintOptimizerVersion,
+        kHintOptimizerStatisticsPackage}},
+      {googlesql::RESOLVED_DELETE_STMT,
+       {kHintLockScannedRanges, kHintOptimizerVersion,
+        kHintOptimizerStatisticsPackage}},
       {googlesql::RESOLVED_QUERY_STMT,
        {
            kHintForceIndex,
@@ -325,6 +355,7 @@ absl::Status QueryValidator::CheckSpannerHintName(
            kEnhanceQueryTimeoutMs,
            kScanMethod,
            kHintOptimizerVersion,
+           kHintOptimizerStatisticsPackage,
        }},
       {googlesql::RESOLVED_SUBQUERY_EXPR,
        {kHintJoinTypeDeprecated, kHintJoinMethod, kHashJoinBuildSide,
@@ -400,6 +431,9 @@ absl::Status QueryValidator::CheckHintValue(
           {kHintExportDataWriteMode, googlesql::types::StringType()},
           {kHintExportDataSpannerOptions, googlesql::types::StringType()},
           {kHintPDMLMaxParallelism, googlesql::types::Int64Type()},
+          // The emulator has no optimizer statistics packages, so it accepts
+          // any package name without changing how the statement runs.
+          {kHintOptimizerStatisticsPackage, googlesql::types::StringType()},
       }};
 
   // optimizer_version accepts both STRING ("latest") and INT64 (7) — just
@@ -622,6 +656,60 @@ absl::Status QueryValidator::VisitResolvedQueryStmt(
   return absl::OkStatus();
 }
 
+namespace {
+
+// Returns the function that generates `column`, lower-cased and without the
+// PostgreSQL "spanner." prefix, or an empty string for a non-generated column.
+std::string GeneratingFunctionName(const Column* column) {
+  if (!column->expression().has_value()) {
+    return "";
+  }
+  std::string expression = absl::AsciiStrToLower(*column->expression());
+  absl::string_view name = absl::StripLeadingAsciiWhitespace(expression);
+  while (absl::ConsumePrefix(&name, "(")) {
+    name = absl::StripLeadingAsciiWhitespace(name);
+  }
+  absl::ConsumePrefix(&name, "spanner.");
+  return std::string(name.substr(0, name.find('(')));
+}
+
+}  // namespace
+
+absl::Status QueryValidator::CheckSearchTokenlistArgument(
+    const googlesql::ResolvedFunctionCall& function_call) {
+  // Text search functions reject TOKENLISTs from non-text tokenizers. The
+  // evaluator detects this from token signatures, which a SQL NULL TOKENLIST
+  // does not carry, so check the generating function of a column argument.
+  static const auto* text_search_functions =
+      new const absl::flat_hash_set<absl::string_view>{
+          "search", "search_substring", "score", "search_ngrams",
+          "score_ngrams"};
+  static const auto* non_text_tokenizers =
+      new const absl::flat_hash_set<absl::string_view>{
+          "token", "tokenize_number", "tokenize_bool", "tokenize_json",
+          "tokenize_jsonb"};
+  const std::string name = function_call.function()->FullName(false);
+  if (!text_search_functions->contains(name) || schema() == nullptr ||
+      function_call.argument_list_size() == 0 ||
+      function_call.argument_list(0)->node_kind() !=
+          googlesql::RESOLVED_COLUMN_REF) {
+    return absl::OkStatus();
+  }
+  const googlesql::ResolvedColumn& argument =
+      function_call.argument_list(0)->GetAs<googlesql::ResolvedColumnRef>()
+          ->column();
+  const Table* table = schema()->FindTable(argument.table_name());
+  const Column* column =
+      table == nullptr ? nullptr : table->FindColumn(argument.name());
+  if (column == nullptr ||
+      !non_text_tokenizers->contains(GeneratingFunctionName(column))) {
+    return absl::OkStatus();
+  }
+  return error::TokenListNotMatchSearch(
+      absl::AsciiStrToUpper(name),
+      name == "search_substring" ? "TOKENIZE_SUBSTRING" : "TOKENIZE_FULLTEXT");
+}
+
 absl::Status QueryValidator::CheckSearchFunctionsAreAllowed(
     const googlesql::ResolvedFunctionCall& function_call) {
   static const auto* search_functions =
@@ -688,6 +776,7 @@ absl::Status QueryValidator::VisitResolvedFunctionCall(
   }
 
   GOOGLESQL_RETURN_IF_ERROR(CheckSearchFunctionsAreAllowed(*node));
+  GOOGLESQL_RETURN_IF_ERROR(CheckSearchTokenlistArgument(*node));
 
   if (IsSequenceFunction(node)) {
     GOOGLESQL_RETURN_IF_ERROR(ValidateSequenceFunction(node));
@@ -868,8 +957,23 @@ absl::Status QueryValidator::VisitResolvedTableScan(
   if (!dml_table_scans_.contains(node)) {
     GOOGLESQL_RETURN_IF_ERROR(CheckPendingCommitTimestampReads(node));
   }
+  GOOGLESQL_RETURN_IF_ERROR(CheckSpannerSysTableAccess(node));
 
   return DefaultVisit(node);
+}
+
+absl::Status QueryValidator::CheckSpannerSysTableAccess(
+    const googlesql::ResolvedTableScan* table_scan) const {
+  // Like Cloud Spanner, active queries can't be read in a read-write
+  // transaction.
+  const std::string table_name = table_scan->table()->FullName();
+  if (context_.is_read_only_txn.has_value() && !*context_.is_read_only_txn &&
+      absl::EqualsIgnoreCase(table_name,
+                             "SPANNER_SYS.OLDEST_ACTIVE_QUERIES")) {
+    return error::SpannerSysTableUnsupportedInReadWriteTransactions(
+        table_name);
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace backend

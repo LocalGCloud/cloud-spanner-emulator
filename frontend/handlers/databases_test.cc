@@ -24,6 +24,7 @@
 #include "absl/flags/declare.h"
 #include "absl/flags/flag.h"
 #include "absl/status/status.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
@@ -31,6 +32,7 @@
 #include "backend/schema/catalog/change_stream.h"
 #include "backend/schema/catalog/sequence.h"
 #include "backend/schema/printer/print_ddl.h"
+#include "common/clock.h"
 #include "common/constants.h"
 #include "common/limits.h"
 #include "frontend/collections/database_manager.h"
@@ -463,6 +465,16 @@ TEST_F(PersistentDatabaseDdlTest, DropUnavailableDatabaseKeepsDropProtection) {
   ASSERT_TRUE(status.ok()) << status.error_message();
   MakeDatabaseUnavailable();
 
+  instance_api::DeleteInstanceRequest delete_request;
+  delete_request.set_name(instance_name_);
+  protobuf_api::Empty delete_response;
+  grpc::ClientContext delete_context;
+  EXPECT_EQ(env_.instance_admin_client()
+                ->DeleteInstance(&delete_context, delete_request,
+                                 &delete_response)
+                .error_code(),
+            grpc::StatusCode::FAILED_PRECONDITION);
+
   EXPECT_EQ(DropDatabase().error_code(),
             grpc::StatusCode::FAILED_PRECONDITION);
   EXPECT_THAT(ListDatabaseNames(), testing::Contains(database_name_));
@@ -478,6 +490,9 @@ TEST_F(PersistentDatabaseDdlTest,
   create_request.add_extra_statements(
       "CREATE TABLE T (K INT64) PRIMARY KEY (K)");
   create_request.add_extra_statements("CREATE CHANGE STREAM CS FOR T");
+  create_request.add_extra_statements(
+      "ALTER DATABASE csdb SET OPTIONS "
+      "(default_leader = 'us-east1', version_retention_period = '2h')");
   operations_api::Operation create_operation;
   grpc::ClientContext create_context;
   grpc::Status status = env_.database_admin_client()->CreateDatabase(
@@ -505,6 +520,11 @@ TEST_F(PersistentDatabaseDdlTest,
   EXPECT_EQ(absl::FromUnixSeconds(get_response.create_time().seconds()) +
                 absl::Nanoseconds(get_response.create_time().nanos()),
             live_creation_time);
+  EXPECT_EQ(get_response.version_retention_period(), "2h");
+  EXPECT_EQ(get_response.default_leader(), "us-east1");
+  ASSERT_TRUE(get_response.has_earliest_version_time());
+  EXPECT_EQ(get_response.earliest_version_time().SerializeAsString(),
+            get_response.create_time().SerializeAsString());
 
   // metadata.json records the same time for the database and for its first
   // schema-change batch, which startup replays.
@@ -549,6 +569,117 @@ TEST_F(PersistentDatabaseDdlTest,
       replayed->backend()->GetLatestSchema()->FindChangeStream("CS")
           ->creation_time(),
       live_creation_time);
+  database_api::Database replayed_response;
+  GOOGLESQL_ASSERT_OK(replayed->ToProto(&replayed_response));
+  EXPECT_EQ(replayed_response.version_retention_period(), "2h");
+  EXPECT_EQ(replayed_response.default_leader(), "us-east1");
+  ASSERT_TRUE(replayed_response.has_earliest_version_time());
+  EXPECT_EQ(replayed_response.earliest_version_time().SerializeAsString(),
+            replayed_response.create_time().SerializeAsString());
+}
+
+TEST(DatabaseRolePersistenceTest, RolesReplayFromDurableMetadata) {
+  PersistentDatabaseDataDirectory data_dir;
+  const std::string instance = "projects/role-persistence/instances/instance";
+  const std::string database = instance + "/databases/roledb";
+  auto env = std::make_unique<test::TestEnv>();
+
+  instance_api::CreateInstanceRequest instance_request;
+  instance_request.set_parent("projects/role-persistence");
+  instance_request.set_instance_id("instance");
+  instance_request.mutable_instance()->set_config("emulator-config");
+  instance_request.mutable_instance()->set_node_count(1);
+  operations_api::Operation operation;
+  grpc::ClientContext instance_context;
+  ASSERT_TRUE(env->instance_admin_client()
+                  ->CreateInstance(&instance_context, instance_request,
+                                   &operation)
+                  .ok());
+  ASSERT_TRUE(operation.done());
+
+  database_api::CreateDatabaseRequest create_request;
+  create_request.set_parent(instance);
+  create_request.set_create_statement("CREATE DATABASE `roledb`");
+  grpc::ClientContext create_context;
+  ASSERT_TRUE(env->database_admin_client()
+                  ->CreateDatabase(&create_context, create_request, &operation)
+                  .ok());
+  ASSERT_TRUE(operation.done());
+
+  database_api::UpdateDatabaseDdlRequest update_request;
+  update_request.set_database(database);
+  const std::vector<std::string> role_statements = {
+      "CREATE ROLE viewer", "CREATE ROLE reader",
+      "CREATE TABLE T (K INT64) PRIMARY KEY (K)",
+      "GRANT SELECT ON TABLE T TO ROLE reader",
+      "GRANT ROLE reader TO ROLE viewer"};
+  for (const std::string& statement : role_statements) {
+    update_request.add_statements(statement);
+  }
+  grpc::ClientContext update_context;
+  ASSERT_TRUE(env->database_admin_client()
+                  ->UpdateDatabaseDdl(&update_context, update_request,
+                                      &operation)
+                  .ok());
+  ASSERT_TRUE(operation.done());
+  ASSERT_EQ(operation.error().code(), 0) << operation.error().message();
+
+  env.reset();
+  MetadataStore saved_metadata(data_dir.path());
+  GOOGLESQL_ASSERT_OK(saved_metadata.Load());
+  const MetadataStore::DatabaseInfo saved =
+      saved_metadata.instances().at(instance).databases.at("roledb");
+  ASSERT_EQ(saved.schema_change_batches.size(), 2);
+  EXPECT_EQ(saved.schema_change_batches.back().statements, role_statements);
+
+  // Replay the committed batches through the same DatabaseManager::Creation
+  // path as emulator_main, with the original persistent storage directory.
+  std::vector<std::vector<std::string>> statements;
+  std::vector<backend::SchemaChangeOperation> batches;
+  statements.reserve(saved.schema_change_batches.size());
+  batches.reserve(saved.schema_change_batches.size());
+  for (const auto& batch : saved.schema_change_batches) {
+    statements.emplace_back();
+    for (const std::string& statement : batch.statements) {
+      if (!absl::StartsWithIgnoreCase(statement, "CREATE DATABASE")) {
+        statements.back().push_back(statement);
+      }
+    }
+    absl::Time batch_time = absl::InfinitePast();
+    std::string parse_error;
+    ASSERT_TRUE(absl::ParseTime(absl::RFC3339_full,
+                                batch.schema_change_timestamp, &batch_time,
+                                &parse_error))
+        << parse_error;
+    batches.push_back({.statements = statements.back(),
+                       .proto_descriptor_bytes = batch.proto_descriptor_bytes,
+                       .database_dialect = database_api::GOOGLE_STANDARD_SQL,
+                       .schema_change_timestamp = batch_time,
+                       .replaying_committed_ddl = true});
+  }
+  absl::Time create_time;
+  std::string parse_error;
+  ASSERT_TRUE(absl::ParseTime(absl::RFC3339_full, saved.create_time,
+                              &create_time, &parse_error))
+      << parse_error;
+  Clock clock;
+  DatabaseManager restarted_manager(&clock, data_dir.path());
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto creation,
+                                 restarted_manager.ReserveDatabase(database));
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto replayed,
+      creation->Build(
+          batches,
+          {.table_id = saved.id_counters.table_id,
+           .column_id = saved.id_counters.column_id,
+           .change_stream_id = saved.id_counters.change_stream_id},
+          create_time));
+  GOOGLESQL_ASSERT_OK(creation->Publish());
+  const backend::Schema* schema = replayed->backend()->GetLatestSchema();
+  ASSERT_NE(schema->FindRole("viewer"), nullptr);
+  ASSERT_NE(schema->grants(), nullptr);
+  EXPECT_EQ(schema->grants()->privileges().size(), 1);
+  EXPECT_EQ(schema->grants()->memberships().size(), 1);
 }
 
 // Tests for CreateDatabase.
@@ -813,6 +944,39 @@ TEST_F(DatabaseApiTest, GetDatabase) {
             database_api::DatabaseDialect::GOOGLE_STANDARD_SQL);
 }
 
+TEST_F(DatabaseApiTest, GetDatabaseReportsDatabaseOptions) {
+  GOOGLESQL_EXPECT_OK(CreateDatabase(test_instance_uri_, test_database_name_));
+
+  database_api::Database database;
+  GOOGLESQL_EXPECT_OK(GetDatabase(test_database_uri_, &database));
+  EXPECT_EQ(database.version_retention_period(), "1h");
+  EXPECT_TRUE(database.default_leader().empty());
+  ASSERT_TRUE(database.has_earliest_version_time());
+  EXPECT_EQ(database.earliest_version_time().SerializeAsString(),
+            database.create_time().SerializeAsString());
+
+  GOOGLESQL_EXPECT_OK(UpdateDatabaseDdl(
+      test_database_uri_,
+      {"ALTER DATABASE `test-database` SET OPTIONS "
+       "(default_leader = 'us-east1')"}));
+  GOOGLESQL_EXPECT_OK(UpdateDatabaseDdl(
+      test_database_uri_,
+      {"ALTER DATABASE `test-database` SET OPTIONS "
+       "(version_retention_period = '2h')"}));
+
+  GOOGLESQL_EXPECT_OK(GetDatabase(test_database_uri_, &database));
+  EXPECT_EQ(database.version_retention_period(), "2h");
+  EXPECT_EQ(database.default_leader(), "us-east1");
+
+  GOOGLESQL_EXPECT_OK(UpdateDatabaseDdl(
+      test_database_uri_,
+      {"ALTER DATABASE `test-database` SET OPTIONS "
+       "(version_retention_period = NULL)"}));
+  GOOGLESQL_EXPECT_OK(GetDatabase(test_database_uri_, &database));
+  EXPECT_EQ(database.version_retention_period(), "1h");
+  EXPECT_EQ(database.default_leader(), "us-east1");
+}
+
 TEST_F(DatabaseApiTest, GetDatabaseWithGSQLDialect) {
   GOOGLESQL_EXPECT_OK(
       CreateDatabase(test_instance_uri_, test_database_name_, {},
@@ -867,12 +1031,29 @@ TEST_F(DatabaseApiTest, DropProtectionIsUpdatedAndEnforced) {
   grpc::ClientContext enable_context;
   GOOGLESQL_EXPECT_OK(test_env()->database_admin_client()->UpdateDatabase(
       &enable_context, enable, &operation));
+  database_api::UpdateDatabaseMetadata operation_metadata;
+  ASSERT_TRUE(operation.metadata().UnpackTo(&operation_metadata));
+  EXPECT_EQ(operation_metadata.request().database().name(), test_database_uri_);
+  EXPECT_EQ(operation_metadata.progress().progress_percent(), 100);
+  EXPECT_TRUE(operation_metadata.progress().has_start_time());
+  EXPECT_TRUE(operation_metadata.progress().has_end_time());
 
   database_api::Database database;
   GOOGLESQL_EXPECT_OK(GetDatabase(test_database_uri_, &database));
   EXPECT_TRUE(database.enable_drop_protection());
   EXPECT_THAT(DropDatabase(test_database_uri_),
               StatusIs(absl::StatusCode::kFailedPrecondition));
+  instance_api::DeleteInstanceRequest delete_request;
+  delete_request.set_name(test_instance_uri_);
+  protobuf_api::Empty delete_response;
+  grpc::ClientContext delete_context;
+  EXPECT_EQ(test_env()
+                ->instance_admin_client()
+                ->DeleteInstance(&delete_context, delete_request,
+                                 &delete_response)
+                .error_code(),
+            grpc::StatusCode::FAILED_PRECONDITION);
+  GOOGLESQL_EXPECT_OK(GetDatabase(test_database_uri_, &database));
 
   database_api::UpdateDatabaseRequest disable;
   disable.mutable_database()->set_name(test_database_uri_);

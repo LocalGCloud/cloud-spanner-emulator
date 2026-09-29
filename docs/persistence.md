@@ -29,6 +29,13 @@ docker run -p 9010:9010 -p 9020:9020 \
 `docker run ... jaysen2apache/spanner-emulator-extended --data_dir=/data`
 doesn't work: Docker tries to run `--data_dir=/data` as the program.
 
+Named Docker volumes (e.g. `-v spanner-vol:/data`) or host directory mounts
+survive container restarts (`docker restart`) and recreation. This was qualified
+in `tests/image_verification_test.py` across both GoogleSQL and PostgreSQL
+dialects: schema objects, database roles, DEFINER views, database options, TTL
+policies, sequences, unique indexes, split points, `version_time` backups, and
+`SPANNER_SYS` statistics all survive container restarts.
+
 ### Binaries
 
 `gateway_main` serves REST on port 9020 and starts `emulator_main` as a child
@@ -61,13 +68,18 @@ emulator_main --host_port=localhost:9010 --data_dir=/path/to/data
 | Instances | Name, display name, config, node count or processing units, labels, create and update times | `metadata.json` |
 | Custom instance configs | The full config | `metadata.json` |
 | Instance partitions | The full partition | `metadata.json` |
-| Databases | Dialect, create time, drop protection, and every committed DDL batch with its commit timestamp and proto descriptors | `metadata.json` |
+| Databases | Dialect, create time, drop protection, and every committed DDL batch (including roles, grants, database options, and row deletion policies) with its commit timestamp and proto descriptors | `metadata.json` |
 | ID counters | Table, column, and change stream ID counters per database | `metadata.json` |
 | Sequence counters | Each sequence's counter, including `IDENTITY` columns' sequences, saved up to 1,000 values ahead | The database's LevelDB directory (so backups carry it too) |
+| Split points | Split points added with `AddSplitPoints`, with their expire times | The database's LevelDB directory |
+| `SPANNER_SYS` statistics | Query, read, transaction, lock, and table and column operation statistics for every interval still in its retention period, table size samples, and each table's last row deletion policy sweep. Saved when a minute interval ends and when `emulator_main` gets `SIGTERM` or `SIGINT`; a crash or `SIGKILL` loses the current minute. Dropping the database deletes them. | `spanner_sys_statistics.json` in the database's folder |
 | IAM policies | Policies on instances, databases, instance configs, instance partitions, backups, and backup schedules | `metadata.json` |
 | Long-running operations | Operations from creating or updating instances, instance configs, instance partitions, and databases; database DDL; moving instances; and creating, copying, and restoring backups | `backup_catalog.json` |
-| Backups | Backup metadata, plus a full copy of the database's LevelDB data | `backup_catalog.json` and `backups/` |
+| Backups | Backup metadata (including `version_time`, encryption information, and incremental chain fields), plus a full copy of the database's LevelDB data | `backup_catalog.json` and `backups/` |
 | Backup schedules | The full schedule | `backup_catalog.json` |
+
+UUID keys and values persist with `--data_dir`; a native gRPC process-restart
+test covers PostgreSQL UUID rows and typed reads after restart.
 
 At startup the emulator rebuilds each database's schema by replaying its DDL
 batches in order, each at its original commit timestamp. The first batch (the
@@ -82,6 +94,8 @@ IAM policies are stored and returned, but the emulator doesn't enforce them.
 - Sessions. Clients need new sessions after a restart.
 - Open transactions. Anything not committed is lost.
 - In-flight change stream queries. Start them again after a restart.
+- Executing queries and partitioned DMLs, which `SPANNER_SYS` shows while
+  they run.
 
 The version retention period limits historical reads, but older row versions
 may still be on disk. See [Space usage](#space-usage).
@@ -93,10 +107,12 @@ startup deletes some entries it doesn't recognize.
 
 ```text
 <data_dir>/
+  .lock                          held by the running emulator; holds its PID
   metadata.json                  instances, databases, DDL, IAM, configs, partitions
   backup_catalog.json            backups, backup schedules, operations
   projects/<project>/instances/<instance>/databases/<database>/
     storage/                     the database's LevelDB data
+    spanner_sys_statistics.json  the database's SPANNER_SYS statistics
     .metadata-committed          marker: the database is recorded in metadata.json
     .restore-in-progress         marker: a RestoreDatabase hasn't finished
     .delete-in-progress          marker: a DropDatabase hasn't finished
@@ -115,10 +131,13 @@ Rules:
 - **Stop the emulator before copying or backing up the directory.** The JSON
   files and the LevelDB directories are separate files, and a copy taken while
   the emulator runs may not be consistent.
-- **Only one process may use a directory.** Nothing locks the whole directory.
-  A second process can't open databases the first has open, so it marks them
-  `UNAVAILABLE`, and both processes write `metadata.json`. Make sure the
-  previous `emulator_main` has exited before you start a new one.
+- **Only one process may use a directory.** `emulator_main` takes an
+  exclusive `flock` on `<data_dir>/.lock` before it reads anything, and a
+  second emulator on the same directory exits at startup with
+  `--data_dir <dir> is in use by another emulator process (see the PID in
+  <dir>/.lock)`. The operating system releases the lock when the process
+  exits, even after a crash, so a stale `.lock` file is harmless. The lock
+  doesn't stop other programs from writing to the directory.
   `gateway_main` stops its `emulator_main` when it gets `SIGINT` or
   `SIGTERM`; if you kill `gateway_main` with `SIGKILL`, stop `emulator_main`
   yourself.
@@ -155,23 +174,35 @@ Backups are full local copies. They need `--data_dir`:
 - Without `--data_dir`, `CreateBackup` fails with `FAILED_PRECONDITION`
   (`Native backups require emulator --data_dir persistent storage`), and
   `RestoreDatabase` fails with `Native restore requires persistent metadata
-  storage`. Backup schedules still work, but they aren't saved.
-- `CreateBackup` copies all of the database's LevelDB data, including old row
-  versions still inside the retention period. It captures the database when
-  the request runs. The backup is `READY`, and its operation is done, when the
-  call returns.
+  storage`. Backup schedule metadata RPCs still work, but the schedules aren't
+  saved and cannot create backups without `--data_dir`.
+- `CreateBackup` copies the database's LevelDB data. Without `version_time`
+  it captures the database when the request runs, including old row versions
+  still inside the retention period. The backup is `READY`, and its operation
+  is done, when the call returns.
 - The backup must be in the same instance as its source database.
-- `version_time` isn't supported. Requests that set it fail with
-  `Historical backup version_time is not supported by the emulator`.
-- `expire_time` is required and must be between 6 hours and 366 days after the
-  create time. The emulator only checks it: expired backups are never deleted.
+- `version_time` can be any time from the database's `earliest_version_time`
+  (bounded by `version_retention_period`) to now. The backup then keeps only
+  row versions at or before that time and the schema as of that time, and
+  `GetBackup` reports it as `version_time`.
+- `encryption_config` accepts the Google-default types, and `encryption_info`
+  reports Google default encryption. Customer-managed keys fail with
+  `UNIMPLEMENTED`: local data is plaintext.
+- `expire_time` is required for manual backups and must be between 6 hours
+  and 366 days after the backup's create time. Expired backups are deleted by backup metadata
+  RPCs and the periodic schedule worker.
 - `UpdateBackup` can change only `expire_time`.
 - `CopyBackup` makes another full copy. The source must be `READY`.
 - `RestoreDatabase` copies the snapshot into a new database. The target must
   be in the same project as the backup, and the target instance must use the
-  same instance config as the backup's source instance.
-- Backup schedules are stored and returned but never run. No backups are
-  created automatically.
+  same instance config as the backup's source instance. Roles and grants are
+  restored; row deletion policies are dropped, as in production.
+- Backup schedules run at supported 12-hour, daily, weekly, or monthly UTC
+  times. Each due run persists its backup, completed operation, and next
+  cursor together; the worker resumes after restart. Incremental schedules
+  link their backups into a chain (`incremental_backup_chain_id`,
+  `oldest_version_time`), but each backup is a full copy. A database can
+  have at most 4 schedules.
 - `DropDatabase` fails with `Database still has backup schedules` until the
   database's schedules are deleted.
 - `DeleteBackup` removes the backup's data from `backups/`.
@@ -329,6 +360,12 @@ whole emulator:
 - Replayed DDL skips some checks that were added after it was first accepted
   (currently the geo-partitioning placement checks), so databases created by
   older builds keep loading.
+- Builds before the 2026-09-28 range-scan fix could skip rows in range reads
+  and range deletes, so unique index checks could miss existing values. The
+  on-disk format didn't change, and directories written by those builds load
+  as before, but nothing removes duplicate unique index keys they may already
+  hold. A database whose restore fails on them is
+  [unavailable](#unavailable-databases) until you drop and recreate it.
 
 ## Space usage
 
@@ -340,8 +377,9 @@ whole emulator:
 - Data of a dropped table is removed at the first read-only transaction read
   or schema change after the retention period has passed. Data of a dropped
   column is removed at the first schema change after that.
-- Each backup is a full copy of its database. Backups are removed only by
-  `DeleteBackup`.
+- Each backup is a full copy of its database. Backups are removed by
+  `DeleteBackup` or, once expired, by backup metadata calls and the schedule
+  worker.
 - Each DDL change needs temporary space for a full copy of its database.
 - `.quarantine/` is never cleaned up.
 
@@ -353,10 +391,14 @@ whole emulator:
   `GET_INTERNAL_SEQUENCE_STATE` shows the jump. Cloud Spanner sequences can
   also skip values. Databases persisted before this was added (2026-09-24)
   have no saved counter; their sequences start over once, as before.
-- **No directory lock.** Two processes on one directory can corrupt
-  `metadata.json` and make databases unavailable.
 - **No sync on row writes.** An OS crash or power loss can lose the most
   recent commits, though never part of one. See [Durability](#durability).
-- **Backups are full copies,** `version_time` isn't supported, expired backups
-  are kept, and backup schedules never run.
+- **Backups are full copies,** including incremental schedule backups.
+  Customer-managed encryption isn't supported. Expired backups are removed by
+  backup metadata calls and the schedule worker; due schedules run with a
+  persisted cursor.
+- **`SPANNER_SYS` statistics can lose the current minute.** They're saved
+  when a minute interval ends and on `SIGTERM` or `SIGINT`, so a crash or
+  `SIGKILL` loses the statistics recorded since the last save. Backups don't
+  carry them.
 - **Downgrades aren't supported** once a newer build has saved the directory.

@@ -266,15 +266,8 @@ TEST(SubstringTokenizerTest, NullInputValue) {
   absl::StatusOr<googlesql::Value> result =
       SubstringTokenizer::Tokenize({googlesql::Value::NullString()});
   GOOGLESQL_EXPECT_OK(result.status());
-
-  googlesql::Value token_list = result.value();
-  EXPECT_TRUE(token_list.type()->IsTokenList());
-
-  // Always expect the tokenlist has at least one token
-  // which stores tokenizer information.
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto tokens, StringsFromTokenList(token_list));
-  ASSERT_EQ(tokens.size(), 1);
-  EXPECT_EQ("substring-4-1-1-0", tokens[0]);
+  EXPECT_TRUE(result->type()->IsTokenList());
+  EXPECT_TRUE(result->is_null());
 }
 
 TEST(SubstringTokenizerTest, ConflictSupportRelativeSearchArgs) {
@@ -307,6 +300,19 @@ TEST(SubstringTokenizerTest, InvalidRelativeSearchTypes) {
        googlesql::values::StringArray({"not_supported"})});
   EXPECT_THAT(result, StatusIs(absl::StatusCode::kInvalidArgument,
                                HasSubstr("Invalid relative_search_type")));
+}
+
+TEST(SubstringTokenizerTest, HtmlAndDiacritics) {
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      auto result,
+      SubstringTokenizer::Tokenize(
+          {googlesql::Value::String("<b>Café</b> &amp; thé"),
+           googlesql::Value::NullInt64(), googlesql::Value::NullInt64(),
+           googlesql::Value::NullBool(), googlesql::Value::String("text/html"),
+           googlesql::Value::Null(googlesql::types::StringArrayType()),
+           googlesql::Value::Bool(true)}));
+  EXPECT_EQ(*StringsFromTokenList(result),
+            (std::vector<std::string>{"substring-4-1-0-0-d", "cafe  & the"}));
 }
 
 }  // namespace search

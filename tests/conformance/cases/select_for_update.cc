@@ -23,6 +23,8 @@
 #include "tests/common/proto_matchers.h"
 #include "absl/status/status.h"
 #include "absl/strings/substitute.h"
+#include "absl/time/time.h"
+#include "common/config.h"
 #include "common/feature_flags.h"
 #include "tests/common/scoped_feature_flags_setter.h"
 #include "tests/conformance/common/database_test_base.h"
@@ -129,6 +131,115 @@ TEST_P(SelectForUpdateTest, CombiningWithStatementLockHintIsInvalid) {
       StatusIs(absl::StatusCode::kInvalidArgument,
                testing::HasSubstr("FOR UPDATE cannot be combined with "
                                   "statement-level lock hints")));
+}
+
+TEST_P(SelectForUpdateTest, LocksOnlyMatchingKeys) {
+  if (in_prod_env()) {
+    GTEST_SKIP() << "This test asserts emulator-specific abort behavior.";
+  }
+  PopulateDatabase();
+
+  const int previous_probability =
+      config::abort_current_transaction_probability();
+  config::set_abort_current_transaction_probability(0);
+  // Younger transactions abort instead of waiting for older ones.
+  const absl::Duration previous_lock_wait_timeout = config::lock_wait_timeout();
+  config::set_lock_wait_timeout_ms(0);
+
+  auto first = Transaction(Transaction::ReadWriteOptions());
+  auto disjoint = Transaction(Transaction::ReadWriteOptions());
+  auto overlapping = Transaction(Transaction::ReadWriteOptions());
+
+  EXPECT_THAT(QueryTransaction(
+                  first,
+                  "SELECT user_id FROM users WHERE user_id = 1 FOR UPDATE"),
+              IsOkAndHoldsRow({1}));
+  EXPECT_THAT(QueryTransaction(
+                  disjoint,
+                  "SELECT user_id FROM users WHERE user_id = 2 FOR UPDATE"),
+              IsOkAndHoldsRow({2}));
+  EXPECT_THAT(QueryTransaction(
+                  overlapping,
+                  "SELECT user_id FROM users WHERE user_id = 1 FOR UPDATE"),
+              StatusIs(absl::StatusCode::kAborted));
+
+  config::set_lock_wait_timeout_ms(
+      absl::ToInt64Milliseconds(previous_lock_wait_timeout));
+  config::set_abort_current_transaction_probability(previous_probability);
+}
+
+TEST_P(SelectForUpdateTest, ExclusiveLockHintLocksOnlyMatchingKeys) {
+  if (in_prod_env()) {
+    GTEST_SKIP() << "This test asserts emulator-specific abort behavior.";
+  }
+  PopulateDatabase();
+
+  const int previous_probability =
+      config::abort_current_transaction_probability();
+  config::set_abort_current_transaction_probability(0);
+  // Younger transactions abort instead of waiting for older ones.
+  const absl::Duration previous_lock_wait_timeout = config::lock_wait_timeout();
+  config::set_lock_wait_timeout_ms(0);
+
+  const std::string exclusive =
+      GetParam() == database_api::DatabaseDialect::POSTGRESQL
+          ? "/*@lock_scanned_ranges=exclusive*/"
+          : "@{lock_scanned_ranges=exclusive}";
+  auto first = Transaction(Transaction::ReadWriteOptions());
+  auto disjoint = Transaction(Transaction::ReadWriteOptions());
+  auto overlapping = Transaction(Transaction::ReadWriteOptions());
+
+  EXPECT_THAT(
+      QueryTransaction(
+          first, exclusive + "SELECT user_id FROM users WHERE user_id = 1"),
+      IsOkAndHoldsRow({1}));
+  EXPECT_THAT(
+      QueryTransaction(
+          disjoint, exclusive + "SELECT user_id FROM users WHERE user_id = 2"),
+      IsOkAndHoldsRow({2}));
+  EXPECT_THAT(
+      QueryTransaction(
+          overlapping,
+          exclusive + "SELECT user_id FROM users WHERE user_id = 1"),
+      StatusIs(absl::StatusCode::kAborted));
+
+  config::set_lock_wait_timeout_ms(
+      absl::ToInt64Milliseconds(previous_lock_wait_timeout));
+  config::set_abort_current_transaction_probability(previous_probability);
+}
+
+TEST_P(SelectForUpdateTest, SharedLockHintReadsDoNotConflict) {
+  if (in_prod_env()) {
+    GTEST_SKIP() << "This test asserts emulator-specific abort behavior.";
+  }
+  PopulateDatabase();
+
+  const int previous_probability =
+      config::abort_current_transaction_probability();
+  config::set_abort_current_transaction_probability(0);
+  // Younger transactions abort instead of waiting for older ones.
+  const absl::Duration previous_lock_wait_timeout = config::lock_wait_timeout();
+  config::set_lock_wait_timeout_ms(0);
+
+  const std::string shared =
+      GetParam() == database_api::DatabaseDialect::POSTGRESQL
+          ? "/*@lock_scanned_ranges=shared*/"
+          : "@{lock_scanned_ranges=shared}";
+  auto first = Transaction(Transaction::ReadWriteOptions());
+  auto second = Transaction(Transaction::ReadWriteOptions());
+
+  EXPECT_THAT(
+      QueryTransaction(first,
+                       shared + "SELECT user_id FROM users WHERE user_id = 1"),
+      IsOkAndHoldsRow({1}));
+  EXPECT_THAT(
+      QueryTransaction(second,
+                       shared + "SELECT user_id FROM users WHERE user_id = 1"),
+      IsOkAndHoldsRow({1}));
+
+  config::set_lock_wait_timeout_ms(
+      absl::ToInt64Milliseconds(previous_lock_wait_timeout));
+  config::set_abort_current_transaction_probability(previous_probability);
 }
 
 TEST_P(SelectForUpdateTest, SelectAndWhere) {
