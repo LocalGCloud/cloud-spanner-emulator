@@ -1891,8 +1891,7 @@ absl::Status QueryEngine::IsValidPartitionedDML(
   Catalog catalog{context.schema, &function_catalog_, type_factory_,
                   analyzer_options};
   std::unique_ptr<const googlesql::AnalyzerOutput> analyzer_output;
-  if (context.schema->dialect() ==
-      database_api::DatabaseDialect::POSTGRESQL) {
+  if (context.schema->dialect() == database_api::DatabaseDialect::POSTGRESQL) {
     GOOGLESQL_ASSIGN_OR_RETURN(
         analyzer_output,
         AnalyzePostgreSQL(local_query.sql, &catalog, analyzer_options,

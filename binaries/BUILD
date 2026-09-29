@@ -52,6 +52,8 @@ cc_binary(
         "//frontend/server",
         "@com_github_grpc_grpc//:grpc++",
         "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/time",
         "@com_google_googleapis//google/iam/v1:policy_cc_proto",
@@ -60,7 +62,6 @@ cc_binary(
         "@com_google_googleapis//google/spanner/admin/instance/v1:instance_cc_proto",
         "@com_google_protobuf//:cc_wkt_protos",
         "@com_google_absl//absl/log:absl_log",
-        "@com_google_absl//absl/status",
     ],
 )
 

@@ -431,7 +431,7 @@ SpangresSchemaPrinterImpl::PrintDDLStatementForEmulator(
 absl::StatusOr<std::vector<std::string>>
 SpangresSchemaPrinterImpl::PrintCreateDatabase(
     const google::spanner::emulator::backend::ddl::CreateDatabase& statement) const {
-  absl::optional<std::string> database_name = absl::nullopt;
+  absl::optional<std::string> database_name = std::nullopt;
   if (!database_name && statement.has_db_name()) {
     database_name = statement.db_name();
   }
@@ -1052,6 +1052,8 @@ std::string SpangresSchemaPrinterImpl::FormatOptionAsNameValuePair(
                                            : PGConstants::kPgFalseLiteral);
   } else if (option.has_int64_value()) {
     StrAppend(&output, option.int64_value());
+  } else if (option.has_double_value()) {
+    StrAppend(&output, option.double_value());
   } else {
     StrAppend(&output, QuoteStringLiteral(option.string_value()));
   }
@@ -1567,8 +1569,15 @@ absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintAlterSequence(
 
 absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintDropSequence(
     const google::spanner::emulator::backend::ddl::DropSequence& statement) const {
-  return absl::Substitute("DROP SEQUENCE $0",
-                          QuoteQualifiedIdentifier(statement.sequence_name()));
+  std::vector<std::string> tokens;
+  tokens.push_back("DROP SEQUENCE");
+  if (statement.has_existence_modifier() &&
+      statement.existence_modifier() ==
+          google::spanner::emulator::backend::ddl::ExistenceModifier::IF_EXISTS) {
+    tokens.push_back("IF EXISTS");
+  }
+  tokens.push_back(QuoteQualifiedIdentifier(statement.sequence_name()));
+  return absl::StrJoin(tokens, " ");
 }
 
 absl::StatusOr<std::string> SpangresSchemaPrinterImpl::PrintAnalyze(

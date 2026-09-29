@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+
 	"path"
 	"path/filepath"
 	"strconv"
@@ -126,6 +127,7 @@ func resolveGRPCBinary() string {
 	return retval
 }
 
+
 func main() {
 	flag.Parse()
 
@@ -174,6 +176,8 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+
+
 	// Start the gateway http server. This will run the emulator grpc server as a subprocess and
 	// proxy http/json requests into grpc requests.
 	gwopts := gateway.Options{

@@ -88,6 +88,7 @@ using ::emulator::tests::common::Simple;
 using ::emulator::tests::common::TestEnum;
 
 using googlesql::values::Array;
+using googlesql::values::Bool;
 using googlesql::values::Date;
 using googlesql::values::Enum;
 using googlesql::values::Int64;
@@ -642,6 +643,61 @@ TEST_P(QueryEngineTest, ExecuteSqlSelectsOneFromTable) {
       GetAllColumnValues(std::move(result.rows)),
       IsOkAndHolds(ElementsAre(ElementsAre(Int64(1)), ElementsAre(Int64(1)),
                                ElementsAre(Int64(1)))));
+}
+
+TEST_P(QueryEngineTest, ExecuteSqlSelectIsDistinctFrom) {
+  std::string sql = GetParam() == POSTGRESQL
+                        ? "SELECT 1::bigint IS DISTINCT FROM 2::bigint AS res"
+                        : "SELECT 1 IS DISTINCT FROM 2 AS res";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      QueryResult result,
+      query_engine().ExecuteSql(Query{sql}, QueryContext{schema(), reader()}));
+  ASSERT_NE(result.rows, nullptr);
+  EXPECT_THAT(GetColumnNames(*result.rows), ElementsAre("res"));
+  EXPECT_THAT(GetColumnTypes(*result.rows), ElementsAre(BoolType()));
+  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
+              IsOkAndHolds(ElementsAre(ElementsAre(Bool(true)))));
+}
+
+TEST_P(QueryEngineTest, ExecuteSqlSelectIsNotDistinctFrom) {
+  std::string sql =
+      GetParam() == POSTGRESQL
+          ? "SELECT 1::bigint IS NOT DISTINCT FROM 1::bigint AS res"
+          : "SELECT 1 IS NOT DISTINCT FROM 1 AS res";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      QueryResult result,
+      query_engine().ExecuteSql(Query{sql}, QueryContext{schema(), reader()}));
+  ASSERT_NE(result.rows, nullptr);
+  EXPECT_THAT(GetColumnNames(*result.rows), ElementsAre("res"));
+  EXPECT_THAT(GetColumnTypes(*result.rows), ElementsAre(BoolType()));
+  EXPECT_THAT(GetAllColumnValues(std::move(result.rows)),
+              IsOkAndHolds(ElementsAre(ElementsAre(Bool(true)))));
+}
+
+TEST_P(QueryEngineTest, ExecuteSqlSelectIsDistinctFromNull) {
+  std::string sql_distinct_null =
+      GetParam() == POSTGRESQL
+          ? "SELECT NULL::bigint IS DISTINCT FROM NULL AS res"
+          : "SELECT NULL IS DISTINCT FROM NULL AS res";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      QueryResult result1,
+      query_engine().ExecuteSql(Query{sql_distinct_null},
+                                QueryContext{schema(), reader()}));
+  ASSERT_NE(result1.rows, nullptr);
+  EXPECT_THAT(GetAllColumnValues(std::move(result1.rows)),
+              IsOkAndHolds(ElementsAre(ElementsAre(Bool(false)))));
+
+  std::string sql_not_distinct_null =
+      GetParam() == POSTGRESQL
+          ? "SELECT NULL::bigint IS NOT DISTINCT FROM NULL AS res"
+          : "SELECT NULL IS NOT DISTINCT FROM NULL AS res";
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      QueryResult result2,
+      query_engine().ExecuteSql(Query{sql_not_distinct_null},
+                                QueryContext{schema(), reader()}));
+  ASSERT_NE(result2.rows, nullptr);
+  EXPECT_THAT(GetAllColumnValues(std::move(result2.rows)),
+              IsOkAndHolds(ElementsAre(ElementsAre(Bool(true)))));
 }
 
 TEST_P(QueryEngineTest, PlanSqlSelectsOneFromTable) {
@@ -3767,6 +3823,43 @@ TEST_P(QueryEngineTest, ExecuteSqlDeleteReturning) {
       GetAllColumnValues(std::move(result.rows)),
       IsOkAndHolds(UnorderedElementsAre(ValueList{Int64(2), String("two")},
                                         ValueList{Int64(4), String("four")})));
+}
+
+TEST_P(QueryEngineTest, ExecuteSqlDeleteAssertRowsModified) {
+  if (GetParam() == POSTGRESQL) {
+    // TODO: Enable for PG once ASSERT_ROWS_MODIFIED is
+    // exported in Spangres OSS.
+    GTEST_SKIP();
+  }
+  MockRowWriter writer;
+  EXPECT_CALL(
+      writer,
+      Write(Property(&Mutation::ops,
+                     ElementsAre(AllOf(
+                         Field(&MutationOp::type, MutationOpType::kDelete),
+                         Field(&MutationOp::table, "test_table"),
+                         Field(&MutationOp::key_set,
+                               Property(&KeySet::keys, UnorderedElementsAre(Key{
+                                                           {Int64(1)}}))))))))
+      .WillOnce(Return(absl::OkStatus()));
+
+  // Matching row count succeeds.
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(
+      QueryResult result,
+      query_engine().ExecuteSql(Query{"DELETE FROM test_table WHERE int64_col "
+                                      "= 1 ASSERT_ROWS_MODIFIED 1"},
+                                QueryContext{schema(), reader(), &writer}));
+  EXPECT_EQ(result.modified_row_count, 1);
+
+  // Mismatching row count fails with OutOfRange error.
+  EXPECT_THAT(
+      query_engine().ExecuteSql(Query{"DELETE FROM test_table WHERE int64_col "
+                                      "= 1 ASSERT_ROWS_MODIFIED 2"},
+                                QueryContext{schema(), reader(), &writer}),
+      StatusIs(
+          absl::StatusCode::kOutOfRange,
+          HasSubstr(
+              "ASSERT_ROWS_MODIFIED expected 2 rows modified, but found 1")));
 }
 
 TEST_P(QueryEngineTest, ExecuteSqlUpdatesReturning) {

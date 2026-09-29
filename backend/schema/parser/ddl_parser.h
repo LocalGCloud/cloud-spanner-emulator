@@ -66,6 +66,7 @@ extern const char kDefaultTimeZoneOptionName[];
 extern const char kColumnarPolicyOptionName[];
 extern const char kPerPlacementRoutingMetadataOptionName[];
 extern const char kFulltextDictionaryTableOptionName[];
+extern const char kScoreVersionOptionName[];
 
 extern const char kLocalityGroupOptionName[];
 extern const char kLocalityGroupStorageOptionName[];

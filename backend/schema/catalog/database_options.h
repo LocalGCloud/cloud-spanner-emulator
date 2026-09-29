@@ -65,6 +65,8 @@ class DatabaseOptions : public SchemaNode {
     return per_placement_routing_metadata_;
   }
 
+  std::optional<int64_t> score_version() const { return score_version_; }
+
   // SchemaNode interface implementation.
   // ------------------------------------
   std::optional<SchemaNameInfo> GetSchemaNameInfo() const override {
@@ -117,6 +119,8 @@ class DatabaseOptions : public SchemaNode {
   std::optional<std::string> version_retention_period_;
   // Where placement routing metadata is stored.
   std::optional<bool> per_placement_routing_metadata_;
+  // Score version for the database.
+  std::optional<int64_t> score_version_;
 };
 }  // namespace backend
 }  // namespace emulator

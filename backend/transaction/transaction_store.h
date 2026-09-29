@@ -118,6 +118,10 @@ class TransactionStore {
                     std::optional<absl::Time> snapshot_timestamp =
                         std::nullopt) const;
 
+  // Returns true if the column has been written with a pending commit timestamp
+  // in this transaction.
+  bool HasPendingCommitTimestamp(const Column* column) const;
+
   // Returns the buffered mutations.
   std::vector<WriteOp> GetBufferedOps() const;
 

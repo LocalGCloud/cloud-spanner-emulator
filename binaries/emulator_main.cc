@@ -17,10 +17,11 @@
 #include <pthread.h>
 
 #include <algorithm>
-#include <csignal>
-#include <cstddef>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
+#include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -35,8 +36,10 @@
 
 #include "absl/flags/parse.h"
 #include "absl/log/absl_log.h"
+#include "absl/log/log.h"
 #include "absl/strings/escaping.h"
 #include "absl/strings/match.h"
+#include "googlesql/base/logging.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/time.h"
@@ -760,7 +763,6 @@ int main(int argc, char** argv) {
       return EXIT_FAILURE;
     }
   }
-
   Server::Options options;
   options.server_address = config::grpc_host_port();
   if (!server->Start(options)) {

@@ -40,7 +40,7 @@ constexpr int64_t kMaxGRPCErrorMessageLength = 4096;
 constexpr int kMaxTransactionsPerSession = 32;
 
 // Maximum number of tables per database.
-constexpr int kMaxTablesPerDatabase = 2560;
+constexpr int kMaxTablesPerDatabase = 5000;
 
 // Maximum number of change streams per database.
 //   https://cloud.google.com/spanner/quotas#change-streams

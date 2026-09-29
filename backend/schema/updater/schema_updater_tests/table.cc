@@ -150,6 +150,63 @@ TEST_P(SchemaUpdaterTest, CreateTable_NoKey) {
   EXPECT_THAT(col1, testing::Not(IsKeyColumnOf(t, "ASC")));
 }
 
+TEST_P(SchemaUpdaterTest, CreateTable_WithoutPrimaryKey) {
+  std::unique_ptr<const Schema> schema;
+  if (GetParam() == POSTGRESQL) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema,
+                         CreateSchema({R"(
+      CREATE TABLE T(
+        col1 bigint
+      ))"},
+                                      /*proto_descriptor_bytes=*/"",
+                                      /*dialect=*/POSTGRESQL,
+                                      /*use_gsql_to_pg_translation=*/false));
+  } else {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(schema, CreateSchema({R"(
+      CREATE TABLE T(
+        col1 INT64
+      ))"}));
+  }
+
+  const Table* t = schema->FindTable("T");
+  EXPECT_NE(t, nullptr);
+
+  // Should have col1 and injected rowid.
+  EXPECT_EQ(t->columns().size(), 2);
+  EXPECT_EQ(t->primary_key().size(), 1);
+
+  auto col1 = t->FindColumn("col1");
+  EXPECT_NE(col1, nullptr);
+  EXPECT_FALSE(col1->hidden());
+
+  auto rowid = t->FindColumn("rowid");
+  EXPECT_NE(rowid, nullptr);
+  EXPECT_TRUE(rowid->hidden());
+  EXPECT_TRUE(rowid->is_identity_column());
+  EXPECT_THAT(rowid, IsKeyColumnOf(t, "ASC"));
+}
+
+TEST_P(SchemaUpdaterTest, CreateTable_rowidConflict) {
+  if (GetParam() == POSTGRESQL) {
+    EXPECT_THAT(CreateSchema({R"(
+      CREATE TABLE T(
+        rowid bigint,
+        col1 bigint
+      ))"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false),
+                StatusIs(error::DuplicateColumnName("t.rowid")));
+  } else {
+    EXPECT_THAT(CreateSchema({R"(
+      CREATE TABLE T(
+        rowid INT64,
+        col1 INT64
+      ))"}),
+                StatusIs(error::DuplicateColumnName("T.rowid")));
+  }
+}
+
 TEST_P(SchemaUpdaterTest, CreateTable_NoColumns) {
   // Empty key columns are unsupported in PG.
   if (GetParam() == POSTGRESQL) GTEST_SKIP();
@@ -943,25 +1000,34 @@ TEST_P(SchemaUpdaterTest, AlterColumn_ChangeNonArrayToArray) {
       StatusIs(error::CannotChangeColumnType("c1", "STRING", "ARRAY<BYTES>")));
 }
 
-TEST_P(SchemaUpdaterTest, AlterColumn_NotNullToNullable) {
+TEST_P(SchemaUpdaterTest, AlterColumn_ChangeNullability) {
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
                                         R"(
       CREATE TABLE T (
         k1 INT64 NOT NULL,
         c1 STRING(MAX),
-        c2 INT64 NOT NULL,
+        c2 INT64,
       ) PRIMARY KEY (k1)
     )"}));
 
   const Table* t = schema->FindTable("T");
   auto c2 = t->FindColumn("c2");
+  EXPECT_TRUE(c2->is_nullable());
+
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema_set_not_null, UpdateSchema(schema.get(), {R"(
+      ALTER TABLE T ALTER COLUMN c2 INT64 NOT NULL
+    )"}));
+
+  t = schema_set_not_null->FindTable("T");
+  c2 = t->FindColumn("c2");
   EXPECT_FALSE(c2->is_nullable());
 
-  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto new_schema, UpdateSchema(schema.get(), {R"(
+  GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema_drop_not_null,
+                       UpdateSchema(schema_set_not_null.get(), {R"(
       ALTER TABLE T ALTER COLUMN c2 INT64
     )"}));
 
-  t = new_schema->FindTable("T");
+  t = schema_drop_not_null->FindTable("T");
   c2 = t->FindColumn("c2");
   EXPECT_TRUE(c2->is_nullable());
 }
@@ -1040,6 +1106,152 @@ TEST_P(SchemaUpdaterTest, AlterColumn_ChangeIndexedColumnNullability) {
   auto idx2 = new_schema->FindIndex("Idx2");
   EXPECT_THAT(idx1->stored_columns()[0], SourceColumnIs(c2));
   EXPECT_THAT(idx2->key_columns()[0]->column(), SourceColumnIs(c2));
+}
+
+TEST_P(SchemaUpdaterTest,
+       AlterColumn_ChangeIndexedColumnNullability_UniqueIndex) {
+  if (GetParam() == POSTGRESQL) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
+                         CreateSchema({R"(
+      CREATE TABLE foo (
+        id bigint NOT NULL,
+        bar bigint NOT NULL,
+        PRIMARY KEY (id)
+      ))",
+                                       R"(
+      CREATE UNIQUE INDEX idx_foo_bar ON foo (bar)
+    )"},
+                                      /*proto_descriptor_bytes=*/"",
+                                      /*dialect=*/POSTGRESQL,
+                                      /*use_gsql_to_pg_translation=*/false));
+
+    // Dropping NOT NULL on a column covered by a UNIQUE index is not allowed.
+    EXPECT_THAT(UpdateSchema(schema.get(), {R"(
+      ALTER TABLE foo ALTER COLUMN bar DROP NOT NULL
+    )"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false),
+                StatusIs(error::ChangingNullConstraintOnIndexedColumn(
+                    "bar", "idx_foo_bar")));
+
+    EXPECT_THAT(UpdateSchema(schema.get(), {R"(
+      ALTER TABLE foo ALTER COLUMN bar TYPE bigint, ALTER COLUMN bar DROP NOT NULL
+    )"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false),
+                StatusIs(error::ChangingNullConstraintOnIndexedColumn(
+                    "bar", "idx_foo_bar")));
+  } else {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
+                                          R"(
+      CREATE TABLE foo (
+        id INT64 NOT NULL,
+        bar INT64 NOT NULL,
+      ) PRIMARY KEY (id)
+    )",
+                                          R"(
+      CREATE UNIQUE INDEX idx_foo_bar ON foo (bar)
+    )"}));
+
+    // Dropping NOT NULL on a column covered by a UNIQUE index is not allowed.
+    EXPECT_THAT(UpdateSchema(schema.get(), {R"(
+      ALTER TABLE foo ALTER COLUMN bar INT64
+    )"}),
+                StatusIs(error::ChangingNullConstraintOnIndexedColumn(
+                    "bar", "idx_foo_bar")));
+  }
+}
+
+TEST_P(SchemaUpdaterTest,
+       AlterColumn_ChangeIndexedColumnNullability_PartialIndex) {
+  if (GetParam() == POSTGRESQL) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
+                         CreateSchema({R"(
+      CREATE TABLE foo (
+        id bigint NOT NULL,
+        bar bigint NOT NULL,
+        PRIMARY KEY (id)
+      ))",
+                                       R"(
+      CREATE INDEX idx_partial ON foo (bar) WHERE bar IS NOT NULL
+    )"},
+                                      /*proto_descriptor_bytes=*/"",
+                                      /*dialect=*/POSTGRESQL,
+                                      /*use_gsql_to_pg_translation=*/false));
+
+    EXPECT_THAT(UpdateSchema(schema.get(), {R"(
+      ALTER TABLE foo ALTER COLUMN bar DROP NOT NULL
+    )"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false),
+                StatusIs(error::ChangingNullConstraintOnIndexedColumn(
+                    "bar", "idx_partial")));
+  } else {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
+                                          R"(
+      CREATE TABLE foo (
+        id INT64,
+        bar INT64 NOT NULL,
+      ) PRIMARY KEY (id)
+    )",
+                                          R"(
+      CREATE INDEX idx_partial ON foo (bar) WHERE bar IS NOT NULL
+    )"}));
+
+    EXPECT_THAT(UpdateSchema(schema.get(), {R"(
+      ALTER TABLE foo ALTER COLUMN bar INT64
+    )"}),
+                StatusIs(error::ChangingNullConstraintOnIndexedColumn(
+                    "bar", "idx_partial")));
+  }
+}
+
+TEST_P(SchemaUpdaterTest,
+       AlterColumn_ChangeIndexedColumnNullability_SetNotNull) {
+  if (GetParam() == POSTGRESQL) {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
+                         CreateSchema({R"(
+      CREATE TABLE foo (
+        id bigint NOT NULL,
+        bar bigint,
+        PRIMARY KEY (id)
+      ))",
+                                       R"(
+      CREATE UNIQUE INDEX idx_foo_bar ON foo (bar)
+    )"},
+                                      /*proto_descriptor_bytes=*/"",
+                                      /*dialect=*/POSTGRESQL,
+                                      /*use_gsql_to_pg_translation=*/false));
+
+    EXPECT_THAT(UpdateSchema(schema.get(), {R"(
+      ALTER TABLE foo ALTER COLUMN bar SET NOT NULL
+    )"},
+                             /*proto_descriptor_bytes=*/"",
+                             /*dialect=*/POSTGRESQL,
+                             /*use_gsql_to_pg_translation=*/false),
+                StatusIs(error::ChangingNullConstraintOnIndexedColumn(
+                    "bar", "idx_foo_bar")));
+  } else {
+    GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema, CreateSchema({
+                                          R"(
+      CREATE TABLE foo (
+        id INT64,
+        bar INT64,
+      ) PRIMARY KEY (id)
+    )",
+                                          R"(
+      CREATE INDEX idx_foo_bar ON foo (bar)
+    )"}));
+
+    EXPECT_THAT(UpdateSchema(schema.get(), {R"(
+      ALTER TABLE foo ALTER COLUMN bar INT64 NOT NULL
+    )"}),
+                StatusIs(error::ChangingNullConstraintOnIndexedColumn(
+                    "bar", "idx_foo_bar")));
+  }
 }
 
 TEST_P(SchemaUpdaterTest, AlterColumn_KeyColumnType) {
@@ -2055,20 +2267,22 @@ TEST_P(SchemaUpdaterTest, AlterColumnIsCaseSensitive) {
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema(SchemaForCaseSensitivityTests()));
 
+  // Schema for case sensitivity tests has table T with column k1.
   EXPECT_THAT(UpdateSchema(schema.get(), {R"(
-      ALTER TABLE T ALTER COLUMN K2 INT64 DEFAULT(0)
+      ALTER TABLE T ALTER COLUMN K1 INT64 DEFAULT(0)
     )"}),
-              StatusIs(error::ColumnNotFound("T", "K2")));
+              StatusIs(error::ColumnNotFound("T", "K1")));
 }
 
 TEST_P(SchemaUpdaterTest, DropColumnIsCaseSensitive) {
   GOOGLESQL_ASSERT_OK_AND_ASSIGN(auto schema,
                        CreateSchema(SchemaForCaseSensitivityTests()));
 
+  // Schema for case sensitivity tests has table T with column k1.
   EXPECT_THAT(UpdateSchema(schema.get(), {R"(
-      ALTER TABLE T DROP COLUMN K2
+      ALTER TABLE T DROP COLUMN K1
     )"}),
-              StatusIs(error::ColumnNotFound("T", "K2")));
+              StatusIs(error::ColumnNotFound("T", "K1")));
 }
 
 TEST_P(SchemaUpdaterTest, CreateTableIfNotExists) {

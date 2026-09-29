@@ -1857,11 +1857,12 @@ absl::Status MultipleRefsToKeyColumn(absl::string_view object_type,
 }
 
 absl::Status UnsupportedAlterDatabaseOption(absl::string_view option_name) {
-  return absl::Status(absl::StatusCode::kFailedPrecondition,
-                      absl::Substitute("Invalid Alter Database Option: $0. "
-                                       "Supported options are witness_location "
-                                       "and default_leader.",
-                                       option_name));
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute("Invalid Alter Database Option: $0. "
+                       "Supported options are witness_location, "
+                       "default_leader, and score_version.",
+                       option_name));
 }
 
 absl::Status NullValueAlterDatabaseOption() {
@@ -1972,6 +1973,31 @@ absl::Status IndexRefsNonExistentColumn(absl::string_view index_name,
       absl::Substitute("Index $0 specifies key column $1 which does not exist "
                        "in the index's base table.",
                        index_name, column_name));
+}
+
+absl::Status CannotNullFilterColumnNotInIndex(absl::string_view column_name,
+                                              absl::string_view index_name) {
+  return absl::Status(
+      absl::StatusCode::kUnimplemented,
+      absl::Substitute(
+          "Cannot null-filter column $0 that is not in the index  $1.",
+          column_name, index_name));
+}
+
+absl::Status IndexRefsNonexistentColumnNullFiltered(
+    absl::string_view index_name, absl::string_view column_name) {
+  return absl::Status(
+      absl::StatusCode::kFailedPrecondition,
+      absl::Substitute(
+          "Index $0 specifies a null filter on a nonexistent column $1.",
+          index_name, column_name));
+}
+
+absl::Status IndexCannotUseBothNullFiltered(absl::string_view index_name) {
+  return absl::Status(absl::StatusCode::kFailedPrecondition,
+                      absl::Substitute("Index $0 cannot use the keyword "
+                                       "NULL_FILTERED and have a WHERE clause.",
+                                       index_name));
 }
 
 absl::Status AlteringParentColumn(absl::string_view column_name) {

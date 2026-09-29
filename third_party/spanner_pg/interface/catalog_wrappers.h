@@ -224,6 +224,17 @@ void GetProcsBySchemaAndFuncNames(const char* schema_name,
                                   const FormData_pg_proc*** outlist,
                                   size_t* outcount);
 
+// Checks if the TABLESAMPLE sampling method is supported in Spangres.
+void TableSampleFunctionSupportedInSpangres(const char* name_path,
+                                            bool* out_is_supported);
+
+// Retrieves the list of supported TABLESAMPLE sampling methods from the engine
+// and formats them into a single string. The output string is a palloc'd,
+// comma-separated list of quoted method names enclosed in square brackets,
+// e.g., "['method1', 'method2']". The caller is responsible for pfree'ing
+// the memory allocated for the output string.
+void GetSupportedSamplingMethodsAsString(char** out_string);
+
 // Complement to above, looks up a proc by Oid from both catalogs. For UDF procs
 // the proc must have already been looked up (and thus generated) by name.
 // Returns NULL on lookup failure.
@@ -231,6 +242,17 @@ const FormData_pg_proc* GetProcByOid(Oid oid);
 
 // Flags accessed in shims
 bool ShouldCoerceUnknownLiterals();
+
+// Given an unqualified function name, searches user schemas in the Engine User
+// Catalog for schemas containing this function (excluding pg_catalog, system
+// schemas, and active search path schemas). Returns a palloc'd array of schema
+// name strings and sets num_schemas. Returns NULL if no candidate schemas
+// were found.
+char** FindCandidateSchemasForUnqualifiedFunctionC(const char* func_name,
+                                                   int* num_schemas);
+
+// Returns true if search_path error hints are enabled.
+bool IsSearchPathFeatureEnabledC();
 
 #ifdef __cplusplus
 }

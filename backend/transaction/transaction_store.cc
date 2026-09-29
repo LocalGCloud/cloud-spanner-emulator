@@ -376,6 +376,10 @@ absl::Status TransactionStore::Read(
   return absl::OkStatus();
 }
 
+bool TransactionStore::HasPendingCommitTimestamp(const Column* column) const {
+  return commit_timestamp_tracker_->HasPendingCommitTimestamp(column);
+}
+
 bool TransactionStore::RowExistsInStorage(const Table* table,
                                           const Key& key) const {
   absl::Status row_in_base_storage =

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+
 	"net/http"
 	"net/url"
 	"os"
@@ -245,6 +246,7 @@ func (gw *Gateway) Run() {
 			os.Exit(cmd.ProcessState.ExitCode())
 		}
 	}()
+
 
 	// Wait for the grpc server to be up.
 	ctx := context.Background()
