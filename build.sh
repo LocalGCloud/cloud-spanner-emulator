@@ -24,15 +24,70 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 SOURCE_REVISION="${SOURCE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 
+show_help() {
+  cat << 'EOF'
+Usage: ./build.sh [OPTIONS]
+
+Build the Spanner emulator container (spanner-emulator-extended:local)
+and extract native Linux binaries to artifacts/.
+
+Docker Hub Cache Strategy:
+  - Local cache: BuildKit builder cache mounts and internal state are checked first.
+  - Docker Hub cache: Automatically queried as fallback when local cache is unavailable
+    (default: jaysen2apache/spanner-emulator-extended:buildcache-<arch>).
+  - Pushing cache: Only pushed to Docker Hub when explicitly requested via --push-cache / --push.
+
+Cache Options:
+  --push-cache[=REF]        Push BuildKit cache to Docker Hub after build
+                            (default ref: <cache-repo>:buildcache-<arch>)
+  --push                    Alias for --push-cache
+  --no-dockerhub-cache      Build using local cache only; do not query Docker Hub cache
+  --no-registry-cache       Alias for --no-dockerhub-cache
+  --cache-repo=REPO         Docker Hub repository for build cache
+                            (default: jaysen2apache/spanner-emulator-extended)
+  --cache-from=REF          Custom cache source (Docker ref or type=...)
+  --cache-to=REF            Custom cache export target (Docker ref or type=...)
+  --local-cache-dir=DIR     Directory for host-local BuildKit cache
+  --no-cache                Disable all caches (clean build from scratch)
+
+Build Options:
+  --platform=ARCH           Target architecture: arm64 (default) or amd64
+  --jobs=N                  Number of parallel Bazel jobs (default: auto-detected from memory)
+  --online                  Download dependencies inside container (skips bazel-distdir)
+  --offline-dir=DIR         Host repository cache directory (default: bazel-distdir)
+  --skip-fetch              Skip host bazel fetch (auto-skipped if bazel-distdir exists)
+  --force-fetch             Force host bazel fetch even if bazel-distdir is populated
+  --skip-tests              Skip database_manager_test in build container (default)
+  --run-tests               Run database_manager_test in build container
+  --base-image=IMAGE        Custom base image
+  --base-image-repo=REPO    Custom base image repository (default: jaysen2apache/spanner-emulator-base)
+  --rebuild-base-image      Force rebuild and push of base image
+  -h, --help                Show this help message
+
+Environment Variables:
+  SPANNER_PUSH_CACHE        Set to 1 to enable pushing cache to Docker Hub
+  SPANNER_CACHE_REPO        Docker Hub cache repository
+  SPANNER_PLATFORM          Target architecture (arm64, amd64)
+  SPANNER_BUILDER           Buildx builder name (default: spanner-emulator-local)
+  SPANNER_REGISTRY_CACHE    Custom registry cache ref (or empty to disable)
+  SPANNER_LOCAL_CACHE_DIR   Local directory for BuildKit cache
+  BAZEL_JOBS                Parallel Bazel jobs count
+EOF
+  exit 0
+}
+
 # ── Parse arguments ──────────────────────────────────────────────────────────
 PLATFORM="${SPANNER_PLATFORM:-arm64}"
 OFFLINE_DIR="${SPANNER_OFFLINE_DIR:-bazel-distdir}"
 BASE_IMAGE_REPO="${SPANNER_BASE_IMAGE_REPO:-jaysen2apache/spanner-emulator-base}"
 BASE_IMAGE="${SPANNER_BASE_IMAGE:-}"
 REBUILD_BASE_IMAGE=0
+CACHE_REPO="${SPANNER_CACHE_REPO:-jaysen2apache/spanner-emulator-extended}"
 CACHE_TO="${SPANNER_CACHE_TO_REF:-}"
 REGISTRY_CACHE="${SPANNER_REGISTRY_CACHE-__DEFAULT__}"
 LOCAL_CACHE_DIR="${SPANNER_LOCAL_CACHE_DIR:-}"
+PUSH_CACHE="${SPANNER_PUSH_CACHE:-0}"
+NO_CACHE=0
 FORCE_FETCH="${SPANNER_FORCE_FETCH:-0}"
 SKIP_FETCH="${SPANNER_SKIP_FETCH:-0}"
 RUN_TESTS="${SPANNER_RUN_TESTS:-0}"
@@ -40,22 +95,59 @@ BAZEL_JOBS_CLI=""
 
 for arg in "$@"; do
   case "$arg" in
+    -h|--help)
+      show_help
+      ;;
+    --push-cache)
+      PUSH_CACHE=1
+      ;;
+    --push-cache=*)
+      PUSH_CACHE=1
+      CACHE_TO="${arg#*=}"
+      ;;
+    --cache-push|--push)
+      PUSH_CACHE=1
+      ;;
+    --cache-repo=*)
+      CACHE_REPO="${arg#*=}"
+      ;;
+    --cache-to=*)
+      PUSH_CACHE=1
+      CACHE_TO="${arg#*=}"
+      ;;
+    --cache-from=*)
+      REGISTRY_CACHE="${arg#*=}"
+      ;;
+    --registry-cache=*)
+      REGISTRY_CACHE="${arg#*=}"
+      ;;
+    --no-dockerhub-cache|--no-registry-cache)
+      REGISTRY_CACHE=""
+      ;;
+    --local-cache-dir=*)
+      LOCAL_CACHE_DIR="${arg#*=}"
+      ;;
+    --no-cache)
+      NO_CACHE=1
+      REGISTRY_CACHE=""
+      LOCAL_CACHE_DIR=""
+      CACHE_TO=""
+      ;;
     --platform=*)          PLATFORM="${arg#*=}" ;;
     --offline-dir=*)       OFFLINE_DIR="${arg#*=}" ;;
     --online|--no-offline) OFFLINE_DIR="" ;;
     --base-image=*)        BASE_IMAGE="${arg#*=}" ;;
     --base-image-repo=*)   BASE_IMAGE_REPO="${arg#*=}" ;;
     --rebuild-base-image)  REBUILD_BASE_IMAGE=1 ;;
-    --cache-to=*)          CACHE_TO="${arg#*=}" ;;
-    --cache-from=*)        REGISTRY_CACHE="${arg#*=}" ;;
-    --registry-cache=*)    REGISTRY_CACHE="${arg#*=}" ;;
-    --no-registry-cache)   REGISTRY_CACHE="" ;;
-    --local-cache-dir=*)   LOCAL_CACHE_DIR="${arg#*=}" ;;
     --force-fetch)         FORCE_FETCH=1 ;;
     --skip-fetch)          SKIP_FETCH=1 ;;
     --jobs=*)              BAZEL_JOBS_CLI="${arg#*=}" ;;
     --run-tests)           RUN_TESTS=1 ;;
     --no-tests|--skip-tests) RUN_TESTS=0 ;;
+    *)
+      echo "ERROR: Unknown option: $arg (run './build.sh --help' for usage)" >&2
+      exit 1
+      ;;
   esac
 done
 case "$PLATFORM" in
@@ -93,28 +185,47 @@ BAZEL_REPO_CACHE_NAMESPACE="spanner-emulator-${PLATFORM}"
 
 DOCKERFILE="build/docker/Dockerfile.ubuntu"
 IMAGE_TAG="spanner-emulator-extended:local"
+if [ "$PUSH_CACHE" -eq 1 ] && [ -z "$CACHE_TO" ]; then
+  CACHE_TO="${CACHE_REPO}:buildcache-${PLATFORM}"
+fi
+
 if [ "$REGISTRY_CACHE" = "__DEFAULT__" ]; then
-  REGISTRY_CACHE="jaysen2apache/spanner-emulator-extended:buildcache-${PLATFORM}"
+  REGISTRY_CACHE="${CACHE_REPO}:buildcache-${PLATFORM}"
+fi
+
+if [ "$NO_CACHE" -eq 1 ]; then
+  REGISTRY_CACHE=""
+  LOCAL_CACHE_DIR=""
+  CACHE_TO=""
 fi
 
 echo "============================================"
 echo "  Building Spanner Emulator"
-echo "  Platform:     linux/${PLATFORM}"
-echo "  Base Image:   $BASE_IMAGE"
-echo "  Cache:        $TOOLCHAIN_CACHE_EPOCH"
-echo "  Revision:     $SOURCE_REVISION"
+echo "  Platform:        linux/${PLATFORM}"
+echo "  Base Image:      $BASE_IMAGE"
+echo "  Cache Epoch:     $TOOLCHAIN_CACHE_EPOCH"
+echo "  Revision:        $SOURCE_REVISION"
 if [ -n "$OFFLINE_DIR" ]; then
-  echo "  Mode:         offline (repo cache: $OFFLINE_DIR)"
+  echo "  Mode:            offline (repo cache: $OFFLINE_DIR)"
 else
-  echo "  Mode:         online"
+  echo "  Mode:            online"
+fi
+echo "  Cache Policy:"
+echo "    1. Local:      builder mounts ($BUILDER_NAME)"
+if [ -n "$LOCAL_CACHE_DIR" ]; then
+  echo "                   disk directory ($LOCAL_CACHE_DIR)"
 fi
 if [ -n "$REGISTRY_CACHE" ]; then
-  echo "  Import Cache: $REGISTRY_CACHE"
+  echo "    2. DockerHub:  $REGISTRY_CACHE (fallback)"
+else
+  echo "    2. DockerHub:  disabled (local only)"
 fi
 if [ -n "$CACHE_TO" ]; then
-  echo "  Export Cache: $CACHE_TO"
+  echo "    Push Cache:    $CACHE_TO (enabled)"
+else
+  echo "    Push Cache:    disabled (pass --push-cache to export to Docker Hub)"
 fi
-echo "  Started:      $(date)"
+echo "  Started:         $(date)"
 echo "============================================"
 BUILD_START=$(date +%s)
 
@@ -229,19 +340,43 @@ fi
 BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE}")
 BUILD_ARGS+=(--build-arg "RUN_TESTS=${RUN_TESTS}")
 
-if [ -n "$REGISTRY_CACHE" ]; then
-  echo "  Importing portable BuildKit cache: $REGISTRY_CACHE"
-  CACHE_ARGS+=(--cache-from "type=registry,ref=$REGISTRY_CACHE")
-fi
-if [ -n "$LOCAL_CACHE_DIR" ]; then
-  mkdir -p "$LOCAL_CACHE_DIR"
-  echo "  Using local BuildKit cache: $LOCAL_CACHE_DIR"
-  CACHE_ARGS+=(--cache-from "type=local,src=$LOCAL_CACHE_DIR")
-  CACHE_ARGS+=(--cache-to "type=local,dest=$LOCAL_CACHE_DIR,mode=max")
-fi
-if [ -n "$CACHE_TO" ]; then
-  echo "  Exporting BuildKit cache to: $CACHE_TO"
-  CACHE_ARGS+=(--cache-to "type=registry,ref=$CACHE_TO,mode=max")
+if [ "$NO_CACHE" -eq 1 ]; then
+  echo "  Clean build: all BuildKit caches disabled (--no-cache)"
+  CACHE_ARGS+=(--no-cache)
+else
+  # 1. Local disk cache (checked first if specified)
+  if [ -n "$LOCAL_CACHE_DIR" ]; then
+    mkdir -p "$LOCAL_CACHE_DIR"
+    echo "  [Cache 1/2] Local disk cache: $LOCAL_CACHE_DIR"
+    if [[ "$LOCAL_CACHE_DIR" == type=* ]]; then
+      CACHE_ARGS+=(--cache-from "$LOCAL_CACHE_DIR")
+    else
+      CACHE_ARGS+=(--cache-from "type=local,src=$LOCAL_CACHE_DIR")
+      if [ -z "$CACHE_TO" ]; then
+        CACHE_ARGS+=(--cache-to "type=local,dest=$LOCAL_CACHE_DIR,mode=max")
+      fi
+    fi
+  fi
+
+  # 2. Docker Hub cache (checked as fallback when local cache misses)
+  if [ -n "$REGISTRY_CACHE" ]; then
+    echo "  [Cache 2/2] Docker Hub fallback cache: $REGISTRY_CACHE"
+    if [[ "$REGISTRY_CACHE" == type=* ]]; then
+      CACHE_ARGS+=(--cache-from "$REGISTRY_CACHE")
+    else
+      CACHE_ARGS+=(--cache-from "type=registry,ref=$REGISTRY_CACHE")
+    fi
+  fi
+
+  # 3. Export / push cache (when explicitly requested by user via --push-cache / --push)
+  if [ -n "$CACHE_TO" ]; then
+    echo "  Pushing BuildKit cache to Docker Hub: $CACHE_TO"
+    if [[ "$CACHE_TO" == type=* ]]; then
+      CACHE_ARGS+=(--cache-to "$CACHE_TO")
+    else
+      CACHE_ARGS+=(--cache-to "type=registry,ref=$CACHE_TO,mode=max")
+    fi
+  fi
 fi
 
 # ── Build ────────────────────────────────────────────────────────────────────
@@ -315,6 +450,9 @@ if [ -f "artifacts/spanner-emulator-main-${PLATFORM}" ]; then
   echo "  Platform: linux/${PLATFORM}"
   ls -lh "artifacts/spanner-emulator-main-${PLATFORM}"
   file "artifacts/spanner-emulator-main-${PLATFORM}"
+  if [ -n "$CACHE_TO" ]; then
+    echo "  Cache:    Exported to Docker Hub ($CACHE_TO)"
+  fi
 else
   echo "  BUILD FAILED - check Docker logs"
 fi

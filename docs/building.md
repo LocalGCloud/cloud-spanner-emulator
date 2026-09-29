@@ -90,15 +90,16 @@ the binaries to `artifacts/spanner-emulator-main-<arch>` and
 `artifacts/gateway-main-<arch>`.
 
 ```shell
-./build.sh                         # linux/arm64, offline repository cache (default, imports registry cache)
-./build.sh --online                # download dependencies inside container instead of host distdir
-./build.sh --no-registry-cache     # build purely locally without importing Docker Hub layer cache
+./build.sh                         # default: local builder cache mounts, Docker Hub cache fallback
+./build.sh --push-cache            # build and push updated BuildKit cache to Docker Hub (or --push)
+./build.sh --no-dockerhub-cache    # build purely locally without querying Docker Hub cache (or --no-registry-cache)
 ./build.sh --local-cache-dir=DIR   # export/import BuildKit layer cache to/from local disk directory
 ./build.sh --skip-fetch            # skip host bazel fetch (auto-skipped if bazel-distdir is populated)
 ./build.sh --force-fetch           # force host bazel fetch even if bazel-distdir exists
 ./build.sh --skip-tests            # package image without running database_manager_test
 ./build.sh --jobs=4                # override Bazel parallel compile jobs
 ./build.sh --platform=amd64        # linux/amd64
+./build.sh --help                  # show full list of flags and options
 ```
 
 ### Running and testing the built image
@@ -172,14 +173,13 @@ python3 tests/image_verification_test.py
   Ubuntu base, GCC, or Bazel, also change `DEFAULT_TOOLCHAIN_CACHE_EPOCH` in
   `build.sh`, or set `SPANNER_TOOLCHAIN_CACHE_EPOCH`, to use fresh cache mount
   names.
-- **Don't push a local cache to Docker Hub.** A local build's value is in its
-  cache mounts, and `--cache-to` never exports those. The layers it can export
-  wouldn't match CI's compile step: CI passes
-  `BAZEL_DISK_CACHE_MAX_BYTES=2147483648` (local builds pass 0), and a local
-  build context contains files a CI checkout doesn't, such as `bazel-distdir/`
-  and uncommitted changes. Exporting to `buildcache-<arch>` would also replace
-  the cache CI writes there. Sharing compiled output between local builds and
-  CI would need a Bazel remote cache server, which this repo doesn't use.
+- **Pushing cache to Docker Hub (`--push-cache`).** Local builds use the
+  local builder's cache mounts by default and only query Docker Hub when
+  local layers are unavailable. Passing `--push-cache` (or `--push`) exports
+  the BuildKit layer cache to `jaysen2apache/spanner-emulator-extended:buildcache-<arch>`
+  (using `mode=max`). This allows other machines or CI to warm their layer
+  cache with the base toolchains and fetched dependencies. Pushing requires
+  prior authentication via `docker login`.
 - `docker build . -f build/docker/Dockerfile.ubuntu` also works, but it runs on
   the default builder with a 1-job default and none of the above set up.
 
@@ -188,6 +188,8 @@ python3 tests/image_verification_test.py
 | Variable | Default | Effect |
 |----------|---------|--------|
 | `SPANNER_PLATFORM` | `arm64` | Target architecture (`amd64` or `arm64`) |
+| `SPANNER_PUSH_CACHE` | `0` | Set to 1 to export/push cache to Docker Hub |
+| `SPANNER_CACHE_REPO` | `jaysen2apache/spanner-emulator-extended` | Base repo for build cache tag |
 | `SPANNER_OFFLINE_DIR` | `bazel-distdir` | Host repository cache for offline mode |
 | `SPANNER_BASE_IMAGE` | `jaysen2apache/spanner-emulator-base:<arch>` | Base image |
 | `SPANNER_BASE_IMAGE_REPO` | `jaysen2apache/spanner-emulator-base` | Repository for the default base image |
