@@ -42,7 +42,7 @@ docs instead of "fixing" it.
   `LocalGCloud/cloud-spanner-emulator`). `master` tracks upstream. **Don't
   push**; the maintainer pushes and publishes.
 - **Who depends on it:** LocalCloud bundles the Docker image
-  (`jaysen2apache/spanner-emulator-extended`, pinned by commit and digest) and
+  (`agentcloud/localcloud-spanner-emulator`, pinned by commit and digest) and
   runs it with `--data_dir`, so persistence and restart behavior matter most.
 - **Where behavior is documented** (keep these accurate):
   - `docs/capabilities.md`: what works.

@@ -72,7 +72,7 @@ the limits off, pass `--enforce_placement_dml_restrictions=false` to
 `gateway_main` or `emulator_main`. In Docker, repeat the full command:
 
 ```shell
-docker run -p 9010:9010 -p 9020:9020 jaysen2apache/spanner-emulator-extended \
+docker run -p 9010:9010 -p 9020:9020 agentcloud/localcloud-spanner-emulator \
   ./gateway_main --hostname 0.0.0.0 --enforce_placement_dml_restrictions=false
 ```
 

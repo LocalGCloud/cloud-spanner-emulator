@@ -286,7 +286,7 @@ SQLSTATE as `ErrorInfo` (fork). Field masks accept the JSON form
   suite uses the C++ client. The public-endpoint client matrix
   ([`tests/client_matrix`](../tests/client_matrix/)) was verified 100% against
   both native builds and the packaged Docker image
-  `spanner-emulator-extended:local` on 2026-09-28 with Python
+  `localcloud-spanner-emulator:local` on 2026-09-28 with Python
   google-cloud-spanner 3.71.0, Go 1.95.1, Node 9.0.0, and Java 6.123.0.
 - **gcloud** works against the REST port through
   `api_endpoint_overrides/spanner`, and is tested for instance, database, DDL,

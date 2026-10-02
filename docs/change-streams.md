@@ -23,7 +23,7 @@ For how it's built, see [Change streams internals](internals/change-streams.md).
    ```shell
    docker run -p 9010:9010 -p 9020:9020 \
      -v /path/to/data:/data \
-     jaysen2apache/spanner-emulator-extended \
+     agentcloud/localcloud-spanner-emulator \
      ./gateway_main --hostname 0.0.0.0 --data_dir=/data
    ```
 
@@ -431,7 +431,7 @@ To use an `emulator_main`-only flag in Docker, run `emulator_main` directly.
 This serves gRPC only, without the REST gateway:
 
 ```shell
-docker run -p 9010:9010 jaysen2apache/spanner-emulator-extended \
+docker run -p 9010:9010 agentcloud/localcloud-spanner-emulator \
   ./emulator_main --host_port=0.0.0.0:9010 --enable_change_stream_churning=false
 ```
 

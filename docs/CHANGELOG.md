@@ -6,7 +6,7 @@ Upstream's 2026-09-03 and 2026-09-14 imports aren't merged yet.
 
 ## [2026-09-28] Docker Packaging & Image Test Qualification
 
-Full qualification of the packaged Docker image `spanner-emulator-extended:local`
+Full qualification of the packaged Docker image `localcloud-spanner-emulator:local`
 across client SDKs, persistence volume restarts, directory locking, flag
 forwarding, and feature spot checks, plus build caching optimizations. Evidence:
 `tests/image_verification_test.py` and `tests/client_matrix/` passed 100%.
@@ -915,7 +915,7 @@ on underneath it (lock hand-off, or any future change to
 - **ID Generator Persistence**: `Seed()` and `GetIdCounterValues()` methods on UniqueIdGenerator. Persists table_id, column_id, change_stream_id, sequence_id, and named_schema_id counters. Prevents ID collisions with existing LevelDB data after restart.
 - **Automatic Recovery on Startup**: `RestoreFromMetadata()` in `emulator_main.cc` reconstructs instances, databases, DDL, dialect, and seeds ID generators from persisted `metadata.json`.
 - **Database Operation Persistence**: CreateDatabase, UpdateDatabaseDdl, and DropDatabase operations automatically persist metadata and clean up LevelDB directories.
-- **Multi-Arch Docker CI/CD**: GitHub Actions workflow publishing `jaysen2apache/spanner-emulator-extended` to Docker Hub with multi-arch manifests (linux/amd64 + linux/arm64).
+- **Multi-Arch Docker CI/CD**: GitHub Actions workflow publishing `agentcloud/localcloud-spanner-emulator` to Docker Hub with multi-arch manifests (linux/amd64 + linux/arm64).
 
 ### Fixed
 - **ID Generator Move Assignment**: Fixed build failure caused by deleted move assignment operator for `UniqueIdGenerator` in `ids.h`.

@@ -36,8 +36,8 @@ on:
           - arm
 
 env:
-  IMAGE_NAME: jaysen2apache/spanner-emulator-extended
-  BASE_IMAGE_REPO: jaysen2apache/spanner-emulator-base
+  IMAGE_NAME: agentcloud/localcloud-spanner-emulator
+  BASE_IMAGE_REPO: agentcloud/spanner-emulator-base
   REGISTRY: docker.io
 
 jobs:

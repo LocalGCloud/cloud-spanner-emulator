@@ -12,7 +12,7 @@ Like upstream, it aims to make application tests portable to Cloud Spanner,
 subject to the [documented differences](docs/known-gaps.md). It isn't meant
 to be a production database or to match Cloud Spanner's performance.
 
-- Image: [`jaysen2apache/spanner-emulator-extended`](https://hub.docker.com/r/jaysen2apache/spanner-emulator-extended)
+- Image: [`agentcloud/localcloud-spanner-emulator`](https://hub.docker.com/r/agentcloud/localcloud-spanner-emulator)
   (linux/amd64 and linux/arm64)
 - Fork development branch: `jay-spanner-extended`.
 
@@ -21,13 +21,13 @@ to be a production database or to match Cloud Spanner's performance.
 Pull the published Docker image:
 
 ```shell
-docker pull jaysen2apache/spanner-emulator-extended
+docker pull agentcloud/localcloud-spanner-emulator
 ```
 
 Or build the Docker image locally using the cached build script:
 
 ```shell
-./build.sh                         # builds and tags spanner-emulator-extended:local
+./build.sh                         # builds and tags localcloud-spanner-emulator:local
 ```
 
 See [Building](docs/building.md) for build options (`--platform`, `--jobs`, `--skip-tests`, cache management). Ordinary pushes do not
@@ -38,11 +38,11 @@ tag or build locally when you need a specific revision.
 
 ```shell
 # In-memory, like upstream
-docker run -p 9010:9010 -p 9020:9020 jaysen2apache/spanner-emulator-extended
+docker run -p 9010:9010 -p 9020:9020 agentcloud/localcloud-spanner-emulator
 
 # With persistent storage in /path/to/data
 docker run -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
-  jaysen2apache/spanner-emulator-extended \
+  agentcloud/localcloud-spanner-emulator \
   ./gateway_main --hostname 0.0.0.0 --data_dir=/data
 ```
 

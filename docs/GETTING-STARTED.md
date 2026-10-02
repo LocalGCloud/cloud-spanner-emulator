@@ -22,7 +22,7 @@ To build from source instead, use Bazel 7.6.1 (pinned in [`.bazelversion`](../.b
 2. Pull the published image:
 
    ```bash
-   docker pull jaysen2apache/spanner-emulator-extended
+   docker pull agentcloud/localcloud-spanner-emulator
    ```
 
 The image can also be run without cloning the repository. Its `latest` tag can lag this checkout; use a published commit tag when you need a specific revision.
@@ -33,7 +33,7 @@ Start the emulator in the foreground. Press Ctrl-C to stop it; without `--data_d
 
 ```bash
 docker run --rm -p 127.0.0.1:9010:9010 -p 127.0.0.1:9020:9020 \
-  jaysen2apache/spanner-emulator-extended
+  agentcloud/localcloud-spanner-emulator
 ```
 
 In the shell running your client, point it at the gRPC port:

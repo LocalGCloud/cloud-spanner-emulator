@@ -22,11 +22,11 @@ replaces that command. Repeat the command when you add flags:
 ```shell
 docker run -p 9010:9010 -p 9020:9020 \
   -v /path/to/data:/data \
-  jaysen2apache/spanner-emulator-extended \
+  agentcloud/localcloud-spanner-emulator \
   ./gateway_main --hostname 0.0.0.0 --data_dir=/data
 ```
 
-`docker run ... jaysen2apache/spanner-emulator-extended --data_dir=/data`
+`docker run ... agentcloud/localcloud-spanner-emulator --data_dir=/data`
 doesn't work: Docker tries to run `--data_dir=/data` as the program.
 
 Named Docker volumes (e.g. `-v spanner-vol:/data`) or host directory mounts
@@ -303,7 +303,7 @@ later starts don't need it:
 
 ```shell
 docker run --rm -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
-  jaysen2apache/spanner-emulator-extended \
+  agentcloud/localcloud-spanner-emulator \
   ./gateway_main --hostname 0.0.0.0 --data_dir=/data \
   --repair_corrupted_databases
 ```

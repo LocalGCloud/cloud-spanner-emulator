@@ -15,7 +15,7 @@
 #
 # By default, ./build.sh runs in offline mode using bazel-distdir, builds for
 # linux/arm64 (Apple Silicon native), and uses a base image pulled from
-# Docker Hub (jaysen2apache/spanner-emulator-base:<arch>). The base image is
+# Docker Hub (agentcloud/spanner-emulator-base:<arch>). The base image is
 # a real registry ref (not a local-only tag) so it resolves both from the
 # docker-container buildx builder used here and from GitHub Actions.
 set -e
@@ -28,13 +28,13 @@ show_help() {
   cat << 'EOF'
 Usage: ./build.sh [OPTIONS]
 
-Build the Spanner emulator container (spanner-emulator-extended:local)
+Build the Spanner emulator container (localcloud-spanner-emulator:local)
 and extract native Linux binaries to artifacts/.
 
 Docker Hub Cache Strategy:
   - Local cache: BuildKit builder cache mounts and internal state are checked first.
   - Docker Hub cache: Automatically queried as fallback when local cache is unavailable
-    (default: jaysen2apache/spanner-emulator-extended:buildcache-<arch>).
+    (default: agentcloud/localcloud-spanner-emulator:buildcache-<arch>).
   - Pushing cache: Only pushed to Docker Hub when explicitly requested via --push-cache / --push.
 
 Cache Options:
@@ -44,7 +44,7 @@ Cache Options:
   --no-dockerhub-cache      Build using local cache only; do not query Docker Hub cache
   --no-registry-cache       Alias for --no-dockerhub-cache
   --cache-repo=REPO         Docker Hub repository for build cache
-                            (default: jaysen2apache/spanner-emulator-extended)
+                            (default: agentcloud/localcloud-spanner-emulator)
   --cache-from=REF          Custom cache source (Docker ref or type=...)
   --cache-to=REF            Custom cache export target (Docker ref or type=...)
   --local-cache-dir=DIR     Directory for host-local BuildKit cache
@@ -60,7 +60,7 @@ Build Options:
   --skip-tests              Skip database_manager_test in build container (default)
   --run-tests               Run database_manager_test in build container
   --base-image=IMAGE        Custom base image
-  --base-image-repo=REPO    Custom base image repository (default: jaysen2apache/spanner-emulator-base)
+  --base-image-repo=REPO    Custom base image repository (default: agentcloud/spanner-emulator-base)
   --rebuild-base-image      Force rebuild and push of base image
   -h, --help                Show this help message
 
@@ -79,10 +79,10 @@ EOF
 # ── Parse arguments ──────────────────────────────────────────────────────────
 PLATFORM="${SPANNER_PLATFORM:-arm64}"
 OFFLINE_DIR="${SPANNER_OFFLINE_DIR:-bazel-distdir}"
-BASE_IMAGE_REPO="${SPANNER_BASE_IMAGE_REPO:-jaysen2apache/spanner-emulator-base}"
+BASE_IMAGE_REPO="${SPANNER_BASE_IMAGE_REPO:-agentcloud/spanner-emulator-base}"
 BASE_IMAGE="${SPANNER_BASE_IMAGE:-}"
 REBUILD_BASE_IMAGE=0
-CACHE_REPO="${SPANNER_CACHE_REPO:-jaysen2apache/spanner-emulator-extended}"
+CACHE_REPO="${SPANNER_CACHE_REPO:-agentcloud/localcloud-spanner-emulator}"
 CACHE_TO="${SPANNER_CACHE_TO_REF:-}"
 REGISTRY_CACHE="${SPANNER_REGISTRY_CACHE-__DEFAULT__}"
 LOCAL_CACHE_DIR="${SPANNER_LOCAL_CACHE_DIR:-}"
@@ -184,7 +184,7 @@ fi
 BAZEL_REPO_CACHE_NAMESPACE="spanner-emulator-${PLATFORM}"
 
 DOCKERFILE="build/docker/Dockerfile.ubuntu"
-IMAGE_TAG="spanner-emulator-extended:local"
+IMAGE_TAG="localcloud-spanner-emulator:local"
 if [ "$PUSH_CACHE" -eq 1 ] && [ -z "$CACHE_TO" ]; then
   CACHE_TO="${CACHE_REPO}:buildcache-${PLATFORM}"
 fi

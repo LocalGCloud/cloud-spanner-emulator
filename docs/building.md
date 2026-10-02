@@ -25,9 +25,9 @@ different:
 | Bazel repository cache | Downloaded dependency archives | `--repository_cache` directory, `bazel-distdir/`, or a BuildKit cache mount | No, only downloads |
 | Bazel disk cache | Compiled outputs of each action | `--disk_cache` directory or a BuildKit cache mount | Yes |
 | Bazel output base | Incremental state from the last build | Bazel's output base or a BuildKit cache mount | Yes |
-| Base image `jaysen2apache/spanner-emulator-base:<arch>` | Ubuntu 22.04, GCC 13, JDK, lld | Docker Hub | No, it only skips `apt-get` |
+| Base image `agentcloud/spanner-emulator-base:<arch>` | Ubuntu 22.04, GCC 13, JDK, lld | Docker Hub | No, it only skips `apt-get` |
 | BuildKit cache mounts | The three Bazel caches above, inside Docker builds | The buildx builder's storage | Yes, but only on that builder |
-| Docker Hub layer cache `jaysen2apache/spanner-emulator-extended:buildcache-<arch>` | Docker layers | Docker Hub | Only for an exact build-layer hit; it never includes Bazel cache mounts |
+| Docker Hub layer cache `agentcloud/localcloud-spanner-emulator:buildcache-<arch>` | Docker layers | Docker Hub | Only for an exact build-layer hit; it never includes Bazel cache mounts |
 | GitHub Actions cache | Bazel repository and disk cache archives, capped at 2 GiB each | GitHub | Partly; the cap leaves most outputs uncached |
 
 Bazel reuses a compiled output only when every input of the action matches:
@@ -85,7 +85,7 @@ Tips:
 ## Local Docker image (`build.sh`)
 
 `./build.sh` builds `build/docker/Dockerfile.ubuntu` for one Linux
-architecture and loads it as `spanner-emulator-extended:local`. It also copies
+architecture and loads it as `localcloud-spanner-emulator:local`. It also copies
 the binaries to `artifacts/spanner-emulator-main-<arch>` and
 `artifacts/gateway-main-<arch>`.
 
@@ -106,11 +106,11 @@ the binaries to `artifacts/spanner-emulator-main-<arch>` and
 
 ```shell
 # In-memory mode (port 9010 gRPC, port 9020 REST)
-docker run -d --name spanner-emulator -p 9010:9010 -p 9020:9020 spanner-emulator-extended:local
+docker run -d --name spanner-emulator -p 9010:9010 -p 9020:9020 localcloud-spanner-emulator:local
 
 # Persistent volume mode
 docker run -d --name spanner-persist -p 9010:9010 -p 9020:9020 -v spanner-data:/data \
-  spanner-emulator-extended:local \
+  localcloud-spanner-emulator:local \
   ./gateway_main --hostname 0.0.0.0 --data_dir=/data
 
 # Run the automated image verification suite
@@ -123,7 +123,7 @@ python3 tests/image_verification_test.py
    with `build/docker/buildkitd.toml` if it doesn't exist. That builder's
    storage holds the Bazel caches, so keep the builder. Removing it, or
    `docker buildx prune` on it, makes the next build cold.
-2. **Base image.** Uses `jaysen2apache/spanner-emulator-base:<arch>` from
+2. **Base image.** Uses `agentcloud/spanner-emulator-base:<arch>` from
    Docker Hub. If that tag doesn't exist (or with `--rebuild-base-image`), it
    builds `build/docker/Dockerfile.base` and pushes it, which needs
    `docker login`. If that fails, it falls back to `ubuntu:22.04` and installs
@@ -176,7 +176,7 @@ python3 tests/image_verification_test.py
 - **Pushing cache to Docker Hub (`--push-cache`).** Local builds use the
   local builder's cache mounts by default and only query Docker Hub when
   local layers are unavailable. Passing `--push-cache` (or `--push`) exports
-  the BuildKit layer cache to `jaysen2apache/spanner-emulator-extended:buildcache-<arch>`
+  the BuildKit layer cache to `agentcloud/localcloud-spanner-emulator:buildcache-<arch>`
   (using `mode=max`). This allows other machines or CI to warm their layer
   cache with the base toolchains and fetched dependencies. Pushing requires
   prior authentication via `docker login`.
@@ -189,12 +189,12 @@ python3 tests/image_verification_test.py
 |----------|---------|--------|
 | `SPANNER_PLATFORM` | `arm64` | Target architecture (`amd64` or `arm64`) |
 | `SPANNER_PUSH_CACHE` | `0` | Set to 1 to export/push cache to Docker Hub |
-| `SPANNER_CACHE_REPO` | `jaysen2apache/spanner-emulator-extended` | Base repo for build cache tag |
+| `SPANNER_CACHE_REPO` | `agentcloud/localcloud-spanner-emulator` | Base repo for build cache tag |
 | `SPANNER_OFFLINE_DIR` | `bazel-distdir` | Host repository cache for offline mode |
-| `SPANNER_BASE_IMAGE` | `jaysen2apache/spanner-emulator-base:<arch>` | Base image |
-| `SPANNER_BASE_IMAGE_REPO` | `jaysen2apache/spanner-emulator-base` | Repository for the default base image |
+| `SPANNER_BASE_IMAGE` | `agentcloud/spanner-emulator-base:<arch>` | Base image |
+| `SPANNER_BASE_IMAGE_REPO` | `agentcloud/spanner-emulator-base` | Repository for the default base image |
 | `SPANNER_BUILDER` | `spanner-emulator-local` | buildx builder that holds the caches |
-| `SPANNER_REGISTRY_CACHE` | `jaysen2apache/spanner-emulator-extended:buildcache-<arch>` | Layer cache imported from registry; empty or `--no-registry-cache` disables it |
+| `SPANNER_REGISTRY_CACHE` | `agentcloud/localcloud-spanner-emulator:buildcache-<arch>` | Layer cache imported from registry; empty or `--no-registry-cache` disables it |
 | `SPANNER_CACHE_TO_REF` | unset | Registry ref to export the layer cache to (same as `--cache-to=`) |
 | `SPANNER_TOOLCHAIN_CACHE_EPOCH` | `ubuntu22-gcc13-bazel7.6.1` | Selects the cache mount names |
 | `BAZEL_JOBS` | from Docker memory | Bazel `--jobs` |
@@ -215,7 +215,7 @@ dependencies, not just your change.
 ## CI (GitHub Actions)
 
 `.github/workflows/docker-publish.yml` builds, and publishes to
-`jaysen2apache/spanner-emulator-extended`. It never runs on an ordinary push.
+`agentcloud/localcloud-spanner-emulator`. It never runs on an ordinary push.
 
 | Trigger | Builds | Publishes |
 |---------|--------|-----------|
@@ -280,7 +280,7 @@ git push origin x.y.z
 ```
 
 Consumers such as LocalCloud should pin the full-SHA tag with its digest
-(`jaysen2apache/spanner-emulator-extended:<sha>@sha256:<digest>`), because
+(`agentcloud/localcloud-spanner-emulator:<sha>@sha256:<digest>`), because
 `latest` moves.
 
 ## What triggers a large rebuild

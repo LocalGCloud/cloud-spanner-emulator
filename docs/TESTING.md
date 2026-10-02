@@ -66,7 +66,7 @@ You can also run the client matrix directly against a running Docker container
 on standard ports:
 
 ```bash
-docker run -d --name spanner-emulator -p 9010:9010 -p 9020:9020 spanner-emulator-extended:local
+docker run -d --name spanner-emulator -p 9010:9010 -p 9020:9020 localcloud-spanner-emulator:local
 export SPANNER_EMULATOR_HOST=localhost:9010
 REST=http://localhost:9020 bash tests/client_matrix/rest/rest_smoke.sh
 python3 tests/client_matrix/python/smoke.py
@@ -147,7 +147,7 @@ closure build. The coverage inventory now counts 155 records: 138 supported,
 ### Packaged Docker image qualification (2026-09-28)
 
 Following the native build rounds, the packaged Docker image
-`spanner-emulator-extended:local` (built via `./build.sh`) was 100% qualified
+`localcloud-spanner-emulator:local` (built via `./build.sh`) was 100% qualified
 across all five verification tiers:
 
 1. **Client compatibility matrix** (`tests/client_matrix/` against `localhost:9010`

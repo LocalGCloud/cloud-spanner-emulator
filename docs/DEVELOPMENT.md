@@ -34,7 +34,7 @@ Run these from the repository root after the platform setup in
 | `bazel test //frontend/common:status_test` | Run one small C++ test target. |
 | `bazel test //gateway:gateway_test` | Run the Go gateway test target through Bazel. |
 | `bazel test //tests/conformance/endpoints:emulator_conformance_test` | Run the sharded Spanner conformance target. |
-| `./build.sh --online` | Build and load `spanner-emulator-extended:local` for Linux arm64 by default; use `--platform=amd64` for amd64. |
+| `./build.sh --online` | Build and load `localcloud-spanner-emulator:local` for Linux arm64 by default; use `--platform=amd64` for amd64. |
 | `python3 -m unittest tools.feature_coverage_test` | Run feature coverage tooling tests. |
 | `python3 tools/feature_coverage.py check` | Check that the generated feature coverage Markdown matches its YAML inventory. |
 

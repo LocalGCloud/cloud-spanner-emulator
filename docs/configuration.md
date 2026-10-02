@@ -10,31 +10,31 @@ The emulator ships as two binaries:
 
 ## Docker
 
-The image `jaysen2apache/spanner-emulator-extended` has no `ENTRYPOINT`. Its
+The image `agentcloud/localcloud-spanner-emulator` has no `ENTRYPOINT`. Its
 default command is `./gateway_main --hostname 0.0.0.0`. To pass flags, repeat
 the whole command:
 
 ```shell
 # In-memory (default)
-docker run -p 9010:9010 -p 9020:9020 jaysen2apache/spanner-emulator-extended
+docker run -p 9010:9010 -p 9020:9020 agentcloud/localcloud-spanner-emulator
 
 # Persistent storage
 docker run -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
-  jaysen2apache/spanner-emulator-extended \
+  agentcloud/localcloud-spanner-emulator \
   ./gateway_main --hostname 0.0.0.0 --data_dir=/data
 
 # Quarantine databases that fail to restore
 docker run -p 9010:9010 -p 9020:9020 -v /path/to/data:/data \
-  jaysen2apache/spanner-emulator-extended \
+  agentcloud/localcloud-spanner-emulator \
   ./gateway_main --hostname 0.0.0.0 --data_dir=/data --repair_corrupted_databases
 
 # gRPC only, with an emulator_main-only flag
 docker run -p 9010:9010 \
-  jaysen2apache/spanner-emulator-extended \
+  agentcloud/localcloud-spanner-emulator \
   ./emulator_main --host_port=0.0.0.0:9010 --abort_current_transaction_probability=0
 ```
 
-Appending only flags, such as `... spanner-emulator-extended --data_dir=/data`,
+Appending only flags, such as `... localcloud-spanner-emulator --data_dir=/data`,
 fails with `exec: "--data_dir=/data": no such file or directory`.
 
 ## `gateway_main` flags

@@ -301,7 +301,7 @@ qualification remains a separate task.
 - [ ] Record the official Spanner baseline for both dialects: SQL function signatures, DDL variants, admin field masks, role privileges, change-stream capture values and restore rules, SCORE/vector options, SPANNER_SYS table families, and RPC error behavior. Use the official references below, not generic GoogleSQL or upstream PostgreSQL behavior.
 - [ ] For each of the 48 rows in the exit matrix, decide whether the listed exit check covers the entire locally observable contract. Where a row mixes functional behavior with physical infrastructure, split it into a supported local behavior and a named cloud-only/not-applicable behavior before reclassifying it.
 - [ ] Capture current failures with focused conformance or component tests. A test that already passes is evidence, not a reason to write a duplicate test. Do not run two Bazel builds against one shared output tree concurrently.
-- [ ] Record the baseline LocalCloud image ID and pinned Spanner image provenance, then verify both direct endpoints (gRPC 5370, REST 5371). Test semantic readiness with a constant query and a resource operation after the image starts.
+- [ ] Record the baseline LocalCloud image ID and pinned Spanner image provenance, then verify both direct endpoints (gRPC 5386, REST 5387). Test semantic readiness with a constant query and a resource operation after the image starts.
 
 **Exit:** all 48 IDs are assigned to packages 1–8; each has a documented test and scope decision. No status is raised by this task.
 

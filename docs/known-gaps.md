@@ -14,7 +14,7 @@ remaining-limitations batches. The evidence is recorded in the
 closure ran native unit, conformance, `--data_dir` restart and public-endpoint
 SDK/driver checks; the remaining-limitations batches re-ran the combined native suite (164 of 164
 targets on `bd6a9646`). On 2026-09-28, the packaged Docker image
-`spanner-emulator-extended:local` was fully qualified against both the client
+`localcloud-spanner-emulator:local` was fully qualified against both the client
 matrix and the 5-step image verification suite (`tests/image_verification_test.py`).
 
 ## Known bugs

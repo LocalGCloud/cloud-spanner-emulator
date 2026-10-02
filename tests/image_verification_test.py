@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test suite covering Steps 2, 3, 4, 5 against spanner-emulator-extended:local:
+Test suite covering Steps 2, 3, 4, 5 against localcloud-spanner-emulator:local:
 Step 2: Restart with same volume, both dialects:
   - Create roles with GRANTs and a DEFINER view.
   - Set database options.
@@ -111,7 +111,7 @@ def main():
         f"docker run -d --name spanner-persist "
         f"-p 9010:9010 -p 9020:9020 "
         f"-v {DOCKER_VOL}:/data "
-        f"spanner-emulator-extended:local "
+        f"localcloud-spanner-emulator:local "
         f"./gateway_main --hostname 0.0.0.0 --data_dir=/data "
         f"--row_deletion_policy_sweep_interval_seconds=5 "
         f"--spanner_sys_expose_open_interval=true "
@@ -126,7 +126,7 @@ def main():
     # -------------------------------------------------------------------------
     print("\n--- Step 3: Data directory lock test ---", flush=True)
     lock_run = run_cmd(
-        f"docker run --rm -v {DOCKER_VOL}:/data spanner-emulator-extended:local "
+        f"docker run --rm -v {DOCKER_VOL}:/data localcloud-spanner-emulator:local "
         f"./gateway_main --hostname 0.0.0.0 --data_dir=/data",
         check=False
     )
